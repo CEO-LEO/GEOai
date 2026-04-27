@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GEOai — Admin Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/liff/config.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Sarabun', sans-serif; background: #f0f4f0; color: #222; }
+
+    header {
+      background: #1a7a3c;
+      color: white;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 18px; }
+    header span { font-size: 13px; opacity: 0.8; }
+
+    .container { display: flex; height: calc(100vh - 52px); }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 380px;
+      min-width: 320px;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #ddd;
+      overflow: hidden;
+    }
+
+    #summary {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 1px;
+      background: #eee;
+      border-bottom: 1px solid #ddd;
+    }
+    .stat-box {
+      background: white;
+      padding: 12px;
+      text-align: center;
+    }
+    .stat-box .num { font-size: 22px; font-weight: bold; color: #1a7a3c; }
+    .stat-box .lbl { font-size: 11px; color: #888; margin-top: 2px; }
+
+    #search-bar {
+      padding: 10px 12px;
+      border-bottom: 1px solid #eee;
+    }
+    #search-bar input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    #report-list {
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .report-card {
+      padding: 12px 14px;
+      border-bottom: 1px solid #f0f0f0;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .report-card:hover { background: #f5fdf7; }
+    .report-card.active { background: #e8f5ec; border-left: 3px solid #1a7a3c; }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 4px;
+    }
+    .card-status { font-size: 18px; }
+    .card-date { font-size: 11px; color: #999; }
+    .card-coords { font-size: 12px; color: #555; }
+    .card-ndvi { font-size: 12px; margin-top: 4px; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: bold;
+      color: white;
+    }
+    .badge-red    { background: #e53935; }
+    .badge-orange { background: #fb8c00; }
+    .badge-green  { background: #1a7a3c; }
+
+    /* ── Map + Detail ── */
+    #right-panel { flex: 1; display: flex; flex-direction: column; }
+    #map { flex: 1; }
+
+    #detail-panel {
+      max-height: 240px;
+      background: white;
+      border-top: 1px solid #ddd;
+      padding: 14px 20px;
+      overflow-y: auto;
+      display: none;
+    }
+    #detail-panel.visible { display: block; }
+    #detail-panel h3 { font-size: 14px; color: #1a7a3c; margin-bottom: 10px; }
+
+    #chart-panel {
+      background: white;
+      border-top: 1px solid #eee;
+      padding: 12px 20px;
+      display: none;
+    }
+    #chart-panel.visible { display: block; }
+    #chart-panel h4 { font-size: 13px; color: #555; margin-bottom: 8px; }
+    #trend-chart { max-height: 120px; }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .detail-item { background: #f5f5f5; border-radius: 6px; padding: 8px; }
+    .detail-item .val { font-size: 16px; font-weight: bold; color: #1a7a3c; }
+    .detail-item .lbl { font-size: 10px; color: #888; margin-top: 2px; }
+    #detail-message { font-size: 12px; color: #444; white-space: pre-wrap; line-height: 1.6; }
+
+    /* ── Sphere Marker pin (mock mode) ── */
+    .sphere-marker-pin { background: none !important; border: none !important; }
+    .sphere-marker-html { background: none !important; border: none !important; }
+
+    /* ── Layer toggle ── */
+    #layer-toggle {
+      position: absolute; top: 10px; right: 10px; z-index: 999;
+      background: white; border: none; border-radius: 8px;
+      padding: 8px 14px; font-size: 12px; font-weight: 700;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: pointer;
+      font-family: inherit;
+    }
+    #layer-toggle:active { transform: scale(.95); }
+
+    #loading-overlay {
+      position: fixed; inset: 0;
+      background: rgba(255,255,255,0.85);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; color: #1a7a3c; z-index: 9999;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loading-overlay">⏳ กำลังโหลดข้อมูล...</div>
+
+<header>
+  <h1>🌿 GEOai — Admin Dashboard</h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="last-update">-</span>
+    <a id="export-btn"
+       onclick="exportCSV()" href="#"
+       style="background:#fff;color:#1a7a3c;border:1.5px solid #fff;padding:5px 12px;
+              border-radius:6px;font-size:13px;font-weight:bold;text-decoration:none;
+              white-space:nowrap;cursor:pointer">⬇️ Export CSV</a>
+  </div>
+</header>
+
+<div class="container">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="summary">
+      <div class="stat-box"><div class="num" id="stat-total">0</div><div class="lbl">รายงานทั้งหมด</div></div>
+      <div class="stat-box"><div class="num" id="stat-risk" style="color:#e53935">0</div><div class="lbl">เสี่ยงสูง</div></div>
+      <div class="stat-box"><div class="num" id="stat-medium" style="color:#fb8c00">0</div><div class="lbl">เสี่ยงปานกลาง</div></div>
+      <div class="stat-box"><div class="num" id="stat-ok" style="color:#1a7a3c">0</div><div class="lbl">ปกติ</div></div>
+      <div class="stat-box"><div class="num" id="stat-users" style="color:#1565c0">0</div><div class="lbl">เกษตรกร</div></div>
+      <div class="stat-box"><div class="num" id="stat-unstable" style="color:#e65100">0</div><div class="lbl">🌍 ดินไม่เสถียร</div></div>
+      <div class="stat-box"><div class="num" id="stat-avg-yield" style="color:#1a7a3c">-</div><div class="lbl">📊 ผลผลิตเฉลี่ย กก./ไร่</div></div>
+    </div>
+    <div id="search-bar">
+      <input type="text" id="search-input" placeholder="🔍 ค้นหาพิกัด หรือ User ID..." oninput="filterReports()" />
+    </div>
+    <div id="report-list"></div>
+  </div>
+
+  <!-- Right: Map + Detail -->
+  <div id="right-panel">
+    <div id="map" style="position:relative">
+      <button id="layer-toggle" title="สลับดาวเทียม/แผนที่">🛰️ ดาวเทียม</button>
+    </div>
+    <div id="detail-panel">
+      <h3 id="detail-title">รายละเอียดแปลง</h3>
+      <div class="detail-grid">
+        <div class="detail-item"><div class="val" id="d-ndvi">-</div><div class="lbl">NDVI ปัจจุบัน</div></div>
+        <div class="detail-item"><div class="val" id="d-change">-</div><div class="lbl">การเปลี่ยนแปลง</div></div>
+        <div class="detail-item"><div class="val" id="d-moisture">-</div><div class="lbl">ความชื้นดิน (dB)</div></div>
+        <div class="detail-item"><div class="val" id="d-elev">-</div><div class="lbl">ระดับ vs รอบข้าง (ม.)</div></div>
+        <div class="detail-item"><div class="val" id="d-stability">-</div><div class="lbl">🌍 เสถียรภาพดิน</div></div>
+        <div class="detail-item"><div class="val" id="d-yield">-</div><div class="lbl">📊 ผลผลิต (กก./ไร่)</div></div>
+        <div class="detail-item"><div class="val" id="d-fert">-</div><div class="lbl">🧪 สูตรปุ๋ย N-P-K</div></div>
+        <div class="detail-item"><div class="val" id="d-impact">-</div><div class="lbl">🌍 ผลกระทบดิน</div></div>
+      </div>
+      <div id="detail-message"></div>
+    </div>
+    <div id="chart-panel">
+      <h4>📈 แนวโน้ม NDVI รายวัน (ทุกแปลง)</h4>
+      <canvas id="trend-chart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+  const _cfg = window.GEOAI_CONFIG || {};
+  const API_BASE   = _cfg.API_URL || ""; // same-origin default
+  const ADMIN_KEY  = ""; // ใส่ ADMIN_API_KEY (ปล่อยว่างถ้า dev mode)
+  const SPHERE_KEY = _cfg.SPHERE_KEY || "";
+
+  const adminHeaders = ADMIN_KEY
+    ? { "X-Admin-Key": ADMIN_KEY }
+    : {};
+
+  let allReports = [];
+  let markers    = [];
+  let map = null;
+  let selectedCard = null;
+  let mapReady = false;
+
+  function loadSphereScript(onLoaded) {
+    if (!SPHERE_KEY) {
+      // Dev mode: load Leaflet-backed mock instead of real Sphere SDK
+      const mock = document.createElement('script');
+      mock.src = '/liff/sphere-mock.js';
+      mock.onload = onLoaded;
+      mock.onerror = () => {
+        document.getElementById('loading-overlay').innerHTML =
+          '❌ โหลด sphere-mock.js ไม่สำเร็จ';
+      };
+      document.head.appendChild(mock);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = `https://api.sphere.gistda.or.th/map/?key=${SPHERE_KEY}`;
+    script.onload = onLoaded;
+    script.onerror = () => {
+      document.getElementById('loading-overlay').innerHTML =
+        '❌ โหลด GISTDA Sphere ไม่สำเร็จ — ตรวจสอบ SPHERE_KEY';
+    };
+    document.head.appendChild(script);
+  }
+
+  function initSphereMap() {
+    map = new sphere.Map({
+      placeholder: document.getElementById('map'),
+      layer: sphere.Layers.HYBRID,
+      zoom: 9,
+      location: { lon: 102.1, lat: 12.6 },
+      language: 'th'
+    });
+    map.Event.bind(sphere.EventName.Ready, () => {
+      mapReady = true;
+      if (allReports.length > 0) {
+        renderMarkers(allReports);
+      }
+      // Layer toggle: satellite ↔ street
+      let isSatellite = true;
+      document.getElementById('layer-toggle').addEventListener('click', () => {
+        isSatellite = !isSatellite;
+        const layer = isSatellite ? 'hybrid' : 'streets';
+        if (map.Layers && map.Layers.setBase) {
+          map.Layers.setBase(layer);
+        }
+        document.getElementById('layer-toggle').textContent =
+          isSatellite ? '🛰️ ดาวเทียม' : '🗺️ แผนที่';
+      });
+    });
+  }
+
+  // ─── Load reports ───
+  async function loadReports() {
+    try {
+      const opts = { headers: adminHeaders };
+      const [reportsRes, statsRes] = await Promise.all([
+        fetch(`${API_BASE}/admin/reports?limit=200`, opts),
+        fetch(`${API_BASE}/admin/stats`, opts),
+      ]);
+      if (reportsRes.status === 403) {
+        document.getElementById('loading-overlay').innerHTML =
+          "🔒 <b>ไม่มีสิทธิ์เข้าถึง</b><br>ตรวจสอบ ADMIN_KEY ใน dashboard";
+        return;
+      }
+      const json  = await reportsRes.json();
+      const stats = statsRes.ok ? await statsRes.json() : null;
+
+      allReports = json.reports || [];
+      renderList(allReports);
+      renderTrendChart(allReports);
+      if (mapReady) {
+        renderMarkers(allReports);
+      }
+
+      if (stats) {
+        document.getElementById("stat-total").textContent  = stats.total;
+        document.getElementById("stat-risk").textContent   = stats.high_risk;
+        document.getElementById("stat-medium").textContent = stats.medium_risk;
+        document.getElementById("stat-ok").textContent     = stats.ok;
+        document.getElementById("stat-users").textContent  = stats.unique_users;
+        // v2 server-side stats
+        if (stats.unstable_count != null)
+          document.getElementById("stat-unstable").textContent = stats.unstable_count;
+        if (stats.avg_yield != null)
+          document.getElementById("stat-avg-yield").textContent = stats.avg_yield;
+      }
+
+      // v2 fallback: compute from client data if server didn't provide
+      if (!stats || stats.unstable_count == null) {
+        const unstableCount = allReports.filter(r =>
+          r.displacement_level === 'high' || r.displacement_level === 'medium').length;
+        document.getElementById("stat-unstable").textContent = unstableCount;
+      }
+      if (!stats || stats.avg_yield == null) {
+        const yieldVals = allReports
+          .map(r => r.yield_estimated_kg)
+          .filter(v => v != null && v > 0);
+        const avgYield = yieldVals.length > 0
+          ? Math.round(yieldVals.reduce((a, b) => a + b, 0) / yieldVals.length)
+          : '-';
+        document.getElementById("stat-avg-yield").textContent = avgYield;
+      }
+
+      document.getElementById('last-update').textContent =
+        "อัพเดต: " + new Date().toLocaleTimeString('th-TH');
+    } catch {
+      alert("ไม่สามารถโหลดรายงานได้ ตรวจสอบ API_BASE");
+    } finally {
+      document.getElementById('loading-overlay').style.display = 'none';
+    }
+  }
+
+  function renderAll(reports) {
+    renderList(reports);
+    renderTrendChart(reports);
+    if (mapReady) {
+      renderMarkers(reports);
+    }
+  }
+
+  // ─── NDVI Trend Chart ───
+  let trendChart = null;
+  function renderTrendChart(reports) {
+    if (reports.length === 0) {
+      document.getElementById("chart-panel").classList.remove("visible");
+      return;
+    }
+    document.getElementById("chart-panel").classList.add("visible");
+
+    // Group by date → avg NDVI
+    const byDate = {};
+    reports.forEach(r => {
+      if (r.ndvi_now == null || !r.created_at) return;
+      const day = r.created_at.slice(0, 10);
+      if (!byDate[day]) byDate[day] = [];
+      byDate[day].push(r.ndvi_now);
+    });
+    const sorted = Object.entries(byDate)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-30);  // Last 30 days only
+
+    const labels = sorted.map(([d]) => d.slice(5));  // "MM-DD"
+    const values = sorted.map(([, arr]) =>
+      +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(3)
+    );
+
+    const ctx = document.getElementById("trend-chart").getContext("2d");
+    if (trendChart) trendChart.destroy();
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, 120);
+    gradient.addColorStop(0, "rgba(26,122,60,0.25)");
+    gradient.addColorStop(1, "rgba(26,122,60,0.02)");
+
+    trendChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "NDVI เฉลี่ย",
+          data: values,
+          borderColor: "#1a7a3c",
+          backgroundColor: gradient,
+          borderWidth: 2,
+          pointRadius: 3,
+          pointBackgroundColor: "#1a7a3c",
+          fill: true,
+          tension: 0.3,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => `NDVI: ${ctx.parsed.y.toFixed(3)}`
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { font: { size: 10 }, maxTicksLimit: 10 } },
+          y: {
+            min: 0, max: 1,
+            ticks: { font: { size: 10 }, stepSize: 0.2 },
+            grid: { color: "#f0f0f0" }
+          }
+        }
+      }
+    });
+  }
+
+  function riskLevel(r) {
+    if (r.ndvi_change < -0.20 || (r.elevation_diff < -1.5 && r.soil_moisture_vv > -10)
+        || r.displacement_level === 'high') return "high";
+    if (r.ndvi_change < -0.10 || r.elevation_diff < -1.5
+        || r.displacement_level === 'medium') return "medium";
+    return "ok";
+  }
+
+  function statusIcon(level) {
+    return level === "high" ? "🔴" : level === "medium" ? "🟠" : "🟢";
+  }
+
+  function renderList(reports) {
+    const list = document.getElementById('report-list');
+    list.innerHTML = "";
+    reports.forEach((r, i) => {
+      const level = riskLevel(r);
+      const date  = new Date(r.created_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' });
+      const card  = document.createElement('div');
+      card.className = 'report-card';
+      card.dataset.index = i;
+      card.innerHTML = `
+        <div class="card-top">
+          <span class="card-status">${statusIcon(level)}</span>
+          <span class="card-date">${date}</span>
+        </div>
+        <div class="card-coords">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
+        <div class="card-ndvi">
+          NDVI ${r.ndvi_now?.toFixed(2) ?? '-'}
+          <span class="badge badge-${level === 'high' ? 'red' : level === 'medium' ? 'orange' : 'green'}">
+            ${(r.ndvi_change >= 0 ? '▲' : '▼') + Math.abs((r.ndvi_change * 100)).toFixed(1) + '%'}
+          </span>
+          ${r.displacement_level && r.displacement_level !== 'low' ?
+            `<span style="font-size:10px;margin-left:4px">${r.displacement_level === 'high' ? '⚠️ดิน' : '🔶ดิน'}</span>` : ''}
+          ${r.yield_estimated_kg != null ?
+            `<span style="font-size:10px;color:#888;margin-left:4px">📊${r.yield_estimated_kg}kg</span>` : ''}
+        </div>
+      `;
+      card.addEventListener('click', () => selectReport(i, card));
+      list.appendChild(card);
+    });
+  }
+
+  function renderMarkers(reports) {
+    markers.forEach(m => { try { map.Overlays.remove(m); } catch {} });
+    markers = [];
+    reports.forEach((r, i) => {
+      const level  = riskLevel(r);
+      const color  = level === "high" ? "#e53935" : level === "medium" ? "#fb8c00" : "#1a7a3c";
+      const marker = new sphere.Marker(
+        { lon: r.lng, lat: r.lat },
+        { title: `แปลง ${r.lat.toFixed(4)},${r.lng.toFixed(4)}`,
+          detail: `NDVI ${(r.ndvi_now || 0).toFixed(2)}`,
+          color: color }
+      );
+      map.Overlays.add(marker);
+      marker.Event?.bind?.(sphere.EventName.Click, () => {
+        const card = document.querySelector(`.report-card[data-index="${i}"]`);
+        if (card) selectReport(i, card);
+      });
+      markers.push(marker);
+    });
+  }
+
+  function selectReport(i, cardEl) {
+    if (selectedCard) selectedCard.classList.remove('active');
+    cardEl.classList.add('active');
+    selectedCard = cardEl;
+
+    const r = allReports[i]; // use allReports, not filtered
+
+    map.location({ lon: r.lng, lat: r.lat }, true);
+    map.zoom(15, true);
+
+    // Detail panel
+    document.getElementById('detail-panel').classList.add('visible');
+    document.getElementById('detail-title').textContent =
+      `📍 แปลง (${r.lat.toFixed(4)}, ${r.lng.toFixed(4)})`;
+    document.getElementById('d-ndvi').textContent     = r.ndvi_now?.toFixed(3) ?? '-';
+    document.getElementById('d-change').textContent   =
+      (r.ndvi_change >= 0 ? '▲' : '▼') + Math.abs(r.ndvi_change * 100).toFixed(1) + '%';
+    document.getElementById('d-moisture').textContent = r.soil_moisture_vv?.toFixed(1) ?? '-';
+    const ed = r.elevation_diff ?? 0;
+    document.getElementById('d-elev').textContent = (ed >= 0 ? '+' : '') + ed.toFixed(1);
+    document.getElementById('d-elev').style.color = ed < -1.5 ? '#e53935' : '#1a7a3c';
+
+    // v2 fields
+    const stability = r.surface_stability != null ? Math.round(r.surface_stability * 100) + '%' : '-';
+    const dispLevel = r.displacement_level || 'low';
+    const dispIcon = { high: '⚠️', medium: '🔶', low: '✅' }[dispLevel] || '✅';
+    document.getElementById('d-stability').textContent = dispIcon + ' ' + stability;
+    document.getElementById('d-stability').style.color = dispLevel === 'high' ? '#e53935' : dispLevel === 'medium' ? '#e65100' : '#1a7a3c';
+
+    const yieldKg = r.yield_estimated_kg != null ? r.yield_estimated_kg : '-';
+    const yieldQ = r.yield_quality || 'medium';
+    document.getElementById('d-yield').textContent = yieldKg;
+    document.getElementById('d-yield').style.color = { high: '#1a7a3c', medium: '#fb8c00', low: '#e65100', very_low: '#e53935' }[yieldQ] || '#555';
+
+    const fertN = r.fertilizer_n, fertP = r.fertilizer_p, fertK = r.fertilizer_k;
+    document.getElementById('d-fert').textContent =
+      (fertN != null && fertP != null && fertK != null) ? `${fertN}-${fertP}-${fertK}` : '-';
+
+    const impactSev = r.land_impact_severity || 'low';
+    const impactLabel = { high: '🔴 สูง', medium: '🟠 กลาง', low: '🟢 น้อย' }[impactSev] || '🟢 น้อย';
+    document.getElementById('d-impact').textContent = impactLabel;
+
+    document.getElementById('detail-message').textContent = r.message ?? '';
+  }
+
+  // ─── Search ───
+  function filterReports() {
+    const q = document.getElementById('search-input').value.toLowerCase();
+    const filtered = allReports.filter(r =>
+      r.lat.toFixed(4).includes(q) ||
+      r.lng.toFixed(4).includes(q) ||
+      (r.user_id || '').toLowerCase().includes(q)
+    );
+    renderAll(filtered);
+  }
+
+  // ─── CSV Export with auth ───
+  async function exportCSV() {
+    try {
+      const resp = await fetch(`${API_BASE}/admin/reports/export.csv?limit=1000`,
+                               { headers: adminHeaders });
+      if (!resp.ok) throw new Error(resp.status);
+      const blob = await resp.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url; a.download = "geoai_reports.csv"; a.click();
+      URL.revokeObjectURL(url);
+    } catch { alert("Export ไม่สำเร็จ — ตรวจสอบ ADMIN_KEY"); }
+  }
+
+  // ─── Auto-refresh every 60s (guard against duplicate intervals) ───
+  let _refreshTimer = null;
+  loadSphereScript(() => {
+    initSphereMap();
+    loadReports();
+    if (!_refreshTimer) {
+      _refreshTimer = setInterval(loadReports, 60000);
+    }
+  });
+</script>
+</body>
+</html>

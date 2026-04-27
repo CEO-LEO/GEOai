@@ -1,0 +1,64 @@
+name: CI / Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─────────────────────────────────────
+  # Job 1: Test
+  # ─────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: test_token
+          LINE_CHANNEL_SECRET: test_secret
+          GEE_SERVICE_ACCOUNT: test@project.iam.gserviceaccount.com
+          GEE_KEY_JSON: '{"type":"service_account"}'
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: test_key
+          LIFF_URL: https://liff.line.me/0000000000-AAAAAAAA
+        run: pytest test_system.py -v --tb=short
+
+  # ─────────────────────────────────────
+  # Job 2: Deploy (main branch only)
+  # ─────────────────────────────────────
+  deploy:
+    name: Deploy to Railway
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service geoai-api --detach

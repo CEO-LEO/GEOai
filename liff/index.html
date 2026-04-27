@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>GEOai - ตรวจสวนทุเรียน อ.นายายอาม</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *  { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Sarabun', sans-serif; background: #f5f5f5;
+           display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+
+    /* ── Header ── */
+    #header {
+      background: #1a7a3c; color: white;
+      padding: 10px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
+    #header h1 { font-size: 16px; font-weight: 700; }
+    #header small { font-size: 11px; opacity: .75; }
+
+    /* ── Tabs ── */
+    #tabs {
+      display: flex; background: white;
+      border-bottom: 2px solid #eee; flex-shrink: 0;
+    }
+    .tab {
+      flex: 1; padding: 10px; text-align: center;
+      font-size: 13px; font-weight: 600; color: #888;
+      cursor: pointer; border-bottom: 3px solid transparent;
+      transition: all .2s;
+    }
+    .tab.active { color: #1a7a3c; border-bottom-color: #1a7a3c; }
+
+    /* ── Panels ── */
+    .panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+    .panel.active { display: flex; }
+
+    /* ── My Plots panel ── */
+    #plot-list-wrap { flex: 1; overflow-y: auto; padding: 12px; }
+    .plot-card {
+      background: white; border-radius: 10px;
+      padding: 14px 16px; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 12px;
+      box-shadow: 0 1px 6px rgba(0,0,0,.08);
+      cursor: pointer; transition: transform .15s;
+    }
+    .plot-card:active { transform: scale(.98); }
+    .plot-icon { font-size: 26px; flex-shrink: 0; }
+    .plot-info { flex: 1; }
+    .plot-name { font-weight: 700; font-size: 14px; color: #222; }
+    .plot-coords { font-size: 11px; color: #888; margin-top: 2px; }
+    .plot-area { font-size: 11px; color: #1a7a3c; margin-top: 2px; }
+    .plot-check-btn {
+      background: #06C755; color: white; border: none;
+      padding: 8px 14px; border-radius: 8px; font-size: 13px;
+      font-weight: 700; cursor: pointer; white-space: nowrap;
+    }
+    .plot-hist-btn {
+      background: #1a7a3c; color: white; border: none;
+      padding: 8px 10px; border-radius: 8px; font-size: 13px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .plot-ts-btn {
+      background: #1565c0; color: white; border: none;
+      padding: 8px 10px; border-radius: 8px; font-size: 13px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .plot-del-btn {
+      background: transparent; color: #c62828; border: 1px solid #e0e0e0;
+      padding: 6px 10px; border-radius: 8px; font-size: 12px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .plot-btn-col { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+    #no-plots {
+      text-align: center; padding: 48px 24px; color: #888;
+      display: none;
+    }
+    #no-plots .emoji { font-size: 48px; display: block; margin-bottom: 12px; }
+
+    /* ── New plot panel ── */
+    #map { flex: 1; min-height: 0; }
+
+    #new-plot-panel {
+      padding: 12px 14px; background: white;
+      box-shadow: 0 -2px 12px rgba(0,0,0,.12);
+      flex-shrink: 0;
+    }
+    #coords-display {
+      font-size: 12px; color: #555; padding: 8px 10px;
+      background: #f0f9f4; border-radius: 6px;
+      border-left: 3px solid #1a7a3c; margin-bottom: 10px;
+      min-height: 34px;
+    }
+    .input-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .input-row input {
+      flex: 1; padding: 9px 10px; border: 1px solid #ddd;
+      border-radius: 8px; font-size: 13px; font-family: inherit;
+    }
+    .input-row input:focus { outline: none; border-color: #1a7a3c; }
+    .btn-row { display: flex; gap: 8px; }
+    button.btn-secondary {
+      background: #f0f0f0; color: #333; border: none;
+      padding: 11px; border-radius: 8px; font-size: 13px;
+      font-weight: 700; cursor: pointer; flex: 1;
+    }
+    button.btn-primary {
+      background: #06C755; color: white; border: none;
+      padding: 11px; border-radius: 8px; font-size: 13px;
+      font-weight: 700; cursor: pointer; flex: 1.5;
+    }
+    button:disabled { opacity: .4; cursor: default; }
+    button.btn-draw {
+      background: #1565c0; color: white; border: none;
+      padding: 11px; border-radius: 8px; font-size: 13px;
+      font-weight: 700; cursor: pointer; flex: 1;
+    }
+    button.btn-draw.drawing { background: #c62828; }
+
+    #detail-modal {
+    display: none; position: fixed; inset: 0; z-index: 9990;
+    background: rgba(0,0,0,.55); align-items: flex-end;
+    justify-content: center;
+  }
+  #detail-modal.show { display: flex; }
+  #detail-box {
+    background: white; width: 100%; max-height: 70dvh;
+    border-radius: 16px 16px 0 0; padding: 20px 16px;
+    overflow-y: auto;
+  }
+  #detail-box h3 { font-size: 15px; color: #1a7a3c; margin-bottom: 12px; }
+  .sparkline-wrap {
+    background: #f8fdf9; border-radius: 10px; padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .sparkline-label { font-size: 11px; color: #888; margin-bottom: 6px; }
+  .sparkline-svg { width: 100%; height: 60px; display: block; }
+  .hist-row {
+    border-bottom: 1px solid #eee; padding: 10px 0;
+    font-size: 13px; color: #333;
+  }
+  .hist-row .hist-date { font-size: 11px; color: #999; margin-bottom: 4px; }
+  .hist-row .hist-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: bold; color: white; margin-right: 6px;
+  }
+  .hist-red { background: #e53935; }
+  .hist-orange { background: #fb8c00; }
+  .hist-green { background: #1a7a3c; }
+  .close-modal-btn {
+    width: 100%; background: #f0f0f0; color: #333; border: none;
+    padding: 11px; border-radius: 8px; font-size: 14px;
+    font-weight: 700; cursor: pointer; margin-top: 12px;
+  }
+
+    /* ── Result Card (farmer-friendly analysis display) ── */
+    .result-header {
+      text-align: center; padding: 14px 0 10px;
+      border-bottom: 1px solid #eee; margin-bottom: 14px;
+    }
+    .result-header .result-icon { font-size: 38px; display: block; margin-bottom: 4px; }
+    .result-header .result-status {
+      font-size: 16px; font-weight: 700;
+    }
+    .result-header .result-coords {
+      font-size: 11px; color: #999; margin-top: 4px;
+    }
+    .result-section {
+      background: #f8fdf9; border-radius: 10px; padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    .result-section.warn { background: #fff8e1; }
+    .result-section.danger { background: #fce4ec; }
+    .result-section-title {
+      font-size: 13px; font-weight: 700; color: #1a7a3c; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .result-section.warn .result-section-title { color: #e65100; }
+    .result-section.danger .result-section-title { color: #c62828; }
+    .result-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 13px; padding: 4px 0; color: #444;
+    }
+    .result-row .label { color: #777; }
+    .result-row .value { font-weight: 600; color: #222; }
+    .result-advice {
+      font-size: 12.5px; color: #555; line-height: 1.6;
+      margin-top: 6px; padding: 8px 10px;
+      background: white; border-radius: 8px;
+      border-left: 3px solid #1a7a3c;
+    }
+    .result-section.warn .result-advice { border-left-color: #fb8c00; }
+    .result-section.danger .result-advice { border-left-color: #e53935; }
+    .result-meter {
+      height: 8px; border-radius: 4px; background: #e0e0e0;
+      margin: 6px 0 2px; overflow: hidden;
+    }
+    .result-meter-fill {
+      height: 100%; border-radius: 4px;
+      transition: width .5s ease;
+    }
+    .result-impact-item {
+      padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06);
+      font-size: 12.5px; color: #555;
+    }
+    .result-impact-item:last-child { border-bottom: none; }
+    .result-impact-item .imp-title { font-weight: 600; color: #333; margin-bottom: 3px; }
+
+    /* ── Sphere Marker pin (mock mode SVG) ── */
+    .sphere-marker-pin { background: none !important; border: none !important; }
+    .sphere-marker-html { background: none !important; border: none !important; }
+
+    /* ── SWAB — Soil Water-Air Balance visualisation ── */
+    .swab-gauge-wrap { margin: 10px 0 4px; }
+    .swab-gauge {
+      position: relative; height: 14px; border-radius: 7px;
+      background: linear-gradient(to right,
+        #1565c0 0%, #42a5f5 30%, #43a047 50%, #fb8c00 70%, #e53935 100%);
+    }
+    .swab-optimal {
+      position: absolute; top: -2px; height: 18px;
+      left: 42.5%; width: 15%;   /* index −15% to +15% → center zone */
+      border: 2px solid #43a047; border-radius: 5px;
+      background: rgba(67,160,71,0.15);
+    }
+    .swab-needle {
+      position: absolute; top: -4px;
+      width: 4px; height: 22px;
+      background: white; border: 2px solid #333;
+      border-radius: 2px; transform: translateX(-2px);
+    }
+    .swab-gauge-labels {
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: #888; margin-top: 3px;
+    }
+    .swab-pore-bar {
+      display: flex; height: 10px;
+      border-radius: 5px; overflow: hidden;
+      margin: 8px 0 2px;
+    }
+    .swab-pore-water { background: #1565c0; }
+    .swab-pore-air   { background: #b3e5fc; }
+    .swab-pore-solid { background: #a1887f; }
+    .swab-pore-labels {
+      display: flex; gap: 10px;
+      font-size: 10px; color: #777; margin-top: 2px;
+    }
+
+    /* ── Layer toggle ── */
+    #layer-toggle {
+      position: absolute; top: 10px; right: 10px; z-index: 999;
+      background: white; border: none; border-radius: 8px;
+      padding: 8px 12px; font-size: 12px; font-weight: 700;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: pointer;
+      font-family: inherit;
+    }
+    #layer-toggle:active { transform: scale(.95); }
+
+    #toast {
+      position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+      background: #333; color: white; padding: 10px 20px;
+      border-radius: 20px; font-size: 13px; white-space: nowrap;
+      opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 9999;
+    }
+    #toast.show { opacity: 1; }
+
+    /* ── Spinner overlay ── */
+    #spinner {
+      display: none; position: fixed; inset: 0;
+      background: rgba(255,255,255,.7);
+      align-items: center; justify-content: center;
+      z-index: 9998; font-size: 16px; color: #1a7a3c;
+    }
+    #spinner.show { display: flex; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <div>
+    <h1>🌿 GEOai ตรวจสวนทุเรียน — อ.นายายอาม</h1>
+    <small id="username-label">กำลังโหลด...</small>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div id="tabs">
+  <div class="tab active" data-tab="my-plots">📋 แปลงของฉัน</div>
+  <div class="tab"        data-tab="new-plot">➕ เพิ่มแปลงใหม่</div>
+</div>
+
+<!-- ── Tab 1: My Plots ── -->
+<div class="panel active" id="panel-my-plots">
+  <div id="plot-list-wrap">
+    <div id="no-plots">
+      <span class="emoji">🌱</span>
+      ยังไม่มีแปลงที่บันทึกไว้<br>
+      กด "เพิ่มแปลงใหม่" เพื่อเริ่มต้น
+    </div>
+    <div id="plot-list"></div>
+  </div>
+</div>
+
+<!-- ── Tab 2: New Plot ── -->
+<div class="panel" id="panel-new-plot">
+  <div style="position:relative;flex:1;min-height:0">
+    <div id="map" style="width:100%;height:100%"></div>
+    <button id="layer-toggle" title="สลับดาวเทียม/แผนที่">🛰️ ดาวเทียม</button>
+  </div>
+  <div id="new-plot-panel">
+    <div id="coords-display">📍 จิ้มบนแผนที่ หรือวาดขอบเขตแปลง 🔷</div>
+    <div class="input-row">
+      <input id="plot-name-input"  type="text"   placeholder="ชื่อแปลง เช่น แปลงที่ 1" maxlength="50" />
+      <input id="plot-area-input"  type="number" placeholder="ขนาด (ไร่)" min="0" max="9999" step="0.5" style="max-width:110px" />
+    </div>
+    <div class="btn-row">
+      <button class="btn-secondary" id="gps-btn">📡 ตำแหน่งของฉัน</button>
+      <button class="btn-draw" id="draw-btn">🔷 วาดขอบเขต</button>
+      <button class="btn-primary"   id="submit-btn" disabled>🔍 ตรวจสอบแปลงนี้</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast + Spinner + History Modal -->
+<div id="toast"></div>
+<div id="spinner" class="show">⏳ กำลังโหลด...</div>
+<div id="detail-modal">
+  <div id="detail-box">
+    <h3 id="modal-title">📊 ประวัติการวิเคราะห์</h3>
+    <div id="modal-body"></div>
+    <button class="close-modal-btn" id="close-modal-btn">✕ ปิด</button>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+  // Config from backend (injected via /liff/config.js) or fallback
+  const _cfg      = window.GEOAI_CONFIG || {};
+  const API_URL    = _cfg.API_URL || "";
+  const LIFF_ID    = _cfg.LIFF_ID || "YOUR_LIFF_ID";
+  const SPHERE_KEY = _cfg.SPHERE_KEY || "";
+
+  // ─── State ────────────────────────────────────────
+  let userId         = null;
+  let displayName    = "";
+  let selLat         = null;
+  let selLng         = null;
+  let pinMarker      = null;
+  let map            = null;
+  let userPlots      = [];
+  let polygonCoords  = null;   // [[lng,lat], ...] or null
+  let drawnPolygon   = null;   // sphere.Polygon overlay
+  let isDrawing      = false;
+  let drawPoints     = [];
+  let drawDots       = [];
+  let drawLine       = null;
+  let plotOverlays   = [];
+
+  // ─── Init ─────────────────────────────────────────
+  liff.init({ liffId: LIFF_ID })
+    .catch(() => {})   // ทำงานใน browser ปกติได้
+    .finally(async () => {
+      try { userId = liff.getContext()?.userId; } catch {}
+      userId = userId || "test-user";
+
+      const profile = await liff.getProfile().catch(() => null);
+      if (profile) {
+        displayName = profile.displayName || "";
+      }
+      document.getElementById("username-label").textContent =
+        profile ? `สวัสดี ${profile.displayName}` : "";
+
+      await loadUserPlots();
+      initSphereMap();
+      hideSpinner();
+    });
+
+  // ─── Tabs ─────────────────────────────────────────
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+      tab.classList.add("active");
+      document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
+      if (tab.dataset.tab === "new-plot" && map) {
+        setTimeout(() => map.resize(), 50);
+      }
+    });
+  });
+
+  // ─── Load user plots ──────────────────────────────
+  async function loadUserPlots() {
+    try {
+      const res = await fetch(`${API_URL}/plots/${encodeURIComponent(userId)}`);
+      const json = await res.json();
+      userPlots = json.plots || [];
+    } catch {
+      userPlots = [];
+    }
+    renderPlotList();
+  }
+
+  function renderPlotList() {
+    const list   = document.getElementById("plot-list");
+    const noPlot = document.getElementById("no-plots");
+    list.innerHTML = "";
+
+    if (userPlots.length === 0) {
+      noPlot.style.display = "block";
+      return;
+    }
+    noPlot.style.display = "none";
+
+    userPlots.forEach(plot => {
+      const card = document.createElement("div");
+      card.className = "plot-card";
+      card.innerHTML = `
+        <div class="plot-icon">🌳</div>
+        <div class="plot-info">
+          <div class="plot-name">${escHtml(plot.name || "แปลงที่ไม่มีชื่อ")}</div>
+          <div class="plot-coords">📍 ${plot.lat.toFixed(4)}, ${plot.lng.toFixed(4)}</div>
+          ${plot.area_rai ? `<div class="plot-area">📐 ${plot.area_rai} ไร่</div>` : ""}
+        </div>
+        <div class="plot-btn-col">
+          <button class="plot-check-btn" data-lat="${plot.lat}" data-lng="${plot.lng}"
+                  data-name="${escHtml(plot.name || "")}">
+            🔍 ตรวจ
+          </button>
+          ${plot.id ? `<button class="plot-hist-btn" data-plot-id="${plot.id}"
+                        data-plot-name="${escHtml(plot.name || "แปลง")}">
+            📊 ประวัติ
+          </button>` : ""}
+          ${plot.id ? `<button class="plot-ts-btn" data-plot-id="${plot.id}"
+                        data-plot-name="${escHtml(plot.name || "แปลง")}">
+            📈 NDVI 2ปี
+          </button>` : ""}
+          ${plot.id ? `<button class="plot-del-btn" data-plot-id="${plot.id}"
+                        data-plot-name="${escHtml(plot.name || "แปลง")}">
+            🗑️ ลบ
+          </button>` : ""}
+        </div>
+      `;
+      card.querySelector(".plot-check-btn").addEventListener("click", e => {
+        e.stopPropagation();
+        const btn = e.currentTarget;
+        submitAnalysis(
+          parseFloat(btn.dataset.lat),
+          parseFloat(btn.dataset.lng),
+          btn.dataset.name,
+          plot.area_rai || null,
+          plot.polygon || null
+        );
+      });
+      const histBtn = card.querySelector(".plot-hist-btn");
+      if (histBtn) {
+        histBtn.addEventListener("click", e => {
+          e.stopPropagation();
+          showHistory(
+            parseInt(e.currentTarget.dataset.plotId),
+            e.currentTarget.dataset.plotName
+          );
+        });
+      }
+      const tsBtn = card.querySelector(".plot-ts-btn");
+      if (tsBtn) {
+        tsBtn.addEventListener("click", e => {
+          e.stopPropagation();
+          showNDVITimeseries(
+            parseInt(e.currentTarget.dataset.plotId),
+            e.currentTarget.dataset.plotName
+          );
+        });
+      }
+      const delBtn = card.querySelector(".plot-del-btn");
+      if (delBtn) {
+        delBtn.addEventListener("click", e => {
+          e.stopPropagation();
+          const pid  = parseInt(e.currentTarget.dataset.plotId);
+          const pnam = e.currentTarget.dataset.plotName;
+          deletePlot(pid, pnam);
+        });
+      }
+      list.appendChild(card);
+    });
+  }
+
+  // ─── Sphere Map ───────────────────────────────────
+  function initSphereMap() {
+    function _boot() {
+      map = new sphere.Map({
+        placeholder: document.getElementById("map"),
+        layer: sphere.Layers.HYBRID,
+        zoom: 11,
+        location: { lon: 101.70, lat: 12.97 },  // อ.นายายอาม จ.จันทบุรี
+        language: "th"
+      });
+      map.Event.bind(sphere.EventName.Ready, () => {
+        addPlotOverlays();
+        map.Event.bind(sphere.EventName.Click, (e) => {
+          if (isDrawing) {
+            addDrawPoint(e.lon, e.lat);
+          } else {
+            setPin(e.lat, e.lon);
+          }
+        });
+        // Layer toggle: HYBRID → STREETS → SIMPLE → cycle
+        const LAYER_CYCLE = [
+          { id: "hybrid",  label: "🛰️ ดาวเทียม" },
+          { id: "streets", label: "🗺️ แผนที่" },
+          { id: "simple",  label: "⚪ สะอาด" },
+        ];
+        let layerIdx = 0;
+        document.getElementById("layer-toggle").addEventListener("click", () => {
+          layerIdx = (layerIdx + 1) % LAYER_CYCLE.length;
+          const lyr = LAYER_CYCLE[layerIdx];
+          if (map.Layers && map.Layers.setBase) {
+            map.Layers.setBase(lyr.id);
+          }
+          document.getElementById("layer-toggle").textContent = lyr.label;
+        });
+      });
+    }
+
+    if (!SPHERE_KEY) {
+      // Dev mode: load Leaflet-backed mock
+      const mock = document.createElement("script");
+      mock.src = "/liff/sphere-mock.js";
+      mock.onload = _boot;
+      mock.onerror = () => { showToast("❌ โหลด sphere-mock.js ไม่สำเร็จ"); hideSpinner(); };
+      document.head.appendChild(mock);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = `https://api.sphere.gistda.or.th/map/?key=${SPHERE_KEY}`;
+    script.onload = _boot;
+    script.onerror = () => {
+      showToast("❌ โหลด Sphere Map ไม่สำเร็จ — ตรวจสอบ SPHERE_KEY");
+      hideSpinner();
+    };
+    document.head.appendChild(script);
+  }
+
+  function addPlotOverlays() {
+    plotOverlays.forEach(o => { try { map.Overlays.remove(o); } catch {} });
+    plotOverlays = [];
+
+    userPlots.forEach(p => {
+      if (p.polygon && p.polygon.length >= 3) {
+        const locs = p.polygon.map(c => ({ lon: c[0], lat: c[1] }));
+        const poly = new sphere.Polygon(locs, {
+          lineWidth: 2,
+          lineColor: "rgba(26, 122, 60, 0.9)",
+          fillColor: "rgba(26, 122, 60, 0.15)",
+          label: p.name || "แปลง"
+        });
+        map.Overlays.add(poly);
+        plotOverlays.push(poly);
+      } else {
+        const mk = new sphere.Marker(
+          { lon: p.lng, lat: p.lat },
+          { title: p.name || "แปลง", detail: `📐 ${p.area_rai || '-'} ไร่`, color: "#1a7a3c" }
+        );
+        map.Overlays.add(mk);
+        plotOverlays.push(mk);
+      }
+    });
+  }
+
+  function setPin(lat, lon) {
+    selLat = lat; selLng = lon;
+    clearDrawing();
+
+    document.getElementById("coords-display").innerHTML =
+      `📍 <b>${lat.toFixed(5)}</b> , <b>${lon.toFixed(5)}</b>`;
+    document.getElementById("submit-btn").disabled = false;
+
+    if (pinMarker) { try { map.Overlays.remove(pinMarker); } catch {} }
+    pinMarker = new sphere.Marker(
+      { lon: lon, lat: lat },
+      { title: "จุดที่เลือก", draggable: false, color: "#06C755" }
+    );
+    map.Overlays.add(pinMarker);
+  }
+
+  // ─── Polygon Drawing (click-based) ────────────────
+  const drawBtn = document.getElementById("draw-btn");
+
+  drawBtn.addEventListener("click", () => {
+    if (isDrawing) { finishDrawing(); } else { startDrawing(); }
+  });
+
+  function startDrawing() {
+    if (pinMarker) { try { map.Overlays.remove(pinMarker); } catch {} pinMarker = null; }
+    clearDrawing();
+    isDrawing = true;
+    drawPoints = [];
+    drawDots = [];
+    drawLine = null;
+    drawBtn.textContent = "✅ จบการวาด";
+    drawBtn.classList.add("drawing");
+    document.getElementById("coords-display").innerHTML =
+      "🔷 จิ้มบนแผนที่เพื่อวาดจุดมุม แล้วกด <b>จบการวาด</b>";
+    document.getElementById("submit-btn").disabled = true;
+  }
+
+  function addDrawPoint(lon, lat) {
+    drawPoints.push({ lon, lat });
+    const dot = new sphere.Dot({ lon, lat }, { lineWidth: 12, lineColor: "#06C755" });
+    map.Overlays.add(dot);
+    drawDots.push(dot);
+
+    if (drawLine) { try { map.Overlays.remove(drawLine); } catch {} }
+    if (drawPoints.length >= 2) {
+      drawLine = new sphere.Polyline(drawPoints, {
+        lineWidth: 3,
+        lineColor: "rgba(6, 199, 85, 0.8)"
+      });
+      map.Overlays.add(drawLine);
+    }
+
+    document.getElementById("coords-display").innerHTML =
+      `🔷 วาดแล้ว <b>${drawPoints.length}</b> จุด — จิ้มเพิ่มหรือกด <b>จบการวาด</b> (ต้อง ≥ 3)`;
+  }
+
+  function finishDrawing() {
+    if (drawPoints.length < 3) { showToast("❌ ต้องวาดอย่างน้อย 3 จุด"); return; }
+    isDrawing = false;
+    drawBtn.textContent = "🔷 วาดขอบเขต";
+    drawBtn.classList.remove("drawing");
+
+    drawDots.forEach(d => { try { map.Overlays.remove(d); } catch {} });
+    if (drawLine) { try { map.Overlays.remove(drawLine); } catch {} }
+    drawDots = [];
+    drawLine = null;
+
+    polygonCoords = drawPoints.map(p => [p.lon, p.lat]);
+    polygonCoords.push(polygonCoords[0]);
+
+    drawnPolygon = new sphere.Polygon(drawPoints, {
+      lineWidth: 3,
+      lineColor: "rgba(6,199,85,1)",
+      fillColor: "rgba(6,199,85,0.2)"
+    });
+    map.Overlays.add(drawnPolygon);
+
+    const sumLat = drawPoints.reduce((s, p) => s + p.lat, 0);
+    const sumLon = drawPoints.reduce((s, p) => s + p.lon, 0);
+    selLat = sumLat / drawPoints.length;
+    selLng = sumLon / drawPoints.length;
+
+    document.getElementById("coords-display").innerHTML =
+      `🔷 วาดขอบเขตแล้ว (${drawPoints.length} จุด) — ศูนย์กลาง <b>${selLat.toFixed(4)}</b>, <b>${selLng.toFixed(4)}</b>`;
+    document.getElementById("submit-btn").disabled = false;
+  }
+
+  function clearDrawing() {
+    if (drawnPolygon) { try { map.Overlays.remove(drawnPolygon); } catch {} }
+    drawDots.forEach(d => { try { map.Overlays.remove(d); } catch {} });
+    if (drawLine) { try { map.Overlays.remove(drawLine); } catch {} }
+    drawnPolygon = null;
+    polygonCoords = null;
+    drawPoints = [];
+    drawDots = [];
+    drawLine = null;
+    isDrawing = false;
+    drawBtn.textContent = "🔷 วาดขอบเขต";
+    drawBtn.classList.remove("drawing");
+  }
+
+  // ─── GPS button ───────────────────────────────────
+  document.getElementById("gps-btn").addEventListener("click", () => {
+    if (!navigator.geolocation) return showToast("เบราว์เซอร์ไม่รองรับ GPS");
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setPin(lat, lon);
+        map.location({ lon: lon, lat: lat }, true);
+        map.zoom(15, true);
+      },
+      () => showToast("ไม่สามารถดึงตำแหน่งได้ กรุณาอนุญาต Location")
+    );
+  });
+
+  // ─── Submit (new plot from map) ───────────────────
+  document.getElementById("submit-btn").addEventListener("click", () => {
+    if (!selLat || !selLng) return;
+    const name = document.getElementById("plot-name-input").value.trim()
+                 || `แปลงที่ ${userPlots.length + 1}`;
+    const area = parseFloat(document.getElementById("plot-area-input").value) || null;
+    submitAnalysis(selLat, selLng, name, area, polygonCoords);
+  });
+
+  // ─── Core submit ─────────────────────────────────
+  async function submitAnalysis(lat, lng, plotName, areaRai, polyCoords) {
+    showSpinner("⏳ กำลังวิเคราะห์ข้อมูลดาวเทียม...");
+    try {
+      const body = { lat, lng, user_id: userId, display_name: displayName, plot_name: plotName };
+      if (areaRai) body.area_rai = areaRai;
+      if (polyCoords) body.polygon = polyCoords;
+
+      const res = await fetch(`${API_URL}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const json = await res.json();
+
+      if (liff.isInClient()) {
+        await liff.sendMessages([{
+          type: "text",
+          text: `📍 ส่งพิกัดแปลง "${plotName}" เรียบร้อย\nกำลังวิเคราะห์ข้อมูลดาวเทียม รอผลใน LINE 🛰️`
+        }]);
+        // Show result briefly before closing
+        showResult(json.data, plotName);
+      } else {
+        // Browser / dev mode — show full result
+        showResult(json.data, plotName);
+        await loadUserPlots();
+        if (map) addPlotOverlays();
+      }
+    } catch (e) {
+      showToast("❌ เกิดข้อผิดพลาด: " + e.message);
+    } finally {
+      hideSpinner();
+    }
+  }
+
+  // ─── Delete plot ────────────────────────────────
+  async function deletePlot(plotId, plotName) {
+    if (!confirm(`ลบ "${plotName}" จริงหรือ?\nประวัติการตรวจจะไม่ถูกลบ`)) return;
+
+    showSpinner("⏳ กำลังลบแปลง...");
+    try {
+      const res = await fetch(
+        `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(await res.text());
+      showToast(`🗑️ ลบ "${plotName}" แล้ว`);
+      await loadUserPlots();
+      if (map) addPlotOverlays();
+    } catch (e) {
+      showToast("❌ ลบไม่สำเร็จ: " + e.message);
+    } finally {
+      hideSpinner();
+    }
+  }
+
+  // ─── Plot History Modal ──────────────────────────
+  async function showHistory(plotId, plotName) {
+    document.getElementById("modal-title").textContent = `📊 ประวัติ — ${plotName}`;
+    document.getElementById("modal-body").innerHTML = "<p style='color:#888;font-size:13px'>กำลังโหลด...</p>";
+    document.getElementById("detail-modal").classList.add("show");
+
+    try {
+      const res = await fetch(
+        `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}/history?limit=15`
+      );
+      if (!res.ok) throw new Error();
+      const json = await res.json();
+      const rows = json.history || [];
+
+      if (rows.length === 0) {
+        document.getElementById("modal-body").innerHTML =
+          "<p style='color:#888;font-size:13px;text-align:center;padding:20px'>ยังไม่มีประวัติการตรวจ</p>";
+        return;
+      }
+
+      // Sparkline (oldest → newest left→right)
+      const sparkRows = [...rows].reverse();
+      const vals = sparkRows.map(r => r.ndvi_now || 0);
+      const svg  = buildSparkline(vals);
+
+      document.getElementById("modal-body").innerHTML =
+        `<div class="sparkline-wrap">
+           <div class="sparkline-label">แนวโน้ม NDVI (${sparkRows.length} ครั้งล่าสุด)</div>
+           ${svg}
+         </div>` +
+        rows.map(r => {
+        const change  = ((r.ndvi_change || 0) * 100).toFixed(1);
+        const isHigh  = r.ndvi_change < -0.20 || r.displacement_level === 'high';
+        const isMed   = r.ndvi_change < -0.10 || r.displacement_level === 'medium';
+        const cls     = isHigh ? "hist-red" : isMed ? "hist-orange" : "hist-green";
+        const label   = isHigh ? "🔴 เสี่ยงสูง" : isMed ? "🟠 ปานกลาง" : "🟢 ปกติ";
+        const arrow   = r.ndvi_change >= 0 ? "▲" : "▼";
+        const date    = new Date(r.created_at).toLocaleString("th-TH",
+                          { dateStyle: "short", timeStyle: "short" });
+        // v2 fields
+        const dispIcon = r.displacement_level === 'high' ? '⚠️' : r.displacement_level === 'medium' ? '🔶' : '✅';
+        const stability = r.surface_stability != null ? Math.round(r.surface_stability * 100) : '-';
+        const yieldKg = r.yield_estimated_kg != null ? r.yield_estimated_kg : '-';
+        const fertLvl = r.fertilizer_level || '-';
+        const fertLabel = { maintenance: '🟢 ปกติ', recovery: '🟠 ฟื้นฟู', intensive: '🔴 เข้มข้น', critical: '⚠️ วิกฤต' }[fertLvl] || fertLvl;
+
+        return `<div class="hist-row">
+          <div class="hist-date">📅 ${date}</div>
+          <span class="hist-badge ${cls}">${label}</span>
+          NDVI ${(r.ndvi_now || 0).toFixed(3)}
+          &nbsp;<small style="color:#888">(${arrow}${Math.abs(+change)}%)</small>
+          <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;font-size:11px;color:#666">
+            <span>${dispIcon} ดิน ${stability}%</span>
+            <span>📊 ผลผลิต ${yieldKg} กก./ไร่</span>
+            <span>🧪 ปุ๋ย ${fertLabel}</span>
+          </div>
+        </div>`;
+      }).join("");
+    } catch {      document.getElementById("modal-body").innerHTML =
+        "<p style='color:#e53935;font-size:13px'>ไม่สามารถโหลดประวัติได้</p>";
+    }
+  }
+
+  // ─── SVG Sparkline ───────────────────────────────
+  function buildSparkline(values) {
+    if (values.length < 2) return "<svg class='sparkline-svg'></svg>";
+    const W = 280, H = 60, PAD = 6;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 0.01;
+    const step  = (W - PAD * 2) / (values.length - 1);
+
+    const pts = values.map((v, i) => {
+      const x = PAD + i * step;
+      const y = PAD + (1 - (v - min) / range) * (H - PAD * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+
+    const lastVal = values[values.length - 1];
+    const lineColor = lastVal >= 0.5 ? "#1a7a3c"
+                    : lastVal >= 0.3 ? "#fb8c00" : "#e53935";
+
+    // Area fill path (close below)
+    const areaPath = `M${pts[0]} L${pts.join(" L")} L${PAD + (values.length-1)*step},${H-PAD} L${PAD},${H-PAD} Z`;
+
+    return `<svg class="sparkline-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      <path d="${areaPath}" fill="${lineColor}" fill-opacity="0.12"/>
+      <polyline points="${pts.join(" ")}"
+        fill="none" stroke="${lineColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      ${pts.map((p, i) => {
+        const [x, y] = p.split(",");
+        return `<circle cx="${x}" cy="${y}" r="3" fill="${lineColor}" opacity="${i === values.length-1 ? 1 : 0.4}"/>`;
+      }).join("")}
+      <text x="${PAD}" y="${H}" font-size="9" fill="#aaa">เก่า</text>
+      <text x="${W - PAD}" y="${H}" font-size="9" fill="#aaa" text-anchor="end">ล่าสุด</text>
+    </svg>`;
+  }
+
+  document.getElementById("close-modal-btn").addEventListener("click", () => {    document.getElementById("detail-modal").classList.remove("show");
+  });
+  document.getElementById("detail-modal").addEventListener("click", e => {
+    if (e.target === document.getElementById("detail-modal")) {
+      document.getElementById("detail-modal").classList.remove("show");
+    }
+  });
+
+  // ─── NDVI Timeseries Chart ───────────────────────
+  let tsChart = null;
+
+  async function showNDVITimeseries(plotId, plotName) {
+    document.getElementById("modal-title").textContent = `📈 NDVI รายเดือน — ${plotName}`;
+    document.getElementById("modal-body").innerHTML =
+      `<p style="color:#888;font-size:13px">⏳ กำลังดึงข้อมูลจากดาวเทียม 2 ปี...</p>`;
+    document.getElementById("detail-modal").classList.add("show");
+
+    try {
+      const res = await fetch(
+        `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}/ndvi-timeseries?months=24`
+      );
+      if (!res.ok) throw new Error();
+      const json = await res.json();
+      const series = json.series || [];
+
+      if (series.length < 2) {
+        document.getElementById("modal-body").innerHTML =
+          `<p style="color:#888;font-size:13px;text-align:center;padding:20px">ข้อมูลไม่เพียงพอสำหรับสร้างกราฟ</p>`;
+        return;
+      }
+
+      document.getElementById("modal-body").innerHTML =
+        `<canvas id="ts-chart" style="width:100%;height:220px;"></canvas>
+         <div style="font-size:11px;color:#999;margin-top:8px;text-align:center">
+           ข้อมูล Sentinel-2 รายเดือน ${series.length} เดือน | GEOai
+         </div>`;
+
+      if (tsChart) tsChart.destroy();
+      const ctx = document.getElementById("ts-chart").getContext("2d");
+      const grad = ctx.createLinearGradient(0, 0, 0, 200);
+      grad.addColorStop(0, "rgba(26,122,60,0.3)");
+      grad.addColorStop(1, "rgba(26,122,60,0.02)");
+
+      tsChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: series.map(s => s.month),
+          datasets: [{
+            label: "NDVI",
+            data: series.map(s => s.ndvi),
+            borderColor: "#1a7a3c",
+            backgroundColor: grad,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 3,
+            pointBackgroundColor: "#1a7a3c",
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              label: ctx => `NDVI: ${ctx.parsed.y.toFixed(3)}`
+            }}
+          },
+          scales: {
+            x: {
+              ticks: { font: { size: 10 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 }
+            },
+            y: {
+              min: 0, max: 1,
+              title: { display: true, text: "NDVI", font: { size: 11 } },
+              ticks: { font: { size: 10 } }
+            }
+          }
+        }
+      });
+    } catch {
+      document.getElementById("modal-body").innerHTML =
+        `<p style="color:#e53935;font-size:13px">ไม่สามารถโหลดข้อมูล NDVI ได้</p>`;
+    }
+  }
+
+  // ─── Helpers ─────────────────────────────────────
+  function showToast(msg) {    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    setTimeout(() => t.classList.remove("show"), 3000);
+  }
+  function showSpinner(msg = "⏳ กำลังโหลด...") {
+    const s = document.getElementById("spinner");
+    s.textContent = msg; s.classList.add("show");
+  }
+  function hideSpinner() {
+    document.getElementById("spinner").classList.remove("show");
+  }
+  function escHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+            .replace(/"/g,"&quot;");
+  }
+
+  // ─── Result Display (farmer-friendly) ──────────────
+  function showResult(data, plotName) {
+    const d = data;
+    const disp = d.displacement || {};
+    const fert = d.fertilizer || {};
+    const yld  = d.yield_estimate || {};
+    const imp  = d.land_impact || {};
+    const swab = d.swab || {};
+    const bsi  = d.bsi != null ? d.bsi : null;
+    const topsoilRisk = d.topsoil_risk_level || 'low';
+
+    // ── Overall status ──
+    const isHigh = (d.ndvi_change < -0.20) || disp.change_level === "high" || imp.severity === "high" || topsoilRisk === "high" || swab.severity === "high";
+    const isMed  = (d.ndvi_change < -0.10) || disp.change_level === "medium" || imp.severity === "medium" || topsoilRisk === "medium" || swab.severity === "medium";
+    const statusIcon  = isHigh ? "🔴" : isMed ? "🟡" : "🟢";
+    const statusText  = isHigh ? "ต้องดูแลเร่งด่วน" : isMed ? "ควรเฝ้าระวัง" : "สวนสมบูรณ์ดี";
+    const statusColor = isHigh ? "#c62828" : isMed ? "#e65100" : "#1a7a3c";
+
+    // ── NDVI → farmer language ──
+    const ndviPct = Math.round(d.ndvi_now * 100);
+    const ndviLabel = d.ndvi_now >= 0.65 ? "ใบเขียวสมบูรณ์ 🌿"
+                    : d.ndvi_now >= 0.45 ? "เริ่มโทรม ใบไม่สมบูรณ์ 🍃"
+                    : d.ndvi_now >= 0.30 ? "โทรมมาก ใบเหลืองร่วง 🍂"
+                    : "วิกฤต! ต้นอาจตาย ⚠️";
+    const ndviArrow = d.ndvi_change >= 0 ? "▲ ดีขึ้น" : "▼ แย่ลง";
+    const ndviChangePct = Math.abs(d.ndvi_change * 100).toFixed(1);
+
+    // ── Stability meter ──
+    const stabPct = Math.round((disp.surface_stability || 0) * 100);
+    const stabColor = stabPct >= 70 ? "#1a7a3c" : stabPct >= 40 ? "#fb8c00" : "#e53935";
+    const stabLabel = stabPct >= 70 ? "ดินเสถียรดี ✅"
+                    : stabPct >= 40 ? "ดินขยับบ้าง เฝ้าระวัง 🔶"
+                    : "ดินไม่เสถียร! เสี่ยงทรุดตัว ⚠️";
+    const dispClass = stabPct >= 70 ? "" : stabPct >= 40 ? "warn" : "danger";
+
+    // ── Yield → farmer language ──
+    const yieldKg = yld.estimated_kg_per_rai || 0;
+    const yieldLabel = yld.quality === "high" ? "ผลผลิตดี 🎉"
+                     : yld.quality === "medium" ? "ผลผลิตปานกลาง 📊"
+                     : yld.quality === "low" ? "ผลผลิตต่ำ ⚠️"
+                     : "ผลผลิตต่ำมาก 🚨";
+
+    // ── Fertilizer → farmer language ──
+    const fertLevelText = {
+      maintenance: "🟢 บำรุงปกติ",
+      recovery:    "🟠 ต้องฟื้นฟู",
+      intensive:   "🔴 เข้มข้น (ต้นโทรม)",
+      critical:    "⚠️ วิกฤต — ปรึกษาผู้เชี่ยวชาญ",
+    }[fert.level] || fert.level;
+    const fertClass = fert.level === "critical" ? "danger"
+                    : fert.level === "intensive" ? "warn" : "";
+
+    // ── Impact items ──
+    const impacts = (imp.impacts || []).map(i =>
+      `<div class="result-impact-item">
+        <div class="imp-title">${i.icon} ${escHtml(i.title)}</div>
+        ${escHtml(i.detail)}
+      </div>`
+    ).join("");
+    const impClass = imp.severity === "high" ? "danger"
+                   : imp.severity === "medium" ? "warn" : "";
+
+    // ── Topsoil ──
+    const topsoilBsiText = bsi != null ? bsi.toFixed(3) : '-';
+    const topsoilRiskLabel = topsoilRisk === 'high'   ? '⚠️ ระวัง! หน้าดินเปิดโล่ง เสี่ยงปุ๋ยและหน้าดินถูกชะล้าง'
+                           : topsoilRisk === 'medium' ? '🟠 หน้าดินเปิดบางส่วน ควรเฝ้าระวัง'
+                           : '✅ หน้าดินสมบูรณ์ มีพืชคลุมดิน';
+    const topsoilRiskColor = topsoilRisk === 'high' ? '#c62828' : topsoilRisk === 'medium' ? '#e65100' : '#1a7a3c';
+    const topsoilClass = topsoilRisk === 'high' ? 'danger' : topsoilRisk === 'medium' ? 'warn' : '';
+
+    const html = `
+      <div class="result-header">
+        <span class="result-icon">${statusIcon}</span>
+        <div class="result-status" style="color:${statusColor}">${statusText}</div>
+        <div class="result-coords">📍 ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)} — "${escHtml(plotName)}"</div>
+      </div>
+
+      <!-- สุขภาพต้นไม้ -->
+      <div class="result-section">
+        <div class="result-section-title">🌿 สุขภาพต้นทุเรียน</div>
+        <div class="result-row">
+          <span class="label">สภาพใบ</span>
+          <span class="value">${ndviLabel}</span>
+        </div>
+        <div class="result-row">
+          <span class="label">ค่า NDVI</span>
+          <span class="value">${d.ndvi_now.toFixed(2)} (${ndviArrow} ${ndviChangePct}%)</span>
+        </div>
+        <div class="result-meter">
+          <div class="result-meter-fill" style="width:${ndviPct}%;background:${d.ndvi_now >= 0.5 ? '#1a7a3c' : d.ndvi_now >= 0.3 ? '#fb8c00' : '#e53935'}"></div>
+        </div>
+      </div>
+
+      <!-- เสถียรภาพดิน -->
+      <div class="result-section ${dispClass}">
+        <div class="result-section-title">🌍 เสถียรภาพดิน</div>
+        <div class="result-row">
+          <span class="label">สถานะ</span>
+          <span class="value">${stabLabel}</span>
+        </div>
+        <div class="result-row">
+          <span class="label">ความเสถียร</span>
+          <span class="value">${stabPct}%</span>
+        </div>
+        <div class="result-meter">
+          <div class="result-meter-fill" style="width:${stabPct}%;background:${stabColor}"></div>
+        </div>
+        <div class="result-row">
+          <span class="label">ความชื้นดิน</span>
+          <span class="value">${d.soil_moisture_vv > -10 ? '💧 ชื้นมาก' : d.soil_moisture_vv > -15 ? '💧 ปกติ' : '🏜️ แห้ง'} (${d.soil_moisture_vv} dB)</span>
+        </div>
+        <div class="result-row">
+          <span class="label">ระดับพื้นที่</span>
+          <span class="value">${d.elevation_diff < -1.5 ? '⬇️ ต่ำกว่ารอบข้าง' : d.elevation_diff > 1.0 ? '⬆️ สูงกว่ารอบข้าง' : '↔️ ระดับปกติ'} (${d.elevation_diff > 0 ? '+' : ''}${d.elevation_diff.toFixed(1)} ม.)</span>
+        </div>
+      </div>
+
+      <!-- ความสมดุลน้ำ-อากาศในดิน (SWAB v3) -->
+      ${swab.swab_index != null ? (() => {
+        const swabIdx  = swab.swab_index;
+        const waterPct = swab.soil_water_pct != null ? swab.soil_water_pct : 45;
+        const airPct   = swab.soil_air_pct   != null ? swab.soil_air_pct   : 30;
+        const solidPct = Math.max(0, 100 - waterPct - airPct);
+        const ndwi     = swab.ndwi != null ? swab.ndwi : 0;
+        const stTh     = swab.status_th || '—';
+        const swabAdv  = swab.advice || '';
+        const swabSev  = swab.severity || 'low';
+        const swCls    = swabSev === 'high' ? 'danger' : swabSev === 'medium' ? 'warn' : '';
+        const swCol    = swabSev === 'high' ? '#c62828' : swabSev === 'medium' ? '#e65100' : '#1565c0';
+        const needleL  = ((swabIdx + 1) / 2 * 100).toFixed(1);
+        const ndwiLbl  = ndwi >= 0.05 ? '💧 มีน้ำ' : ndwi >= -0.1 ? '🟰 ปกติ' : '🏜️ แห้ง';
+        return `
+        <div class="result-section ${swCls}">
+          <div class="result-section-title">💧 ความสมดุลน้ำ-อากาศในดิน</div>
+          <div class="result-row">
+            <span class="label">สถานะ</span>
+            <span class="value" style="color:${swCol};font-weight:bold">${escHtml(stTh)}</span>
+          </div>
+          <div class="result-row">
+            <span class="label">MNDWI (ผิวน้ำ)</span>
+            <span class="value">${ndwiLbl} (${ndwi >= 0 ? '+' : ''}${ndwi.toFixed(3)})</span>
+          </div>
+          <div class="swab-gauge-wrap">
+            <div class="swab-gauge">
+              <div class="swab-optimal"></div>
+              <div class="swab-needle" style="left:${needleL}%"></div>
+            </div>
+            <div class="swab-gauge-labels">
+              <span>💧 น้ำขัง</span><span>✅ สมดุล</span><span>🏜️ แล้ง</span>
+            </div>
+          </div>
+          <div class="swab-pore-bar">
+            <div class="swab-pore-water" style="width:${waterPct}%"></div>
+            <div class="swab-pore-air"   style="width:${airPct}%"></div>
+            <div class="swab-pore-solid" style="flex:1"></div>
+          </div>
+          <div class="swab-pore-labels">
+            <span>🔵 น้ำ ${waterPct.toFixed(0)}%</span>
+            <span>🩵 อากาศ ${airPct.toFixed(0)}%</span>
+            <span>🟫 วัสดุดิน ~${solidPct.toFixed(0)}%</span>
+          </div>
+          <div class="result-advice">${escHtml(swabAdv)}</div>
+        </div>`; })() : ''}
+
+      <!-- สภาพหน้าดิน (Topsoil) -->
+      <div class="result-section ${topsoilClass}">
+        <div class="result-section-title">🌱 สภาพหน้าดิน (Topsoil)</div>
+        <div class="result-row">
+          <span class="label">ค่า BSI</span>
+          <span class="value">${topsoilBsiText}</span>
+        </div>
+        <div class="result-row">
+          <span class="label">สถานะ</span>
+          <span class="value" style="color:${topsoilRiskColor};font-weight:bold">${topsoilRiskLabel}</span>
+        </div>
+        ${bsi != null ? `<div class="result-meter">
+          <div class="result-meter-fill" style="width:${Math.min(100,Math.round(bsi/0.5*100))}%;background:${topsoilRiskColor}"></div>
+        </div>` : ''}
+      </div>
+
+      <!-- ผลผลิตประเมิน -->
+      <div class="result-section">
+        <div class="result-section-title">📊 ประเมินผลผลิต</div>
+        ${d.predicted_yield_kg_per_rai != null ? `
+        <div class="result-row">
+          <span class="label">🤖 AI พยากรณ์</span>
+          <span class="value" style="font-size:15px;font-weight:bold;color:${d.predicted_yield_kg_per_rai >= 1200 ? '#1a7a3c' : d.predicted_yield_kg_per_rai >= 800 ? '#e65100' : '#c62828'}">${d.predicted_yield_kg_per_rai.toLocaleString()} กก./ไร่</span>
+        </div>` : ''}
+        <div class="result-row">
+          <span class="label">ผลผลิตคาดการณ์</span>
+          <span class="value" style="font-size:15px;color:${yld.quality === 'high' ? '#1a7a3c' : yld.quality === 'medium' ? '#e65100' : '#c62828'}">${yieldKg.toLocaleString()} กก./ไร่/ปี</span>
+        </div>
+        <div class="result-row">
+          <span class="label">ช่วงประเมิน</span>
+          <span class="value">${(yld.range_low||0).toLocaleString()} – ${(yld.range_high||0).toLocaleString()} กก.</span>
+        </div>
+        <div class="result-row">
+          <span class="label">ระดับ</span>
+          <span class="value">${yieldLabel}</span>
+        </div>
+      </div>
+
+      <!-- คำแนะนำปุ๋ย -->
+      <div class="result-section ${fertClass}">
+        <div class="result-section-title">🧪 คำแนะนำปุ๋ย (กก./ต้น/ปี)</div>
+        <div class="result-row">
+          <span class="label">ระดับ</span>
+          <span class="value">${fertLevelText}</span>
+        </div>
+        <div class="result-row">
+          <span class="label">ไนโตรเจน (N)</span>
+          <span class="value">${fert.n_kg_per_tree} กก.</span>
+        </div>
+        <div class="result-row">
+          <span class="label">ฟอสฟอรัส (P)</span>
+          <span class="value">${fert.p_kg_per_tree} กก.</span>
+        </div>
+        <div class="result-row">
+          <span class="label">โพแทสเซียม (K)</span>
+          <span class="value">${fert.k_kg_per_tree} กก.</span>
+        </div>
+        ${fert.ca_kg_per_tree > 0 ? `<div class="result-row"><span class="label">แคลเซียม (Ca)</span><span class="value">${fert.ca_kg_per_tree} กก.</span></div>` : ''}
+        ${fert.mg_kg_per_tree > 0 ? `<div class="result-row"><span class="label">แมกนีเซียม (Mg)</span><span class="value">${fert.mg_kg_per_tree} กก.</span></div>` : ''}
+        <div class="result-advice">${escHtml(fert.note || '')}</div>
+      </div>
+
+      <!-- ผลกระทบ -->
+      ${impacts ? `<div class="result-section ${impClass}">
+        <div class="result-section-title">🛡️ การประเมินผลกระทบ ${imp.severity === 'high' ? '(เสี่ยงสูง!)' : imp.severity === 'medium' ? '(ปานกลาง)' : '(ปกติ)'}</div>
+        ${impacts}
+      </div>` : ''}
+    `;
+
+    document.getElementById("modal-title").textContent = `🛰️ ผลวิเคราะห์แปลง "${plotName}"`;
+    document.getElementById("modal-body").innerHTML = html;
+    document.getElementById("detail-modal").classList.add("show");
+  }
+</script>
+</body>
+</html>
