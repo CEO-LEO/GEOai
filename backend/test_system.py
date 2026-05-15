@@ -695,10 +695,10 @@ class TestMLModel:
         assert result == -1
 
     def test_dataset_shape(self):
-        """make_mock_dataset ต้องคืน X(200,3) และ y(200,)"""
+        """make_mock_dataset ต้องคืน X(200,5) และ y(200,) — v3 มี 5 features"""
         from ml_model import make_mock_dataset
         X, y = make_mock_dataset(200)
-        assert X.shape == (200, 3)
+        assert X.shape == (200, 5)
         assert y.shape == (200,)
 
     def test_dataset_yield_in_range(self):
@@ -710,8 +710,8 @@ class TestMLModel:
         assert np.all(y <= 2500)
 
     def test_train_model_r2_reasonable(self, tmp_path, monkeypatch):
-        """R² ควร > 0.5 บนข้อมูลจำลอง"""
-        from ml_model import make_mock_dataset, N_SAMPLES, RANDOM_STATE
+        """R² ควร > 0.4 บนข้อมูลจำลอง (v3 มี noise เพิ่มจาก SWAB)"""
+        from ml_model import make_mock_dataset, N_SAMPLES, RANDOM_STATE, N_ESTIMATORS
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import r2_score
@@ -719,10 +719,10 @@ class TestMLModel:
         X, y = make_mock_dataset(N_SAMPLES, RANDOM_STATE)
         X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2,
                                                    random_state=RANDOM_STATE)
-        m = RandomForestRegressor(n_estimators=50, random_state=RANDOM_STATE)
+        m = RandomForestRegressor(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE)
         m.fit(X_tr, y_tr)
         r2 = r2_score(y_te, m.predict(X_te))
-        assert r2 > 0.5
+        assert r2 > 0.4
 
 
 # ── Tests: Database – ML/BSI fields ────────────────────
