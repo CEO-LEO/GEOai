@@ -180,6 +180,44 @@ def predict_from_ml(ndvi: float, bsi: float, elev_diff: float,
         return -1
 
 
+FEATURE_LABELS_TH = {
+    "ndvi":           "ความสมบูรณ์พืช (NDVI)",
+    "bsi_score":      "ดินเปิดโล่ง (BSI)",
+    "elevation_diff": "ระดับพื้นที่",
+    "swab_index":     "สมดุลน้ำ-อากาศในดิน",
+    "soil_water_pct": "ปริมาณน้ำในดิน",
+}
+
+
+def get_model_meta() -> dict:
+    """
+    ข้อมูลโมเดลสำหรับแสดงความแม่นยำ/ความสำคัญของฟีเจอร์ใน dashboard
+    คืน {"available", "version", "type", "features": [{key,label,importance}], ...}
+    """
+    meta = {"available": False, "version": "v3", "type": "rule-based fallback",
+            "features": []}
+    if not os.path.exists(MODEL_PATH):
+        return meta
+    try:
+        model = joblib.load(MODEL_PATH)
+        features = ["ndvi", "bsi_score", "elevation_diff", "swab_index", "soil_water_pct"]
+        meta["available"] = True
+        meta["type"] = type(model).__name__
+        if hasattr(model, "feature_importances_"):
+            imp = [
+                {"key": f, "label": FEATURE_LABELS_TH.get(f, f),
+                 "importance": round(float(v), 3)}
+                for f, v in zip(features, model.feature_importances_)
+            ]
+            imp.sort(key=lambda x: x["importance"], reverse=True)
+            meta["features"] = imp
+        if hasattr(model, "n_estimators"):
+            meta["n_estimators"] = int(model.n_estimators)
+    except Exception as exc:
+        logger.error(f"get_model_meta ล้มเหลว: {exc}")
+    return meta
+
+
 # ─────────────────────────────────────────────────────
 # 4. CLI entry point
 # ─────────────────────────────────────────────────────

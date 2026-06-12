@@ -3,571 +3,783 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GEOai — Admin Dashboard</title>
+  <title>GEOai — Command Center</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
   <script src="/liff/config.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Sarabun', sans-serif; background: #f0f4f0; color: #222; }
-
-    header {
-      background: #1a7a3c;
-      color: white;
-      padding: 14px 24px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+    :root{
+      --bg:#070d16; --bg2:#0b1422; --panel:#0e1a2b; --panel2:#101f33;
+      --line:#1c3148; --line2:#24405e;
+      --txt:#dbe7f3; --muted:#7d93ab; --dim:#56708c;
+      --cyan:#22d3ee; --cyan2:#0891b2;
+      --good:#34d399; --lime:#a3e635; --warn:#fbbf24; --orange:#fb923c; --danger:#f43f5e;
+      --violet:#a78bfa; --blue:#38bdf8;
+      --mono:'Share Tech Mono',ui-monospace,monospace;
     }
-    header h1 { font-size: 18px; }
-    header span { font-size: 13px; opacity: 0.8; }
-
-    .container { display: flex; height: calc(100vh - 52px); }
-
-    /* ── Sidebar ── */
-    #sidebar {
-      width: 380px;
-      min-width: 320px;
-      background: white;
-      display: flex;
-      flex-direction: column;
-      border-right: 1px solid #ddd;
-      overflow: hidden;
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%}
+    body{
+      font-family:'Sarabun',sans-serif; color:var(--txt);
+      background:
+        radial-gradient(1200px 600px at 80% -10%, rgba(34,211,238,.08), transparent 60%),
+        radial-gradient(900px 500px at 0% 110%, rgba(167,139,250,.07), transparent 55%),
+        var(--bg);
+      overflow:hidden;
     }
+    .mono{font-family:var(--mono)}
+    .app{display:grid; grid-template-columns:236px 1fr; height:100vh}
 
-    #summary {
-      display: grid;
-      grid-template-columns: repeat(7, 1fr);
-      gap: 1px;
-      background: #eee;
-      border-bottom: 1px solid #ddd;
+    /* ───────── Left rail ───────── */
+    #rail{
+      background:linear-gradient(180deg,var(--bg2),#091120);
+      border-right:1px solid var(--line);
+      display:flex; flex-direction:column; min-height:0;
     }
-    .stat-box {
-      background: white;
-      padding: 12px;
-      text-align: center;
+    .brand{padding:18px 18px 14px; border-bottom:1px solid var(--line)}
+    .brand .logo{display:flex; align-items:center; gap:10px}
+    .brand .glyph{
+      width:34px;height:34px;border-radius:9px;
+      background:radial-gradient(circle at 30% 25%, #2dd4bf, #0891b2 70%);
+      box-shadow:0 0 18px rgba(34,211,238,.5); display:grid; place-items:center; font-size:18px;
     }
-    .stat-box .num { font-size: 22px; font-weight: bold; color: #1a7a3c; }
-    .stat-box .lbl { font-size: 11px; color: #888; margin-top: 2px; }
+    .brand h1{font-size:17px; letter-spacing:.5px; line-height:1;
+      background:linear-gradient(90deg,#7ef0ff,#22d3ee); -webkit-background-clip:text; background-clip:text; color:transparent}
+    .brand .sub{font-size:10.5px; color:var(--dim); margin-top:5px; line-height:1.5}
 
-    #search-bar {
-      padding: 10px 12px;
-      border-bottom: 1px solid #eee;
+    .rail-sec{padding:14px 12px 6px; font-size:10px; letter-spacing:1.4px; color:var(--dim); text-transform:uppercase}
+    .nav{display:flex; flex-direction:column; gap:3px; padding:0 10px}
+    .nav .item{
+      display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:9px;
+      font-size:13px; color:var(--muted); cursor:pointer; border:1px solid transparent; transition:.15s;
     }
-    #search-bar input {
-      width: 100%;
-      padding: 8px 10px;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      font-size: 13px;
+    .nav .item:hover{background:rgba(34,211,238,.06); color:var(--txt)}
+    .nav .item.active{
+      background:linear-gradient(90deg,rgba(34,211,238,.16),rgba(34,211,238,.03));
+      color:#bff6ff; border-color:rgba(34,211,238,.35); box-shadow:inset 0 0 0 1px rgba(34,211,238,.05);
     }
+    .nav .item .ico{width:18px; text-align:center}
+    .nav .item .cnt{margin-left:auto; font-family:var(--mono); font-size:11px;
+      background:rgba(255,255,255,.06); padding:1px 7px; border-radius:20px; color:var(--muted)}
+    .nav .item.active .cnt{background:rgba(34,211,238,.2); color:#bff6ff}
+    .nav .item .cnt.red{background:rgba(244,63,94,.18); color:#fda4b4}
 
-    #report-list {
-      overflow-y: auto;
-      flex: 1;
+    .rail-foot{margin-top:auto; padding:12px 16px; border-top:1px solid var(--line); font-size:10px; color:var(--dim); line-height:1.7}
+    .health{padding:8px 14px 4px}
+    .health .row{display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted); margin-bottom:7px}
+    .health .bar{flex:1; height:5px; border-radius:5px; background:rgba(255,255,255,.06); overflow:hidden}
+    .health .bar > span{display:block; height:100%; border-radius:5px}
+    .health .pct{font-family:var(--mono); font-size:10.5px; width:38px; text-align:right; color:var(--txt)}
+
+    /* ───────── Main ───────── */
+    #main{display:flex; flex-direction:column; min-width:0; min-height:0}
+    .topbar{
+      display:flex; align-items:center; gap:16px; padding:12px 20px;
+      border-bottom:1px solid var(--line); background:rgba(8,15,26,.6); backdrop-filter:blur(6px);
     }
+    .topbar .title{font-size:18px; font-weight:700; letter-spacing:.5px}
+    .topbar .title b{color:#7ef0ff}
+    .topbar .crumb{font-size:11px; color:var(--dim); letter-spacing:2px; text-transform:uppercase}
+    .pill{display:inline-flex; align-items:center; gap:7px; font-size:11.5px; font-family:var(--mono);
+      padding:6px 12px; border-radius:8px; border:1px solid var(--line2); color:var(--muted); background:rgba(255,255,255,.02)}
+    .pill .dot{width:8px;height:8px;border-radius:50%;background:var(--good); box-shadow:0 0 8px var(--good)}
+    .pill.live .dot{animation:pulse 1.6s infinite}
+    .pill.danger{border-color:rgba(244,63,94,.4); color:#fda4b4}
+    .pill.danger .dot{background:var(--danger); box-shadow:0 0 8px var(--danger)}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    .spacer{margin-left:auto}
+    .btn{font-family:'Sarabun',sans-serif; font-size:12.5px; font-weight:600; cursor:pointer;
+      padding:8px 14px; border-radius:9px; border:1px solid var(--line2); background:rgba(255,255,255,.03); color:var(--txt); transition:.15s}
+    .btn:hover{border-color:var(--cyan); color:#bff6ff; box-shadow:0 0 14px rgba(34,211,238,.15)}
+    .btn.cyan{background:linear-gradient(90deg,rgba(34,211,238,.18),rgba(34,211,238,.05)); border-color:rgba(34,211,238,.45); color:#bff6ff}
 
-    .report-card {
-      padding: 12px 14px;
-      border-bottom: 1px solid #f0f0f0;
-      cursor: pointer;
-      transition: background 0.15s;
+    .scroll{overflow:auto; min-height:0}
+    .scroll::-webkit-scrollbar{width:9px;height:9px}
+    .scroll::-webkit-scrollbar-thumb{background:#1d3450; border-radius:8px}
+    .scroll::-webkit-scrollbar-track{background:transparent}
+
+    .content{flex:1; min-height:0; overflow:auto; padding:16px 20px 22px}
+
+    /* KPI cards */
+    .kpis{display:grid; grid-template-columns:repeat(8,1fr); gap:12px; margin-bottom:16px}
+    .kpi{
+      position:relative; background:linear-gradient(180deg,var(--panel),var(--bg2));
+      border:1px solid var(--line); border-radius:14px; padding:14px 15px 13px; overflow:hidden;
     }
-    .report-card:hover { background: #f5fdf7; }
-    .report-card.active { background: #e8f5ec; border-left: 3px solid #1a7a3c; }
+    .kpi::before{content:""; position:absolute; top:0; left:0; right:0; height:2px;
+      background:linear-gradient(90deg,transparent,var(--accent,#22d3ee),transparent); opacity:.9}
+    .kpi .k-top{display:flex; align-items:center; gap:7px; font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--muted)}
+    .kpi .k-top .ki{font-size:13px}
+    .kpi .k-num{font-family:var(--mono); font-size:30px; line-height:1.05; margin-top:9px; color:#eaf6ff}
+    .kpi .k-sub{font-size:10.5px; color:var(--dim); margin-top:3px}
+    .kpi.c-cyan{--accent:#22d3ee} .kpi.c-cyan .k-num{color:#9bf0ff}
+    .kpi.c-red{--accent:#f43f5e} .kpi.c-red .k-num{color:#fda4b4}
+    .kpi.c-orange{--accent:#fb923c} .kpi.c-orange .k-num{color:#fdba74}
+    .kpi.c-good{--accent:#34d399} .kpi.c-good .k-num{color:#86efc4}
+    .kpi.c-blue{--accent:#38bdf8} .kpi.c-blue .k-num{color:#9ad8fb}
+    .kpi.c-violet{--accent:#a78bfa} .kpi.c-violet .k-num{color:#c8b8fd}
 
-    .card-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 4px;
-    }
-    .card-status { font-size: 18px; }
-    .card-date { font-size: 11px; color: #999; }
-    .card-coords { font-size: 12px; color: #555; }
-    .card-ndvi { font-size: 12px; margin-top: 4px; }
+    /* Panels grid */
+    .grid{display:grid; grid-template-columns:1fr 384px; gap:16px; align-items:start}
+    .panel{background:linear-gradient(180deg,var(--panel),var(--bg2)); border:1px solid var(--line);
+      border-radius:14px; overflow:hidden}
+    .panel .p-head{display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--line)}
+    .panel .p-head .bar{width:4px; height:16px; border-radius:3px; background:var(--cyan); box-shadow:0 0 10px var(--cyan)}
+    .panel .p-head h3{font-size:13.5px; letter-spacing:1.5px; text-transform:uppercase; color:#cfe6f7}
+    .panel .p-head .tag{margin-left:auto; font-family:var(--mono); font-size:10px; letter-spacing:1px;
+      color:#7ef0ff; border:1px solid rgba(34,211,238,.35); padding:2px 8px; border-radius:6px}
 
-    .badge {
-      display: inline-block;
-      padding: 2px 7px;
-      border-radius: 10px;
-      font-size: 11px;
-      font-weight: bold;
-      color: white;
-    }
-    .badge-red    { background: #e53935; }
-    .badge-orange { background: #fb8c00; }
-    .badge-green  { background: #1a7a3c; }
+    /* Map */
+    #map{height:560px; width:100%; background:#0a1422}
+    .leaflet-container{background:#0a1422; font-family:'Sarabun',sans-serif}
+    .map-wrap{position:relative}
+    .map-overlay{position:absolute; z-index:600; pointer-events:none}
+    .map-ctrls{top:12px; right:12px; display:flex; flex-direction:column; gap:8px; pointer-events:auto}
+    .map-ctrls .btn{background:rgba(10,20,34,.85); backdrop-filter:blur(4px)}
+    .legend{left:12px; bottom:14px; background:rgba(8,15,26,.85); backdrop-filter:blur(6px);
+      border:1px solid var(--line2); border-radius:11px; padding:11px 13px; pointer-events:auto}
+    .legend h5{font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin-bottom:8px}
+    .legend .row{display:flex; align-items:center; gap:8px; font-size:11px; color:var(--txt); margin-bottom:5px}
+    .legend .sw{width:14px;height:14px;border-radius:4px}
+    .map-stat{left:12px; top:12px; display:flex; gap:8px; pointer-events:none}
+    .map-stat .chip{font-family:var(--mono); font-size:11px; background:rgba(8,15,26,.82); backdrop-filter:blur(4px);
+      border:1px solid var(--line2); border-radius:8px; padding:6px 10px; color:var(--txt)}
+    .map-stat .chip b{color:#7ef0ff}
 
-    /* ── Map + Detail ── */
-    #right-panel { flex: 1; display: flex; flex-direction: column; }
-    #map { flex: 1; }
+    /* Filters */
+    .filters{display:flex; gap:7px; padding:11px 14px; flex-wrap:wrap; border-bottom:1px solid var(--line)}
+    .chip-f{font-size:12px; padding:6px 11px; border-radius:20px; cursor:pointer; border:1px solid var(--line2);
+      color:var(--muted); background:rgba(255,255,255,.02); transition:.15s; display:inline-flex; gap:6px; align-items:center}
+    .chip-f:hover{color:var(--txt)}
+    .chip-f.active{background:rgba(34,211,238,.14); border-color:rgba(34,211,238,.5); color:#bff6ff}
+    .chip-f .c{font-family:var(--mono); font-size:10.5px; opacity:.8}
+    #search{margin:10px 14px; width:calc(100% - 28px); padding:9px 12px; border-radius:9px;
+      border:1px solid var(--line2); background:rgba(0,0,0,.25); color:var(--txt); font-size:13px; font-family:inherit}
+    #search:focus{outline:none; border-color:var(--cyan); box-shadow:0 0 12px rgba(34,211,238,.15)}
 
-    #detail-panel {
-      max-height: 240px;
-      background: white;
-      border-top: 1px solid #ddd;
-      padding: 14px 20px;
-      overflow-y: auto;
-      display: none;
-    }
-    #detail-panel.visible { display: block; }
-    #detail-panel h3 { font-size: 14px; color: #1a7a3c; margin-bottom: 10px; }
+    /* Report list */
+    #report-list{max-height:430px}
+    .rep{padding:12px 15px; border-bottom:1px solid rgba(28,49,72,.6); cursor:pointer; transition:.12s; border-left:3px solid transparent}
+    .rep:hover{background:rgba(34,211,238,.05)}
+    .rep.active{background:rgba(34,211,238,.09); border-left-color:var(--cyan)}
+    .rep .r1{display:flex; align-items:center; gap:9px}
+    .rep .sdot{width:10px;height:10px;border-radius:50%; flex-shrink:0}
+    .rep .rname{font-weight:600; font-size:13.5px; color:var(--txt); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .rep .rdate{margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--dim); white-space:nowrap}
+    .rep .r2{display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap}
+    .rep .metric{font-family:var(--mono); font-size:11px; color:var(--muted)}
+    .rep .metric b{color:#cfe6f7}
+    .badge{font-family:var(--mono); font-size:10px; padding:2px 7px; border-radius:6px; font-weight:600}
+    .b-red{background:rgba(244,63,94,.16); color:#fda4b4} .b-orange{background:rgba(251,146,60,.16); color:#fdba74}
+    .b-green{background:rgba(52,211,153,.16); color:#86efc4} .b-gray{background:rgba(125,147,171,.14); color:var(--muted)}
 
-    #chart-panel {
-      background: white;
-      border-top: 1px solid #eee;
-      padding: 12px 20px;
-      display: none;
-    }
-    #chart-panel.visible { display: block; }
-    #chart-panel h4 { font-size: 13px; color: #555; margin-bottom: 8px; }
-    #trend-chart { max-height: 120px; }
+    /* Detail */
+    #detail{display:none}
+    #detail.on{display:block}
+    .dgrid{display:grid; grid-template-columns:repeat(2,1fr); gap:9px; padding:14px}
+    .ditem{background:rgba(0,0,0,.22); border:1px solid var(--line); border-radius:10px; padding:10px 11px}
+    .ditem .dv{font-family:var(--mono); font-size:18px; color:#9bf0ff} .ditem .dl{font-size:10px; color:var(--dim); margin-top:3px; letter-spacing:.3px}
+    .dmsg{padding:12px 14px 14px; font-size:12px; color:var(--muted); white-space:pre-wrap; line-height:1.7; border-top:1px solid var(--line); margin-top:6px}
+    .sub-head{display:flex; align-items:center; justify-content:space-between; padding:11px 14px 7px;
+      font-size:11.5px; font-weight:600; color:#cfe6f7; border-top:1px solid var(--line)}
+    .sub-head .note{font-family:var(--mono); font-size:10px; color:var(--dim); font-weight:400}
+    .conf-wrap{display:flex; gap:16px; align-items:center; padding:6px 14px 4px}
+    .conf-ring{position:relative; width:78px; height:78px; flex-shrink:0; text-align:center}
+    .conf-ring svg{position:absolute; inset:0}
+    .conf-pct{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:1px;
+      font-family:var(--mono); font-size:21px; color:#eaf6ff; top:-6px}
+    .conf-pct small{font-size:11px; color:var(--muted)}
+    .conf-cap{position:absolute; bottom:-4px; left:0; right:0; font-size:9px; color:var(--dim); letter-spacing:.5px}
+    .conf-meta{flex:1; display:flex; flex-direction:column; gap:6px}
+    .cm-row{display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted)}
+    .cm-row b{font-family:var(--mono); color:#cfe6f7}
+    .imp-head{padding:10px 14px 6px; font-size:10.5px; letter-spacing:.5px; color:var(--dim)}
+    .imp-bars{padding:0 14px 6px; display:flex; flex-direction:column; gap:6px}
+    .imp-row{display:flex; align-items:center; gap:9px; font-size:11px}
+    .imp-row .lbl{width:118px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0}
+    .imp-row .track{flex:1; height:7px; border-radius:5px; background:rgba(255,255,255,.06); overflow:hidden}
+    .imp-row .track > span{display:block; height:100%; border-radius:5px; background:linear-gradient(90deg,#0891b2,#22d3ee)}
+    .imp-row .pv{font-family:var(--mono); font-size:10.5px; color:#9bf0ff; width:38px; text-align:right}
 
-    .detail-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-    .detail-item { background: #f5f5f5; border-radius: 6px; padding: 8px; }
-    .detail-item .val { font-size: 16px; font-weight: bold; color: #1a7a3c; }
-    .detail-item .lbl { font-size: 10px; color: #888; margin-top: 2px; }
-    #detail-message { font-size: 12px; color: #444; white-space: pre-wrap; line-height: 1.6; }
+    .row2{display:grid; grid-template-columns:1fr 320px; gap:16px; margin-top:16px}
+    #trend-chart{padding:10px 14px 16px}
+    #donut-chart{padding:14px}
+    .empty{padding:40px 20px; text-align:center; color:var(--dim); font-size:13px}
 
-    /* ── Sphere Marker pin (mock mode) ── */
-    .sphere-marker-pin { background: none !important; border: none !important; }
-    .sphere-marker-html { background: none !important; border: none !important; }
+    /* overlay/auth */
+    #overlay{position:fixed; inset:0; z-index:9999; background:rgba(5,9,16,.92);
+      display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; font-size:15px; color:#9bf0ff}
+    .keybox{background:var(--panel); border:1px solid var(--line2); border-radius:14px; padding:24px; width:340px; max-width:90vw}
+    .keybox h3{font-size:15px; margin-bottom:6px; color:var(--txt)}
+    .keybox p{font-size:12px; color:var(--muted); margin-bottom:14px; line-height:1.6}
+    .keybox input{width:100%; padding:10px 12px; border-radius:9px; border:1px solid var(--line2);
+      background:rgba(0,0,0,.3); color:var(--txt); font-size:13px; margin-bottom:12px; font-family:var(--mono)}
+    .keybox input:focus{outline:none; border-color:var(--cyan)}
 
-    /* ── Layer toggle ── */
-    #layer-toggle {
-      position: absolute; top: 10px; right: 10px; z-index: 999;
-      background: white; border: none; border-radius: 8px;
-      padding: 8px 14px; font-size: 12px; font-weight: 700;
-      box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: pointer;
-      font-family: inherit;
-    }
-    #layer-toggle:active { transform: scale(.95); }
-
-    #loading-overlay {
-      position: fixed; inset: 0;
-      background: rgba(255,255,255,0.85);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px; color: #1a7a3c; z-index: 9999;
-    }
+    @media (max-width:1280px){ .kpis{grid-template-columns:repeat(4,1fr)} .grid{grid-template-columns:1fr} .row2{grid-template-columns:1fr} }
   </style>
 </head>
 <body>
 
-<div id="loading-overlay">⏳ กำลังโหลดข้อมูล...</div>
+<div id="overlay"><div>⏳ กำลังเชื่อมต่อระบบ GEOai...</div></div>
 
-<header>
-  <h1>🌿 GEOai — Admin Dashboard</h1>
-  <div style="display:flex;align-items:center;gap:12px">
-    <span id="last-update">-</span>
-    <a id="export-btn"
-       onclick="exportCSV()" href="#"
-       style="background:#fff;color:#1a7a3c;border:1.5px solid #fff;padding:5px 12px;
-              border-radius:6px;font-size:13px;font-weight:bold;text-decoration:none;
-              white-space:nowrap;cursor:pointer">⬇️ Export CSV</a>
-  </div>
-</header>
-
-<div class="container">
-  <!-- Sidebar -->
-  <div id="sidebar">
-    <div id="summary">
-      <div class="stat-box"><div class="num" id="stat-total">0</div><div class="lbl">รายงานทั้งหมด</div></div>
-      <div class="stat-box"><div class="num" id="stat-risk" style="color:#e53935">0</div><div class="lbl">เสี่ยงสูง</div></div>
-      <div class="stat-box"><div class="num" id="stat-medium" style="color:#fb8c00">0</div><div class="lbl">เสี่ยงปานกลาง</div></div>
-      <div class="stat-box"><div class="num" id="stat-ok" style="color:#1a7a3c">0</div><div class="lbl">ปกติ</div></div>
-      <div class="stat-box"><div class="num" id="stat-users" style="color:#1565c0">0</div><div class="lbl">เกษตรกร</div></div>
-      <div class="stat-box"><div class="num" id="stat-unstable" style="color:#e65100">0</div><div class="lbl">🌍 ดินไม่เสถียร</div></div>
-      <div class="stat-box"><div class="num" id="stat-avg-yield" style="color:#1a7a3c">-</div><div class="lbl">📊 ผลผลิตเฉลี่ย กก./ไร่</div></div>
-    </div>
-    <div id="search-bar">
-      <input type="text" id="search-input" placeholder="🔍 ค้นหาพิกัด หรือ User ID..." oninput="filterReports()" />
-    </div>
-    <div id="report-list"></div>
-  </div>
-
-  <!-- Right: Map + Detail -->
-  <div id="right-panel">
-    <div id="map" style="position:relative">
-      <button id="layer-toggle" title="สลับดาวเทียม/แผนที่">🛰️ ดาวเทียม</button>
-    </div>
-    <div id="detail-panel">
-      <h3 id="detail-title">รายละเอียดแปลง</h3>
-      <div class="detail-grid">
-        <div class="detail-item"><div class="val" id="d-ndvi">-</div><div class="lbl">NDVI ปัจจุบัน</div></div>
-        <div class="detail-item"><div class="val" id="d-change">-</div><div class="lbl">การเปลี่ยนแปลง</div></div>
-        <div class="detail-item"><div class="val" id="d-moisture">-</div><div class="lbl">ความชื้นดิน (dB)</div></div>
-        <div class="detail-item"><div class="val" id="d-elev">-</div><div class="lbl">ระดับ vs รอบข้าง (ม.)</div></div>
-        <div class="detail-item"><div class="val" id="d-stability">-</div><div class="lbl">🌍 เสถียรภาพดิน</div></div>
-        <div class="detail-item"><div class="val" id="d-yield">-</div><div class="lbl">📊 ผลผลิต (กก./ไร่)</div></div>
-        <div class="detail-item"><div class="val" id="d-fert">-</div><div class="lbl">🧪 สูตรปุ๋ย N-P-K</div></div>
-        <div class="detail-item"><div class="val" id="d-impact">-</div><div class="lbl">🌍 ผลกระทบดิน</div></div>
+<div class="app">
+  <!-- ───── Left rail ───── -->
+  <aside id="rail">
+    <div class="brand">
+      <div class="logo">
+        <div class="glyph">🌿</div>
+        <div><h1>GEOai OS</h1></div>
       </div>
-      <div id="detail-message"></div>
+      <div class="sub">Durian Intelligence · Command Twin<br>อ.นายายอาม · จันทบุรี</div>
     </div>
-    <div id="chart-panel">
-      <h4>📈 แนวโน้ม NDVI รายวัน (ทุกแปลง)</h4>
-      <canvas id="trend-chart"></canvas>
+
+    <div class="rail-sec">มุมมอง</div>
+    <nav class="nav" id="filter-nav">
+      <div class="item active" data-f="all"><span class="ico">▦</span> ทุกแปลง <span class="cnt" id="nav-all">0</span></div>
+      <div class="item" data-f="high"><span class="ico">🔴</span> เสี่ยงสูง <span class="cnt red" id="nav-high">0</span></div>
+      <div class="item" data-f="medium"><span class="ico">🟠</span> เสี่ยงปานกลาง <span class="cnt" id="nav-medium">0</span></div>
+      <div class="item" data-f="ok"><span class="ico">🟢</span> ปกติ <span class="cnt" id="nav-ok">0</span></div>
+      <div class="item" data-f="unstable"><span class="ico">🌍</span> ดินไม่เสถียร <span class="cnt" id="nav-unstable">0</span></div>
+    </nav>
+
+    <div class="rail-sec">สถานะระบบ</div>
+    <div class="health">
+      <div class="row"><span style="width:74px">ดาวเทียม</span><div class="bar"><span style="width:100%;background:var(--good)"></span></div><span class="pct">LIVE</span></div>
+      <div class="row"><span style="width:74px">ฐานข้อมูล</span><div class="bar"><span id="h-db" style="width:96%;background:var(--cyan)"></span></div><span class="pct" id="h-db-p">96%</span></div>
+      <div class="row"><span style="width:74px">เกษตรกร</span><div class="bar"><span id="h-user" style="width:60%;background:var(--violet)"></span></div><span class="pct" id="h-user-p">0</span></div>
+    </div>
+
+    <div class="rail-foot">
+      v2.0 · BUILD 2026.06<br>
+      Sentinel-1/2 · SRTM · GEE<br>
+      <span id="rail-update" style="color:var(--muted)">—</span>
+    </div>
+  </aside>
+
+  <!-- ───── Main ───── -->
+  <div id="main">
+    <div class="topbar">
+      <div>
+        <div class="title">GEOai <b>COMMAND CENTER</b></div>
+        <div class="crumb">Durian Health Intelligence · Satellite + ML</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="pill live"><span class="dot"></span> SYS ONLINE</span>
+      <span class="pill danger" id="pill-risk"><span class="dot"></span> <span id="pill-risk-n">0</span> เสี่ยงสูง</span>
+      <span class="pill mono"><span id="clock">--:--:--</span></span>
+      <button class="btn" onclick="loadReports()">⟳ รีเฟรช</button>
+      <button class="btn cyan" onclick="exportCSV()">⬇ Export CSV</button>
+    </div>
+
+    <div class="content scroll">
+      <!-- KPIs -->
+      <div class="kpis">
+        <div class="kpi c-cyan"><div class="k-top"><span class="ki">▦</span> รายงานทั้งหมด</div><div class="k-num" id="k-total">0</div><div class="k-sub">แปลงที่วิเคราะห์</div></div>
+        <div class="kpi c-red"><div class="k-top"><span class="ki">⚠</span> เสี่ยงสูง</div><div class="k-num" id="k-high">0</div><div class="k-sub">ต้องเร่งดูแล</div></div>
+        <div class="kpi c-orange"><div class="k-top"><span class="ki">◐</span> เสี่ยงปานกลาง</div><div class="k-num" id="k-medium">0</div><div class="k-sub">เฝ้าระวัง</div></div>
+        <div class="kpi c-good"><div class="k-top"><span class="ki">✓</span> ปกติ</div><div class="k-num" id="k-ok">0</div><div class="k-sub">สุขภาพดี</div></div>
+        <div class="kpi c-blue"><div class="k-top"><span class="ki">👥</span> เกษตรกร</div><div class="k-num" id="k-users">0</div><div class="k-sub">ผู้ใช้งานจริง</div></div>
+        <div class="kpi c-violet"><div class="k-top"><span class="ki">🌍</span> ดินไม่เสถียร</div><div class="k-num" id="k-unstable">0</div><div class="k-sub">displacement</div></div>
+        <div class="kpi c-good"><div class="k-top"><span class="ki">📊</span> ผลผลิตเฉลี่ย</div><div class="k-num" id="k-yield">—</div><div class="k-sub">กก./ไร่</div></div>
+        <div class="kpi c-cyan"><div class="k-top"><span class="ki">🌿</span> NDVI เฉลี่ย</div><div class="k-num" id="k-ndvi">—</div><div class="k-sub">ความสมบูรณ์พืช</div></div>
+      </div>
+
+      <!-- Map + List -->
+      <div class="grid">
+        <div class="panel">
+          <div class="p-head"><span class="bar"></span><h3>แผนที่เสี่ยง · NDVI Overlay</h3><span class="tag">SATELLITE · LIVE</span></div>
+          <div class="map-wrap">
+            <div id="map"></div>
+            <div class="map-overlay map-stat">
+              <div class="chip">แสดง <b id="m-count">0</b> แปลง</div>
+              <div class="chip">เสี่ยงสูง <b id="m-high" style="color:#fda4b4">0</b></div>
+            </div>
+            <div class="map-overlay map-ctrls">
+              <button class="btn" id="layer-btn">🛰️ ดาวเทียม</button>
+              <button class="btn" id="ndvi-btn">● NDVI Overlay</button>
+              <button class="btn" id="fit-btn">⊡ พอดีจอ</button>
+            </div>
+            <div class="map-overlay legend">
+              <h5>NDVI Scale · ความสมบูรณ์พืช</h5>
+              <div class="row"><span class="sw" style="background:#16a34a"></span> ≥ 0.60 · สมบูรณ์มาก</div>
+              <div class="row"><span class="sw" style="background:#a3e635"></span> 0.45–0.60 · ดี</div>
+              <div class="row"><span class="sw" style="background:#fbbf24"></span> 0.30–0.45 · เริ่มอ่อนแอ</div>
+              <div class="row"><span class="sw" style="background:#fb923c"></span> 0.15–0.30 · เครียด</div>
+              <div class="row"><span class="sw" style="background:#f43f5e"></span> &lt; 0.15 · เสียหาย</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:16px">
+          <div class="panel">
+            <div class="p-head"><span class="bar"></span><h3>รายแปลง</h3><span class="tag" id="list-tag">0</span></div>
+            <input id="search" placeholder="🔍 ค้นหาพิกัด / ชื่อแปลง / User ID..." oninput="applyFilter()" />
+            <div class="filters" id="quick-filters">
+              <span class="chip-f active" data-f="all">ทั้งหมด <span class="c" id="qf-all">0</span></span>
+              <span class="chip-f" data-f="high">🔴 สูง <span class="c" id="qf-high">0</span></span>
+              <span class="chip-f" data-f="medium">🟠 กลาง <span class="c" id="qf-medium">0</span></span>
+              <span class="chip-f" data-f="ok">🟢 ปกติ <span class="c" id="qf-ok">0</span></span>
+            </div>
+            <div id="report-list" class="scroll"></div>
+          </div>
+
+          <div class="panel" id="detail">
+            <div class="p-head"><span class="bar" style="background:var(--violet);box-shadow:0 0 10px var(--violet)"></span><h3 id="d-title">รายละเอียดแปลง</h3><span class="tag" id="d-tag" style="color:#c8b8fd;border-color:rgba(167,139,250,.4)">SELECT</span></div>
+            <div class="dgrid">
+              <div class="ditem"><div class="dv" id="d-ndvi">—</div><div class="dl">NDVI ปัจจุบัน</div></div>
+              <div class="ditem"><div class="dv" id="d-change">—</div><div class="dl">เปลี่ยนแปลง vs ปีก่อน</div></div>
+              <div class="ditem"><div class="dv" id="d-moisture">—</div><div class="dl">ความชื้นดิน (dB)</div></div>
+              <div class="ditem"><div class="dv" id="d-elev">—</div><div class="dl">ระดับ vs รอบข้าง (ม.)</div></div>
+              <div class="ditem"><div class="dv" id="d-stability">—</div><div class="dl">🌍 เสถียรภาพดิน</div></div>
+              <div class="ditem"><div class="dv" id="d-yield">—</div><div class="dl">📊 ผลผลิต (กก./ไร่)</div></div>
+              <div class="ditem"><div class="dv" id="d-fert">—</div><div class="dl">🧪 สูตรปุ๋ย N-P-K</div></div>
+              <div class="ditem"><div class="dv" id="d-impact">—</div><div class="dl">🌍 ผลกระทบดิน</div></div>
+            </div>
+
+            <!-- Time-series NDVI -->
+            <div class="sub-head"><span>📈 ประวัติ NDVI รายเดือน (ดาวเทียม)</span><span id="ts-note" class="note">—</span></div>
+            <div style="padding:0 14px 8px"><canvas id="tsCanvas" height="120"></canvas></div>
+
+            <!-- Model accuracy -->
+            <div class="sub-head"><span>🤖 ความแม่นยำโมเดลพยากรณ์ผลผลิต</span><span id="model-ver" class="note">—</span></div>
+            <div class="conf-wrap" id="conf-wrap">
+              <div class="conf-ring">
+                <div class="conf-pct"><span id="conf-num">—</span><small>%</small></div>
+                <svg width="78" height="78" viewBox="0 0 78 78"><circle cx="39" cy="39" r="33" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="7"/><circle id="conf-arc" cx="39" cy="39" r="33" fill="none" stroke="#34d399" stroke-width="7" stroke-linecap="round" stroke-dasharray="207" stroke-dashoffset="207" transform="rotate(-90 39 39)"/></svg>
+                <div class="conf-cap">ความเชื่อมั่น</div>
+              </div>
+              <div class="conf-meta">
+                <div class="cm-row"><span>ML (v3)</span><b id="cm-ml">—</b></div>
+                <div class="cm-row"><span>Rule-based</span><b id="cm-rule">—</b></div>
+                <div class="cm-row"><span>ช่วงคาดการณ์</span><b id="cm-range">—</b></div>
+                <div class="cm-row"><span>โมเดลตรงกัน</span><b id="cm-agree">—</b></div>
+              </div>
+            </div>
+            <div class="imp-head">ปัจจัยที่มีผลต่อการพยากรณ์ (feature importance)</div>
+            <div id="imp-bars" class="imp-bars"></div>
+
+            <div class="dmsg" id="d-msg"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="row2">
+        <div class="panel">
+          <div class="p-head"><span class="bar"></span><h3>แนวโน้ม NDVI รายวัน · ทุกแปลง</h3><span class="tag">30 วัน</span></div>
+          <div id="trend-chart"><canvas id="trendCanvas" height="150"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><span class="bar" style="background:var(--orange);box-shadow:0 0 10px var(--orange)"></span><h3>สัดส่วนความเสี่ยง</h3></div>
+          <div id="donut-chart"><canvas id="donutCanvas" height="180"></canvas></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
+  // ───────── Config & auth ─────────
   const _cfg = window.GEOAI_CONFIG || {};
-  const API_BASE   = _cfg.API_URL || ""; // same-origin default
-  const ADMIN_KEY  = ""; // ใส่ ADMIN_API_KEY (ปล่อยว่างถ้า dev mode)
-  const SPHERE_KEY = _cfg.SPHERE_KEY || "";
-
-  const adminHeaders = ADMIN_KEY
-    ? { "X-Admin-Key": ADMIN_KEY }
-    : {};
+  const API_BASE = _cfg.API_URL || "";
+  let ADMIN_KEY = localStorage.getItem('geoai_admin_key') || "";
+  const adminHeaders = () => ADMIN_KEY ? { "X-Admin-Key": ADMIN_KEY } : {};
 
   let allReports = [];
-  let markers    = [];
-  let map = null;
-  let selectedCard = null;
-  let mapReady = false;
+  let activeFilter = "all";
+  let selectedId = null;
 
-  function loadSphereScript(onLoaded) {
-    if (!SPHERE_KEY) {
-      // Dev mode: load Leaflet-backed mock instead of real Sphere SDK
-      const mock = document.createElement('script');
-      mock.src = '/liff/sphere-mock.js';
-      mock.onload = onLoaded;
-      mock.onerror = () => {
-        document.getElementById('loading-overlay').innerHTML =
-          '❌ โหลด sphere-mock.js ไม่สำเร็จ';
-      };
-      document.head.appendChild(mock);
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = `https://api.sphere.gistda.or.th/map/?key=${SPHERE_KEY}`;
-    script.onload = onLoaded;
-    script.onerror = () => {
-      document.getElementById('loading-overlay').innerHTML =
-        '❌ โหลด GISTDA Sphere ไม่สำเร็จ — ตรวจสอบ SPHERE_KEY';
+  // ───────── Clock ─────────
+  setInterval(() => {
+    document.getElementById('clock').textContent =
+      new Date().toLocaleTimeString('th-TH', { hour12:false });
+  }, 1000);
+
+  // ───────── NDVI color scale ─────────
+  function ndviColor(v){
+    if (v == null) return '#56708c';
+    if (v >= 0.60) return '#16a34a';
+    if (v >= 0.45) return '#a3e635';
+    if (v >= 0.30) return '#fbbf24';
+    if (v >= 0.15) return '#fb923c';
+    return '#f43f5e';
+  }
+  function riskLevel(r){
+    if (r.ndvi_change < -0.20 || (r.elevation_diff < -1.5 && r.soil_moisture_vv > -10) || r.displacement_level === 'high') return 'high';
+    if (r.ndvi_change < -0.10 || r.elevation_diff < -1.5 || r.displacement_level === 'medium') return 'medium';
+    return 'ok';
+  }
+  const riskColor = { high:'#f43f5e', medium:'#fb923c', ok:'#34d399' };
+  const riskBadge = { high:'b-red', medium:'b-orange', ok:'b-green' };
+
+  // ───────── Map (Leaflet + Esri satellite) ─────────
+  let map, satLayer, streetLayer, labelLayer, ndviGroup, rasterLayer = null, showNdvi = true, isSat = true;
+  function initMap(){
+    map = L.map('map', { zoomControl:true, attributionControl:false }).setView([12.6, 102.1], 10);
+    satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom:19 });
+    labelLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom:19, opacity:.85 });
+    streetLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+      { maxZoom:19, subdomains:'abcd' });
+    satLayer.addTo(map); labelLayer.addTo(map);
+    ndviGroup = L.layerGroup().addTo(map);
+
+    document.getElementById('layer-btn').onclick = () => {
+      isSat = !isSat;
+      if (isSat){ map.removeLayer(streetLayer); satLayer.addTo(map); labelLayer.addTo(map);
+        document.getElementById('layer-btn').textContent = '🛰️ ดาวเทียม'; }
+      else { map.removeLayer(satLayer); map.removeLayer(labelLayer); streetLayer.addTo(map);
+        document.getElementById('layer-btn').textContent = '🗺️ แผนที่'; }
     };
-    document.head.appendChild(script);
+    document.getElementById('ndvi-btn').onclick = () => {
+      showNdvi = !showNdvi;
+      ndviGroup.eachLayer(l => l.setStyle && l.setStyle({ opacity: showNdvi?1:0, fillOpacity: showNdvi? (l.options._fo||.9):0 }));
+      if (rasterLayer) rasterLayer.setOpacity(showNdvi ? 0.6 : 0);
+      document.getElementById('ndvi-btn').style.opacity = showNdvi ? 1 : .5;
+    };
+    document.getElementById('fit-btn').onclick = fitBounds;
+    loadNdviRaster();
   }
 
-  function initSphereMap() {
-    map = new sphere.Map({
-      placeholder: document.getElementById('map'),
-      layer: sphere.Layers.HYBRID,
-      zoom: 9,
-      location: { lon: 102.1, lat: 12.6 },
-      language: 'th'
-    });
-    map.Event.bind(sphere.EventName.Ready, () => {
-      mapReady = true;
-      if (allReports.length > 0) {
-        renderMarkers(allReports);
-      }
-      // Layer toggle: satellite ↔ street
-      let isSatellite = true;
-      document.getElementById('layer-toggle').addEventListener('click', () => {
-        isSatellite = !isSatellite;
-        const layer = isSatellite ? 'hybrid' : 'streets';
-        if (map.Layers && map.Layers.setBase) {
-          map.Layers.setBase(layer);
-        }
-        document.getElementById('layer-toggle').textContent =
-          isSatellite ? '🛰️ ดาวเทียม' : '🗺️ แผนที่';
-      });
-    });
-  }
-
-  // ─── Load reports ───
-  async function loadReports() {
+  // NDVI raster overlay (real GEE tiles) — falls back silently to dot overlay
+  async function loadNdviRaster(){
     try {
-      const opts = { headers: adminHeaders };
-      const [reportsRes, statsRes] = await Promise.all([
-        fetch(`${API_BASE}/admin/reports?limit=200`, opts),
+      const r = await fetch(`${API_BASE}/admin/ndvi-tiles?months=3`, { headers: adminHeaders() });
+      if (!r.ok) return;
+      const j = await r.json();
+      if (!j.available || !j.tile_url) return;
+      rasterLayer = L.tileLayer(j.tile_url, { opacity:0.6, maxZoom:19 });
+      if (showNdvi) rasterLayer.addTo(map);
+      // promote label layer above raster
+      labelLayer.bringToFront();
+      const btn = document.getElementById('ndvi-btn');
+      btn.textContent = '🌿 NDVI Raster'; btn.classList.add('cyan');
+    } catch {}
+  }
+  function fitBounds(){
+    const pts = getFiltered().map(r => [r.lat, r.lng]);
+    if (pts.length) map.fitBounds(pts, { padding:[50,50], maxZoom:15 });
+  }
+  function renderMarkers(reports){
+    ndviGroup.clearLayers();
+    reports.forEach(r => {
+      const col = ndviColor(r.ndvi_now);
+      const lvl = riskLevel(r);
+      // aura (heat-like)
+      L.circleMarker([r.lat, r.lng], { radius:17, color:col, weight:0, fillColor:col, fillOpacity:.18, _fo:.18 }).addTo(ndviGroup);
+      // dot
+      const dot = L.circleMarker([r.lat, r.lng], {
+        radius:7, color: lvl==='high'?'#fff':riskColor[lvl], weight:2, fillColor:col, fillOpacity:.95, _fo:.95
+      }).addTo(ndviGroup);
+      dot.bindTooltip(
+        `<b>${escapeHtml(r.plot_name || 'แปลง')}</b><br>NDVI ${r.ndvi_now?.toFixed(2) ?? '-'} · ${{high:'🔴 เสี่ยงสูง',medium:'🟠 กลาง',ok:'🟢 ปกติ'}[lvl]}`,
+        { direction:'top', className:'lf-tip' });
+      dot.on('click', () => selectReport(r.id ?? `${r.lat},${r.lng}`, true));
+    });
+    document.getElementById('m-count').textContent = reports.length;
+    document.getElementById('m-high').textContent = reports.filter(r => riskLevel(r)==='high').length;
+  }
+  function escapeHtml(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  // ───────── Data load ─────────
+  async function loadReports(){
+    try {
+      const opts = { headers: adminHeaders() };
+      const [repRes, statRes] = await Promise.all([
+        fetch(`${API_BASE}/admin/reports?limit=300`, opts),
         fetch(`${API_BASE}/admin/stats`, opts),
       ]);
-      if (reportsRes.status === 403) {
-        document.getElementById('loading-overlay').innerHTML =
-          "🔒 <b>ไม่มีสิทธิ์เข้าถึง</b><br>ตรวจสอบ ADMIN_KEY ใน dashboard";
-        return;
-      }
-      const json  = await reportsRes.json();
-      const stats = statsRes.ok ? await statsRes.json() : null;
+      if (repRes.status === 403 || statRes.status === 403) return promptKey();
+      const json  = await repRes.json();
+      const stats = statRes.ok ? await statRes.json() : null;
 
-      allReports = json.reports || [];
-      renderList(allReports);
-      renderTrendChart(allReports);
-      if (mapReady) {
-        renderMarkers(allReports);
-      }
-
-      if (stats) {
-        document.getElementById("stat-total").textContent  = stats.total;
-        document.getElementById("stat-risk").textContent   = stats.high_risk;
-        document.getElementById("stat-medium").textContent = stats.medium_risk;
-        document.getElementById("stat-ok").textContent     = stats.ok;
-        document.getElementById("stat-users").textContent  = stats.unique_users;
-        // v2 server-side stats
-        if (stats.unstable_count != null)
-          document.getElementById("stat-unstable").textContent = stats.unstable_count;
-        if (stats.avg_yield != null)
-          document.getElementById("stat-avg-yield").textContent = stats.avg_yield;
-      }
-
-      // v2 fallback: compute from client data if server didn't provide
-      if (!stats || stats.unstable_count == null) {
-        const unstableCount = allReports.filter(r =>
-          r.displacement_level === 'high' || r.displacement_level === 'medium').length;
-        document.getElementById("stat-unstable").textContent = unstableCount;
-      }
-      if (!stats || stats.avg_yield == null) {
-        const yieldVals = allReports
-          .map(r => r.yield_estimated_kg)
-          .filter(v => v != null && v > 0);
-        const avgYield = yieldVals.length > 0
-          ? Math.round(yieldVals.reduce((a, b) => a + b, 0) / yieldVals.length)
-          : '-';
-        document.getElementById("stat-avg-yield").textContent = avgYield;
-      }
-
-      document.getElementById('last-update').textContent =
-        "อัพเดต: " + new Date().toLocaleTimeString('th-TH');
-    } catch {
-      alert("ไม่สามารถโหลดรายงานได้ ตรวจสอบ API_BASE");
-    } finally {
-      document.getElementById('loading-overlay').style.display = 'none';
+      allReports = (json.reports || []).map((r,i) => ({ ...r, id: r.id ?? r.plot_id ?? `r${i}` }));
+      renderStats(stats);
+      applyFilter();
+      renderTrend(allReports);
+      const upd = new Date().toLocaleTimeString('th-TH', { hour12:false });
+      document.getElementById('rail-update').textContent = 'อัพเดต ' + upd;
+      document.getElementById('overlay').style.display = 'none';
+    } catch (e){
+      document.getElementById('overlay').style.display = 'none';
+      console.error(e);
     }
   }
 
-  function renderAll(reports) {
-    renderList(reports);
-    renderTrendChart(reports);
-    if (mapReady) {
-      renderMarkers(reports);
+  function renderStats(s){
+    const c = (id,v) => document.getElementById(id).textContent = v;
+    if (s){
+      c('k-total', s.total); c('k-high', s.high_risk); c('k-medium', s.medium_risk);
+      c('k-ok', s.ok); c('k-users', s.unique_users);
+      c('k-unstable', s.unstable_count ?? '—');
+      c('k-yield', s.avg_yield ?? '—');
+      c('k-ndvi', s.avg_ndvi != null ? s.avg_ndvi.toFixed(2) : '—');
+      document.getElementById('pill-risk-n').textContent = s.high_risk;
+      document.getElementById('h-user-p').textContent = s.unique_users;
+      document.getElementById('h-user').style.width = Math.min(100, s.unique_users*4) + '%';
+      renderDonut(s.high_risk, s.medium_risk, s.ok);
     }
+    // nav counts (from data)
+    const cnt = f => allReports.filter(r => f==='unstable'
+      ? (r.displacement_level==='high'||r.displacement_level==='medium')
+      : (f==='all' ? true : riskLevel(r)===f)).length;
+    ['all','high','medium','ok','unstable'].forEach(f => {
+      const el = document.getElementById('nav-'+f); if (el) el.textContent = cnt(f);
+    });
+    ['all','high','medium','ok'].forEach(f => {
+      const el = document.getElementById('qf-'+f); if (el) el.textContent = cnt(f);
+    });
   }
 
-  // ─── NDVI Trend Chart ───
-  let trendChart = null;
-  function renderTrendChart(reports) {
-    if (reports.length === 0) {
-      document.getElementById("chart-panel").classList.remove("visible");
-      return;
-    }
-    document.getElementById("chart-panel").classList.add("visible");
+  // ───────── Filtering ─────────
+  function getFiltered(){
+    const q = document.getElementById('search').value.toLowerCase().trim();
+    return allReports.filter(r => {
+      const okF = activeFilter==='all' ? true
+        : activeFilter==='unstable' ? (r.displacement_level==='high'||r.displacement_level==='medium')
+        : riskLevel(r)===activeFilter;
+      if (!okF) return false;
+      if (!q) return true;
+      return (r.plot_name||'').toLowerCase().includes(q)
+        || r.lat.toFixed(4).includes(q) || r.lng.toFixed(4).includes(q)
+        || (r.user_id||'').toLowerCase().includes(q);
+    });
+  }
+  function applyFilter(){
+    const list = getFiltered();
+    renderList(list);
+    renderMarkers(list);
+    document.getElementById('list-tag').textContent = list.length;
+  }
+  function setFilter(f){
+    activeFilter = f;
+    document.querySelectorAll('#filter-nav .item').forEach(el => el.classList.toggle('active', el.dataset.f===f));
+    document.querySelectorAll('#quick-filters .chip-f').forEach(el => el.classList.toggle('active', el.dataset.f===f));
+    applyFilter();
+  }
+  document.getElementById('filter-nav').addEventListener('click', e => {
+    const it = e.target.closest('.item'); if (it) setFilter(it.dataset.f);
+  });
+  document.getElementById('quick-filters').addEventListener('click', e => {
+    const c = e.target.closest('.chip-f'); if (c) setFilter(c.dataset.f);
+  });
 
-    // Group by date → avg NDVI
-    const byDate = {};
+  // ───────── List ─────────
+  function renderList(reports){
+    const el = document.getElementById('report-list');
+    if (!reports.length){ el.innerHTML = '<div class="empty">🛰️ ไม่มีแปลงในมุมมองนี้</div>'; return; }
+    el.innerHTML = '';
     reports.forEach(r => {
-      if (r.ndvi_now == null || !r.created_at) return;
-      const day = r.created_at.slice(0, 10);
-      if (!byDate[day]) byDate[day] = [];
-      byDate[day].push(r.ndvi_now);
-    });
-    const sorted = Object.entries(byDate)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .slice(-30);  // Last 30 days only
-
-    const labels = sorted.map(([d]) => d.slice(5));  // "MM-DD"
-    const values = sorted.map(([, arr]) =>
-      +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(3)
-    );
-
-    const ctx = document.getElementById("trend-chart").getContext("2d");
-    if (trendChart) trendChart.destroy();
-
-    const gradient = ctx.createLinearGradient(0, 0, 0, 120);
-    gradient.addColorStop(0, "rgba(26,122,60,0.25)");
-    gradient.addColorStop(1, "rgba(26,122,60,0.02)");
-
-    trendChart = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels,
-        datasets: [{
-          label: "NDVI เฉลี่ย",
-          data: values,
-          borderColor: "#1a7a3c",
-          backgroundColor: gradient,
-          borderWidth: 2,
-          pointRadius: 3,
-          pointBackgroundColor: "#1a7a3c",
-          fill: true,
-          tension: 0.3,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: ctx => `NDVI: ${ctx.parsed.y.toFixed(3)}`
-            }
-          }
-        },
-        scales: {
-          x: { ticks: { font: { size: 10 }, maxTicksLimit: 10 } },
-          y: {
-            min: 0, max: 1,
-            ticks: { font: { size: 10 }, stepSize: 0.2 },
-            grid: { color: "#f0f0f0" }
-          }
-        }
-      }
-    });
-  }
-
-  function riskLevel(r) {
-    if (r.ndvi_change < -0.20 || (r.elevation_diff < -1.5 && r.soil_moisture_vv > -10)
-        || r.displacement_level === 'high') return "high";
-    if (r.ndvi_change < -0.10 || r.elevation_diff < -1.5
-        || r.displacement_level === 'medium') return "medium";
-    return "ok";
-  }
-
-  function statusIcon(level) {
-    return level === "high" ? "🔴" : level === "medium" ? "🟠" : "🟢";
-  }
-
-  function renderList(reports) {
-    const list = document.getElementById('report-list');
-    list.innerHTML = "";
-    reports.forEach((r, i) => {
-      const level = riskLevel(r);
-      const date  = new Date(r.created_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' });
-      const card  = document.createElement('div');
-      card.className = 'report-card';
-      card.dataset.index = i;
-      card.innerHTML = `
-        <div class="card-top">
-          <span class="card-status">${statusIcon(level)}</span>
-          <span class="card-date">${date}</span>
+      const lvl = riskLevel(r);
+      const date = r.created_at ? new Date(r.created_at).toLocaleString('th-TH',{dateStyle:'short',timeStyle:'short'}) : '';
+      const chg = (r.ndvi_change>=0?'▲':'▼') + Math.abs((r.ndvi_change||0)*100).toFixed(1) + '%';
+      const d = document.createElement('div');
+      d.className = 'rep' + (String(r.id)===String(selectedId)?' active':'');
+      d.dataset.id = r.id;
+      d.innerHTML = `
+        <div class="r1">
+          <span class="sdot" style="background:${riskColor[lvl]};box-shadow:0 0 8px ${riskColor[lvl]}"></span>
+          <span class="rname">${escapeHtml(r.plot_name || ('แปลง '+r.lat.toFixed(3)+', '+r.lng.toFixed(3)))}</span>
+          <span class="rdate">${date}</span>
         </div>
-        <div class="card-coords">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
-        <div class="card-ndvi">
-          NDVI ${r.ndvi_now?.toFixed(2) ?? '-'}
-          <span class="badge badge-${level === 'high' ? 'red' : level === 'medium' ? 'orange' : 'green'}">
-            ${(r.ndvi_change >= 0 ? '▲' : '▼') + Math.abs((r.ndvi_change * 100)).toFixed(1) + '%'}
-          </span>
-          ${r.displacement_level && r.displacement_level !== 'low' ?
-            `<span style="font-size:10px;margin-left:4px">${r.displacement_level === 'high' ? '⚠️ดิน' : '🔶ดิน'}</span>` : ''}
-          ${r.yield_estimated_kg != null ?
-            `<span style="font-size:10px;color:#888;margin-left:4px">📊${r.yield_estimated_kg}kg</span>` : ''}
-        </div>
-      `;
-      card.addEventListener('click', () => selectReport(i, card));
-      list.appendChild(card);
+        <div class="r2">
+          <span class="metric">NDVI <b>${r.ndvi_now?.toFixed(2) ?? '-'}</b></span>
+          <span class="badge ${riskBadge[lvl]}">${chg}</span>
+          ${r.displacement_level && r.displacement_level!=='low' ? `<span class="badge b-gray">🌍 ${r.displacement_level==='high'?'ดินสูง':'ดินกลาง'}</span>`:''}
+          ${r.yield_estimated_kg!=null ? `<span class="metric">📊 ${r.yield_estimated_kg}</span>`:''}
+        </div>`;
+      d.onclick = () => selectReport(r.id, true);
+      el.appendChild(d);
     });
   }
 
-  function renderMarkers(reports) {
-    markers.forEach(m => { try { map.Overlays.remove(m); } catch {} });
-    markers = [];
-    reports.forEach((r, i) => {
-      const level  = riskLevel(r);
-      const color  = level === "high" ? "#e53935" : level === "medium" ? "#fb8c00" : "#1a7a3c";
-      const marker = new sphere.Marker(
-        { lon: r.lng, lat: r.lat },
-        { title: `แปลง ${r.lat.toFixed(4)},${r.lng.toFixed(4)}`,
-          detail: `NDVI ${(r.ndvi_now || 0).toFixed(2)}`,
-          color: color }
-      );
-      map.Overlays.add(marker);
-      marker.Event?.bind?.(sphere.EventName.Click, () => {
-        const card = document.querySelector(`.report-card[data-index="${i}"]`);
-        if (card) selectReport(i, card);
-      });
-      markers.push(marker);
-    });
-  }
-
-  function selectReport(i, cardEl) {
-    if (selectedCard) selectedCard.classList.remove('active');
-    cardEl.classList.add('active');
-    selectedCard = cardEl;
-
-    const r = allReports[i]; // use allReports, not filtered
-
-    map.location({ lon: r.lng, lat: r.lat }, true);
-    map.zoom(15, true);
-
-    // Detail panel
-    document.getElementById('detail-panel').classList.add('visible');
-    document.getElementById('detail-title').textContent =
-      `📍 แปลง (${r.lat.toFixed(4)}, ${r.lng.toFixed(4)})`;
-    document.getElementById('d-ndvi').textContent     = r.ndvi_now?.toFixed(3) ?? '-';
-    document.getElementById('d-change').textContent   =
-      (r.ndvi_change >= 0 ? '▲' : '▼') + Math.abs(r.ndvi_change * 100).toFixed(1) + '%';
-    document.getElementById('d-moisture').textContent = r.soil_moisture_vv?.toFixed(1) ?? '-';
+  function selectReport(id, pan){
+    selectedId = id;
+    const r = allReports.find(x => String(x.id)===String(id));
+    document.querySelectorAll('.rep').forEach(el => el.classList.toggle('active', el.dataset.id===String(id)));
+    if (!r) return;
+    if (pan){ map.flyTo([r.lat, r.lng], 15, { duration:.6 }); }
+    document.getElementById('detail').classList.add('on');
+    document.getElementById('d-title').textContent = r.plot_name || `แปลง (${r.lat.toFixed(4)}, ${r.lng.toFixed(4)})`;
+    const set = (id,v,col) => { const e=document.getElementById(id); e.textContent=v; if(col)e.style.color=col; };
+    set('d-ndvi', r.ndvi_now?.toFixed(3) ?? '—', ndviColor(r.ndvi_now));
+    set('d-change', (r.ndvi_change>=0?'▲':'▼')+Math.abs((r.ndvi_change||0)*100).toFixed(1)+'%', r.ndvi_change>=0?'#86efc4':'#fda4b4');
+    set('d-moisture', r.soil_moisture_vv?.toFixed(1) ?? '—');
     const ed = r.elevation_diff ?? 0;
-    document.getElementById('d-elev').textContent = (ed >= 0 ? '+' : '') + ed.toFixed(1);
-    document.getElementById('d-elev').style.color = ed < -1.5 ? '#e53935' : '#1a7a3c';
-
-    // v2 fields
-    const stability = r.surface_stability != null ? Math.round(r.surface_stability * 100) + '%' : '-';
-    const dispLevel = r.displacement_level || 'low';
-    const dispIcon = { high: '⚠️', medium: '🔶', low: '✅' }[dispLevel] || '✅';
-    document.getElementById('d-stability').textContent = dispIcon + ' ' + stability;
-    document.getElementById('d-stability').style.color = dispLevel === 'high' ? '#e53935' : dispLevel === 'medium' ? '#e65100' : '#1a7a3c';
-
-    const yieldKg = r.yield_estimated_kg != null ? r.yield_estimated_kg : '-';
-    const yieldQ = r.yield_quality || 'medium';
-    document.getElementById('d-yield').textContent = yieldKg;
-    document.getElementById('d-yield').style.color = { high: '#1a7a3c', medium: '#fb8c00', low: '#e65100', very_low: '#e53935' }[yieldQ] || '#555';
-
-    const fertN = r.fertilizer_n, fertP = r.fertilizer_p, fertK = r.fertilizer_k;
-    document.getElementById('d-fert').textContent =
-      (fertN != null && fertP != null && fertK != null) ? `${fertN}-${fertP}-${fertK}` : '-';
-
-    const impactSev = r.land_impact_severity || 'low';
-    const impactLabel = { high: '🔴 สูง', medium: '🟠 กลาง', low: '🟢 น้อย' }[impactSev] || '🟢 น้อย';
-    document.getElementById('d-impact').textContent = impactLabel;
-
-    document.getElementById('detail-message').textContent = r.message ?? '';
+    set('d-elev', (ed>=0?'+':'')+ed.toFixed(1), ed<-1.5?'#fda4b4':'#86efc4');
+    const disp = r.displacement_level || 'low';
+    set('d-stability', ({high:'⚠️',medium:'🔶',low:'✅'}[disp]||'✅')+' '+(r.surface_stability!=null?Math.round(r.surface_stability*100)+'%':'—'),
+      disp==='high'?'#fda4b4':disp==='medium'?'#fdba74':'#86efc4');
+    set('d-yield', r.yield_estimated_kg ?? '—',
+      ({high:'#86efc4',medium:'#fbbf24',low:'#fdba74',very_low:'#fda4b4'}[r.yield_quality]||'#9bf0ff'));
+    set('d-fert', (r.fertilizer_n!=null&&r.fertilizer_p!=null&&r.fertilizer_k!=null)?`${r.fertilizer_n}-${r.fertilizer_p}-${r.fertilizer_k}`:'—');
+    set('d-impact', ({high:'🔴 สูง',medium:'🟠 กลาง',low:'🟢 น้อย'}[r.land_impact_severity||'low']));
+    document.getElementById('d-msg').textContent = r.message ?? '';
+    loadPlotDetail(r);
   }
 
-  // ─── Search ───
-  function filterReports() {
-    const q = document.getElementById('search-input').value.toLowerCase();
-    const filtered = allReports.filter(r =>
-      r.lat.toFixed(4).includes(q) ||
-      r.lng.toFixed(4).includes(q) ||
-      (r.user_id || '').toLowerCase().includes(q)
-    );
-    renderAll(filtered);
-  }
-
-  // ─── CSV Export with auth ───
-  async function exportCSV() {
+  // ───────── Plot detail: time-series + model accuracy ─────────
+  let tsChart = null, _detailReq = 0;
+  async function loadPlotDetail(r){
+    const reqId = ++_detailReq;
+    document.getElementById('d-tag').textContent = 'LOADING…';
+    document.getElementById('ts-note').textContent = 'กำลังโหลด…';
+    document.getElementById('imp-bars').innerHTML = '';
     try {
-      const resp = await fetch(`${API_BASE}/admin/reports/export.csv?limit=1000`,
-                               { headers: adminHeaders });
+      const resp = await fetch(`${API_BASE}/admin/plot-detail?lat=${r.lat}&lng=${r.lng}&months=24`, { headers: adminHeaders() });
+      if (reqId !== _detailReq) return;   // stale (user clicked another)
+      if (!resp.ok) throw new Error(resp.status);
+      const d = await resp.json();
+      if (reqId !== _detailReq) return;
+      document.getElementById('d-tag').textContent = d.model?.available ? 'ML v3' : 'RULE';
+      renderTimeseries(d.timeseries || []);
+      renderConfidence(d.confidence || {});
+      renderImportance(d.model || {});
+    } catch {
+      document.getElementById('ts-note').textContent = 'ใช้ค่าจากรายงานล่าสุด';
+      // fallback: build mini-series from history of this plot in memory
+      const hist = allReports.filter(x => Math.abs(x.lat-r.lat)<1e-4 && Math.abs(x.lng-r.lng)<1e-4 && x.ndvi_now!=null && x.created_at)
+        .sort((a,b)=>a.created_at.localeCompare(b.created_at))
+        .map(x => ({ month:x.created_at.slice(0,7), ndvi:x.ndvi_now }));
+      renderTimeseries(hist);
+    }
+  }
+
+  function renderTimeseries(series){
+    const note = document.getElementById('ts-note');
+    const ctx = document.getElementById('tsCanvas').getContext('2d');
+    if (tsChart) tsChart.destroy();
+    if (!series.length){ note.textContent = 'ไม่มีข้อมูล'; ctx.clearRect(0,0,9999,9999); return; }
+    note.textContent = series.length + ' เดือน';
+    const labels = series.map(s => s.month.slice(2));   // YY-MM
+    const vals   = series.map(s => s.ndvi);
+    const g = ctx.createLinearGradient(0,0,0,120);
+    g.addColorStop(0,'rgba(167,139,250,.35)'); g.addColorStop(1,'rgba(167,139,250,.01)');
+    tsChart = new Chart(ctx, {
+      type:'line',
+      data:{ labels, datasets:[{ data:vals, borderColor:'#a78bfa', backgroundColor:g,
+        borderWidth:2, pointRadius:2, pointBackgroundColor:'#a78bfa', fill:true, tension:.35,
+        segment:{ borderColor: c => (c.p1.parsed.y < 0.3 ? '#f43f5e' : c.p1.parsed.y < 0.45 ? '#fb923c' : '#a78bfa') } }] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:c=>'NDVI '+c.parsed.y.toFixed(3) } } },
+        scales:{ x:{ ticks:{color:'#7d93ab',font:{size:9},maxTicksLimit:12}, grid:{display:false} },
+          y:{ min:0, max:1, ticks:{color:'#7d93ab',font:{size:9},stepSize:.25}, grid:{color:'rgba(28,49,72,.5)'} } } }
+    });
+  }
+
+  function renderConfidence(c){
+    const ver = document.getElementById('model-ver');
+    const num = document.getElementById('conf-num');
+    const arc = document.getElementById('conf-arc');
+    const pct = c.confidence_pct ?? 0;
+    num.textContent = pct;
+    const C = 2 * Math.PI * 33;
+    arc.style.strokeDasharray = C;
+    arc.style.strokeDashoffset = C * (1 - pct/100);
+    arc.style.stroke = pct >= 75 ? '#34d399' : pct >= 55 ? '#fbbf24' : '#f43f5e';
+    const set = (id,v) => document.getElementById(id).textContent = v;
+    set('cm-ml',   c.ml_kg   != null ? c.ml_kg + ' กก./ไร่' : '—');
+    set('cm-rule', c.rule_kg != null ? c.rule_kg + ' กก./ไร่' : '—');
+    set('cm-range',(c.range_low!=null&&c.range_high!=null) ? `${c.range_low}–${c.range_high}` : '—');
+    set('cm-agree',c.agreement_pct != null ? c.agreement_pct + '%' : '—');
+    ver.textContent = c.ml_used ? 'ML + Rule ensemble' : 'Rule-based';
+  }
+
+  function renderImportance(model){
+    const box = document.getElementById('imp-bars');
+    const ver = document.getElementById('model-ver');
+    const feats = model.features || [];
+    if (model.version) ver.textContent = (model.type||'model') + ' · ' + model.version;
+    if (!feats.length){ box.innerHTML = '<div style="font-size:11px;color:var(--dim)">โมเดล ML ไม่พร้อม (ใช้ rule-based)</div>'; return; }
+    const max = Math.max(...feats.map(f => f.importance), 0.001);
+    box.innerHTML = feats.map(f => `
+      <div class="imp-row">
+        <span class="lbl">${escapeHtml(f.label)}</span>
+        <span class="track"><span style="width:${(f.importance/max*100).toFixed(0)}%"></span></span>
+        <span class="pv">${(f.importance*100).toFixed(0)}%</span>
+      </div>`).join('');
+  }
+
+  // ───────── Charts ─────────
+  let trendChart, donutChart;
+  function renderTrend(reports){
+    const byDate = {};
+    reports.forEach(r => { if (r.ndvi_now==null||!r.created_at) return;
+      const d = r.created_at.slice(0,10); (byDate[d] ||= []).push(r.ndvi_now); });
+    const sorted = Object.entries(byDate).sort((a,b)=>a[0].localeCompare(b[0])).slice(-30);
+    const labels = sorted.map(([d])=>d.slice(5));
+    const vals = sorted.map(([,a])=>+(a.reduce((x,y)=>x+y,0)/a.length).toFixed(3));
+    const ctx = document.getElementById('trendCanvas').getContext('2d');
+    const g = ctx.createLinearGradient(0,0,0,150);
+    g.addColorStop(0,'rgba(34,211,238,.35)'); g.addColorStop(1,'rgba(34,211,238,.01)');
+    if (trendChart) trendChart.destroy();
+    trendChart = new Chart(ctx, {
+      type:'line',
+      data:{ labels, datasets:[{ label:'NDVI', data:vals, borderColor:'#22d3ee', backgroundColor:g,
+        borderWidth:2, pointRadius:2, pointBackgroundColor:'#22d3ee', fill:true, tension:.35 }] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:c=>'NDVI '+c.parsed.y.toFixed(3) } } },
+        scales:{ x:{ ticks:{color:'#7d93ab',font:{size:10},maxTicksLimit:10}, grid:{color:'rgba(28,49,72,.5)'} },
+          y:{ min:0, max:1, ticks:{color:'#7d93ab',font:{size:10},stepSize:.2}, grid:{color:'rgba(28,49,72,.5)'} } } }
+    });
+  }
+  function renderDonut(high, med, ok){
+    const ctx = document.getElementById('donutCanvas').getContext('2d');
+    if (donutChart) donutChart.destroy();
+    donutChart = new Chart(ctx, {
+      type:'doughnut',
+      data:{ labels:['เสี่ยงสูง','ปานกลาง','ปกติ'],
+        datasets:[{ data:[high,med,ok], backgroundColor:['#f43f5e','#fb923c','#34d399'],
+          borderColor:'#0e1a2b', borderWidth:3, hoverOffset:6 }] },
+      options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
+        plugins:{ legend:{ position:'bottom', labels:{ color:'#9bb3c9', font:{size:11}, padding:14, usePointStyle:true } } } }
+    });
+  }
+
+  // ───────── CSV export ─────────
+  async function exportCSV(){
+    try {
+      const resp = await fetch(`${API_BASE}/admin/reports/export.csv?limit=1000`, { headers: adminHeaders() });
+      if (resp.status === 403) return promptKey();
       if (!resp.ok) throw new Error(resp.status);
       const blob = await resp.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href = url; a.download = "geoai_reports.csv"; a.click();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download='geoai_reports.csv'; a.click();
       URL.revokeObjectURL(url);
-    } catch { alert("Export ไม่สำเร็จ — ตรวจสอบ ADMIN_KEY"); }
+    } catch { alert('Export ไม่สำเร็จ'); }
   }
 
-  // ─── Auto-refresh every 60s (guard against duplicate intervals) ───
-  let _refreshTimer = null;
-  loadSphereScript(() => {
-    initSphereMap();
+  // ───────── Admin key prompt ─────────
+  function promptKey(){
+    const ov = document.getElementById('overlay');
+    ov.style.display = 'flex';
+    ov.innerHTML = `
+      <div class="keybox">
+        <h3>🔒 ต้องใช้ Admin Key</h3>
+        <p>เซิร์ฟเวอร์ตั้งค่า <span class="mono">ADMIN_API_KEY</span> ไว้ — ใส่คีย์เพื่อเข้าถึง Dashboard (เก็บในเครื่องนี้)</p>
+        <input id="key-in" type="password" placeholder="ADMIN_API_KEY" />
+        <button class="btn cyan" style="width:100%" onclick="saveKey()">เข้าสู่ระบบ</button>
+      </div>`;
+    document.getElementById('key-in').focus();
+    document.getElementById('key-in').addEventListener('keydown', e => { if(e.key==='Enter') saveKey(); });
+  }
+  function saveKey(){
+    const v = document.getElementById('key-in').value.trim();
+    if (!v) return;
+    ADMIN_KEY = v; localStorage.setItem('geoai_admin_key', v);
+    document.getElementById('overlay').innerHTML = '<div>⏳ กำลังเข้าสู่ระบบ...</div>';
     loadReports();
-    if (!_refreshTimer) {
-      _refreshTimer = setInterval(loadReports, 60000);
-    }
-  });
+  }
+
+  // ───────── Init ─────────
+  initMap();
+  loadReports();
+  setInterval(loadReports, 60000);
 </script>
 </body>
 </html>

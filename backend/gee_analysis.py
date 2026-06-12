@@ -827,3 +827,38 @@ def get_ndvi_timeseries(lat: float, lng: float, months: int = 24) -> list[dict]:
             results.append({"month": m, "ndvi": round(val, 3)})
 
     return results
+
+
+# NDVI raster palette — แดง(เสียหาย) → เหลือง → เขียว(สมบูรณ์)
+NDVI_PALETTE = ["#b91c1c", "#f43f5e", "#fb923c", "#fbbf24", "#a3e635", "#16a34a"]
+
+
+def get_ndvi_tile_url(months: int = 3) -> dict | None:
+    """
+    สร้าง XYZ tile URL ของ NDVI raster (median ย้อนหลัง n เดือน) จาก Sentinel-2
+    ผ่าน ee.Image.getMapId — ใช้ซ้อนบนแผนที่ดาวเทียมใน dashboard
+    คืน {"tile_url": "...{z}/{x}/{y}...", "palette": [...], "min": 0, "max": 0.8}
+    หรือ None ถ้า GEE ยังไม่พร้อม
+    """
+    if not _gee_ready:
+        return None
+
+    today = datetime.today()
+    start = (today - timedelta(days=months * 30)).strftime("%Y-%m-%d")
+    end   = today.strftime("%Y-%m-%d")
+
+    try:
+        s2 = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterDate(start, end)
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+        )
+        ndvi = s2.median().normalizedDifference(["B8", "B4"]).rename("NDVI")
+        vis  = {"min": 0.0, "max": 0.8, "palette": NDVI_PALETTE}
+        mapid = _retry_gee(ndvi.getMapId, vis)
+        url = mapid["tile_fetcher"].url_format
+        return {"tile_url": url, "palette": NDVI_PALETTE, "min": 0.0, "max": 0.8,
+                "period": f"{start} → {end}"}
+    except Exception as e:
+        logger.error(f"NDVI tile error: {e}")
+        return None

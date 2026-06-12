@@ -19,8 +19,13 @@ from fastapi.responses import StreamingResponse, Response
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
-from gee_analysis import analyze_durian_plot, get_ndvi_timeseries
+from gee_analysis import analyze_durian_plot, get_ndvi_timeseries, get_ndvi_tile_url
 import gee_analysis
+from fastapi.concurrency import run_in_threadpool
+try:
+    from ml_model import get_model_meta as _get_model_meta
+except Exception:
+    _get_model_meta = None
 from rule_engine import format_message
 from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
@@ -308,6 +313,89 @@ async def admin_reports(limit: int = 100):
     """API สำหรับ admin dashboard ดึงรายงานทั้งหมด"""
     reports = await get_all_reports(limit=limit)
     return {"count": len(reports), "reports": reports}
+
+
+@app.get("/admin/ndvi-tiles", dependencies=[Depends(verify_admin)])
+async def admin_ndvi_tiles(months: int = 3):
+    """
+    XYZ tile URL ของ NDVI raster จริงจาก GEE สำหรับซ้อนบนแผนที่ dashboard
+    คืน {available, tile_url, palette, ...} — available=false ถ้า GEE ยังไม่พร้อม
+    """
+    months = max(1, min(months, 12))
+    tiles = await run_in_threadpool(get_ndvi_tile_url, months)
+    if not tiles:
+        return {"available": False}
+    return {"available": True, **tiles}
+
+
+def _yield_confidence(analysis: dict) -> dict:
+    """
+    ประเมินความแม่นยำ/ความเชื่อมั่นของการพยากรณ์ผลผลิต
+    จาก (1) ความสอดคล้องระหว่าง ML กับ rule-based (2) ความสมบูรณ์ของข้อมูล
+    """
+    ml_kg   = analysis.get("predicted_yield_kg_per_rai")
+    y_est   = analysis.get("yield_estimate") or {}
+    rule_kg = y_est.get("estimated_kg_per_rai")
+    low, high = y_est.get("range_low"), y_est.get("range_high")
+
+    agreement = None
+    if ml_kg and rule_kg and max(ml_kg, rule_kg) > 0:
+        agreement = round(1 - abs(ml_kg - rule_kg) / max(ml_kg, rule_kg), 3)
+
+    # ความสมบูรณ์ข้อมูล (NDVI/ความชื้น/ระดับ ครบไหม)
+    fields = ["ndvi_now", "soil_moisture_vv", "elevation_diff", "bsi"]
+    completeness = sum(1 for f in fields if analysis.get(f) is not None) / len(fields)
+
+    # ML ทำงานจริงไหม (มี prediction ที่ต่างจาก rule = โมเดลถูกใช้)
+    ml_used = bool(ml_kg and ml_kg > 0)
+
+    parts = [completeness]
+    if agreement is not None:
+        parts.append(agreement)
+    confidence = round(sum(parts) / len(parts) * 100)
+    # ปรับลดถ้าใช้ rule-based ล้วน
+    if not ml_used:
+        confidence = round(confidence * 0.85)
+
+    return {
+        "confidence_pct": confidence,
+        "agreement_pct":  round(agreement * 100) if agreement is not None else None,
+        "completeness_pct": round(completeness * 100),
+        "ml_used":        ml_used,
+        "ml_kg":          ml_kg,
+        "rule_kg":        rule_kg,
+        "range_low":      low,
+        "range_high":     high,
+        "quality":        y_est.get("quality"),
+        "quality_label":  y_est.get("quality_label"),
+        "factors":        y_est.get("factors"),
+    }
+
+
+@app.get("/admin/plot-detail", dependencies=[Depends(verify_admin)])
+async def admin_plot_detail(lat: float, lng: float, months: int = 24):
+    """
+    รายละเอียดแปลงสำหรับ dashboard: time-series NDVI (จาก GEE) +
+    ผลวิเคราะห์ล่าสุด (cache/mock) + ความแม่นยำโมเดล + feature importance
+    """
+    months = max(3, min(months, 36))
+    analysis = await run_in_threadpool(analyze_durian_plot, lat, lng)
+    try:
+        series = await run_in_threadpool(get_ndvi_timeseries, lat, lng, months)
+    except Exception as e:
+        logger.warning(f"timeseries failed: {e}")
+        series = []
+
+    model_meta = _get_model_meta() if _get_model_meta else {"available": False}
+
+    return {
+        "lat": lat, "lng": lng,
+        "timeseries": series,
+        "confidence": _yield_confidence(analysis),
+        "model": model_meta,
+        "swab": analysis.get("swab"),
+        "fertilizer": analysis.get("fertilizer"),
+    }
 
 
 @app.get("/plots/{user_id}")
