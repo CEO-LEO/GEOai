@@ -5,8 +5,8 @@ services:
     plan: free
     branch: master
     repo: https://github.com/CEO-LEO/GEOai.git
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: cd backend && gunicorn main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ADMIN_API_KEY
         value: VQBL_7QERqR4Vgrybadjg3J3OdF1StV9K3SGWslfY6U
