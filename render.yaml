@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: geoai
+    runtime: python
+    plan: free
+    branch: master
+    repo: https://github.com/CEO-LEO/GEOai.git
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && gunicorn main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    envVars:
+      - key: ADMIN_API_KEY
+        value: VQBL_7QERqR4Vgrybadjg3J3OdF1StV9K3SGWslfY6U
+        scope: build,run
+      - key: SPHERE_KEY
+        value: ""
+        scope: build,run
+      # ⚠️ Optional - add these if you have credentials:
+      # - key: GEE_KEY_JSON
+      #   value: <your-gee-key-json>
+      # - key: SUPABASE_URL
+      #   value: <your-supabase-url>
+      # - key: SUPABASE_SERVICE_ROLE_KEY
+      #   value: <your-supabase-key>
+      # - key: LINE_CHANNEL_ACCESS_TOKEN
+      #   value: <your-line-token>
+      # - key: LINE_CHANNEL_SECRET
+      #   value: <your-line-secret>
+    healthCheckPath: /health
