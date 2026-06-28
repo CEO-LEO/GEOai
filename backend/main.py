@@ -110,6 +110,11 @@ app.add_middleware(RateLimitMiddleware)
 app.include_router(webhook_router)
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
+# ── Fallback: ถ้า liff/dashboard ไม่อยู่ใน parent → ลองจาก cwd ────
+if not (_BASE_DIR / "liff").exists():
+    _BASE_DIR = Path.cwd()
+if not (_BASE_DIR / "liff").exists():
+    _BASE_DIR = Path(__file__).resolve().parent  # same dir (monorepo)
 
 
 class AnalysisRequest(BaseModel):
