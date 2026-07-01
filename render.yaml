@@ -12,17 +12,9 @@ services:
         value: VQBL_7QERqR4Vgrybadjg3J3OdF1StV9K3SGWslfY6U
         scope: build,run
       - key: SPHERE_KEY
-        value: ""
+        value: 58319FD529C64DDEB319F94C4B395BC7
         scope: build,run
-      # ⚠️ Optional - add these if you have credentials:
-      # - key: GEE_KEY_JSON
-      #   value: <your-gee-key-json>
-      # - key: SUPABASE_URL
-      #   value: <your-supabase-url>
-      # - key: SUPABASE_SERVICE_ROLE_KEY
-      #   value: <your-supabase-key>
-      # - key: LINE_CHANNEL_ACCESS_TOKEN
-      #   value: <your-line-token>
-      # - key: LINE_CHANNEL_SECRET
-      #   value: <your-line-secret>
+      # ⚠️ Add these in Render Dashboard → Environment (do NOT commit secrets):
+      # GEE_SERVICE_ACCOUNT, GEE_KEY_JSON, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+      # LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, LIFF_URL
     healthCheckPath: /health

@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 LINE_API    = "https://api.line.me/v2/bot/message/reply"
-LIFF_URL    = os.environ.get("LIFF_URL", "https://liff.line.me/YOUR_LIFF_ID")
 
 
 # ─────────────────────────────────────────────────────
@@ -31,6 +30,9 @@ LIFF_URL    = os.environ.get("LIFF_URL", "https://liff.line.me/YOUR_LIFF_ID")
 
 def _verify_signature(body: bytes, signature: str) -> bool:
     secret = os.environ.get("LINE_CHANNEL_SECRET", "").encode()
+    if not secret:
+        logger.warning("LINE_CHANNEL_SECRET not set — skipping signature verification (dev mode)")
+        return True
     digest = hmac.new(secret, body, hashlib.sha256).digest()
     expected = base64.b64encode(digest).decode()
     return hmac.compare_digest(expected, signature)
@@ -262,6 +264,7 @@ def _main_menu() -> dict:
 
 
 def _liff_button() -> dict:
+    liff_url = os.environ.get("LIFF_URL", "https://iamroot.onrender.com/liff/")
     return {
         "type": "flex",
         "altText": "กดเพื่อปักหมุดแปลงของคุณ",
@@ -297,7 +300,7 @@ def _liff_button() -> dict:
                         "action": {
                             "type": "uri",
                             "label": "🗺️ เปิดแผนที่ปักหมุด",
-                            "uri": LIFF_URL
+                            "uri": liff_url
                         },
                         "style": "primary",
                         "color": "#1a7a3c"
