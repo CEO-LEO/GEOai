@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timedelta
 import ee
 from cache import get_cached, set_cached
-from rule_engine import predict_yield
+from rule_engine import predict_yield, calculate_root_rot_risk
 try:
     from ml_model import predict_from_ml as _predict_from_ml
     _ML_AVAILABLE = True
@@ -111,6 +111,13 @@ def _mock_analyze(lat: float, lng: float) -> dict:
                                 swab["swab_index"], swab["soil_water_pct"]) if _ML_AVAILABLE else -1
     predicted_yield = ml_yield if ml_yield > 0 else predict_yield(ndvi_now, topsoil_risk_level, elevation_diff)
 
+    # ── Mock SAR wetness streak (Gap 4) ──
+    ws_seed = abs(hash(seed + 6)) % 10
+    wetness_streak = {
+        "wetness_days": ws_seed,
+        "is_prolonged": ws_seed >= 6,
+    }
+
     result = {
         "lat": lat,
         "lng": lng,
@@ -128,11 +135,66 @@ def _mock_analyze(lat: float, lng: float) -> dict:
         "yield_estimate": yield_est,
         "land_impact": land_impact,
         "swab":        swab,
+        "wetness_streak": wetness_streak,
     }
+    result["root_rot_risk"] = calculate_root_rot_risk(result)
     logger.info(f"[MOCK] analyze ({lat:.4f}, {lng:.4f}) → NDVI={ndvi_now}, "
-                f"displacement={change_level}, yield={yield_est['estimated_kg_per_rai']}kg")
+                f"displacement={change_level}, yield={yield_est['estimated_kg_per_rai']}kg, "
+                f"root_rot={result['root_rot_risk']['level']}")
     set_cached(lat, lng, result)
     return result
+
+
+def get_sar_wetness_streak(lat: float, lng: float) -> dict:
+    """
+    Gap 4: ดึง Sentinel-1 VV backscatter ย้อนหลัง 30 วัน
+    นับจำนวนภาพติดต่อกัน (newest→oldest) ที่ VV > -10 dB → wetness_days
+    is_prolonged = True ถ้า wetness_days >= 6
+    """
+    if not _gee_ready:
+        seed = abs(hash((round(lat, 4), round(lng, 4)))) % 10
+        return {"wetness_days": seed, "is_prolonged": seed >= 6}
+
+    today = datetime.today()
+    start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    end   = today.strftime("%Y-%m-%d")
+    point = ee.Geometry.Point([lng, lat])
+    area  = point.buffer(PLOT_BUFFER_M)
+
+    s1 = (
+        ee.ImageCollection("COPERNICUS/S1_GRD")
+        .filterBounds(area)
+        .filterDate(start, end)
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+        .filter(ee.Filter.eq("instrumentMode", "IW"))
+        .select("VV")
+        .sort("system:time_start")
+    )
+
+    def to_feat(img):
+        val = img.reduceRegion(ee.Reducer.mean(), area, 10).get("VV")
+        return ee.Feature(None, {"vv": val})
+
+    try:
+        fc = _retry_gee(s1.map(to_feat).getInfo)
+        vals = [
+            f["properties"].get("vv")
+            for f in fc.get("features", [])
+        ]
+        # Count consecutive wet images (newest → oldest)
+        streak = 0
+        for v in reversed(vals):
+            if v is not None and v > -10:
+                streak += 1
+            else:
+                break
+        # Each S1 pass ≈ 6 calendar days
+        wetness_days = streak * 6
+    except Exception as e:
+        logger.warning(f"SAR wetness streak failed: {e}")
+        wetness_days = 0
+
+    return {"wetness_days": wetness_days, "is_prolonged": wetness_days >= 6}
 
 
 def _retry_gee(fn, *args, **kwargs):
@@ -237,6 +299,9 @@ def analyze_durian_plot(lat: float, lng: float,
                                 swab["swab_index"], swab["soil_water_pct"]) if _ML_AVAILABLE else -1
     predicted_yield = ml_yield if ml_yield > 0 else predict_yield(ndvi_now, topsoil_risk_level, elevation_diff)
 
+    # ── Gap 4: SAR wetness streak ──
+    wetness_streak = get_sar_wetness_streak(lat, lng)
+
     result = {
         "lat": lat,
         "lng": lng,
@@ -256,7 +321,9 @@ def analyze_durian_plot(lat: float, lng: float,
         "land_impact":      land_impact,
         # v3 fields
         "swab":             swab,
+        "wetness_streak":   wetness_streak,
     }
+    result["root_rot_risk"] = calculate_root_rot_risk(result)
     set_cached(lat, lng, result)
     return result
 

@@ -32,7 +32,8 @@ from line_sender import send_line_message, get_failed_queue, get_retry_stats
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
-                      upsert_user)
+                      upsert_user, save_iot_reading, get_plot_by_id,
+                      save_field_observation)
 from webhook import router as webhook_router
 from scheduler import create_scheduler
 from middleware import RateLimitMiddleware
@@ -469,6 +470,62 @@ async def export_csv(limit: int = 1000):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=geoai_reports.csv"}
     )
+
+
+class IotReading(BaseModel):
+    plot_id:      int
+    sensor_id:    str   = Field(..., min_length=1, max_length=50)
+    depth_cm:     int   = Field(..., ge=1, le=200)
+    moisture_pct: float = Field(..., ge=0, le=100)
+    temp_c:       float = Field(..., ge=-10, le=60)
+    timestamp:    str | None = None
+
+
+@app.post("/iot/reading")
+async def iot_reading(req: IotReading):
+    """Gap 2: รับข้อมูล IoT soil sensor → บันทึก DB → แจ้งเตือน LINE ถ้าความชื้นเกินเกณฑ์"""
+    reading_id = await save_iot_reading(
+        req.plot_id, req.sensor_id, req.depth_cm,
+        req.moisture_pct, req.temp_c, req.timestamp,
+    )
+
+    alert_sent = False
+    if req.moisture_pct > 80 and req.depth_cm >= 20:
+        plot = await get_plot_by_id(req.plot_id)
+        if plot:
+            msg = (
+                f"🚨 แจ้งเตือน IoT Sensor — {plot.get('name', 'แปลง')}\n"
+                f"💧 ความชื้นดินที่ราก {req.depth_cm} ซม. = {req.moisture_pct:.1f}% เกินเกณฑ์\n"
+                f"🌡️ อุณหภูมิดิน {req.temp_c:.1f}°C\n"
+                f"⚠️ เสี่ยงรากเน่า — ขุดร่องระบายน้ำทันที!"
+            )
+            await send_line_message(plot["user_id"], msg)
+            alert_sent = True
+            logger.warning(
+                f"IoT alert: plot {req.plot_id} sensor {req.sensor_id} "
+                f"moisture={req.moisture_pct}% depth={req.depth_cm}cm"
+            )
+
+    return {"status": "ok", "reading_id": reading_id, "alert_sent": alert_sent}
+
+
+class FieldObservation(BaseModel):
+    plot_id:            int
+    actual_yield_kg:    float = Field(..., ge=0, le=10000)
+    root_rot_occurred:  bool
+    observation_date:   str
+
+
+@app.post("/admin/feedback", dependencies=[Depends(verify_admin)])
+async def admin_feedback(req: FieldObservation):
+    """Gap 5: บันทึก field observation จริงจากเกษตรกร — ใช้ retrain ML model"""
+    obs_id = await save_field_observation(
+        req.plot_id, req.actual_yield_kg,
+        req.root_rot_occurred, req.observation_date,
+    )
+    if obs_id is None:
+        raise HTTPException(status_code=500, detail="บันทึกไม่สำเร็จ")
+    return {"status": "ok", "observation_id": obs_id, "plot_id": req.plot_id}
 
 
 # ── Static file mounts (MUST be after all API routes) ────

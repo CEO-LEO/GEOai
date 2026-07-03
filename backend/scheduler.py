@@ -138,10 +138,10 @@ def create_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
 
-    # Job 2: ทุกวันจันทร์ 07:30 — แจ้งเตือนพยากรณ์ฝน
+    # Job 2: ทุกวัน 06:00 — แจ้งเตือนพยากรณ์ฝน + รากเน่า (รากเน่าใช้เวลา 2-5 วัน)
     scheduler.add_job(
         rain_alert_job,
-        trigger=CronTrigger(day_of_week="mon", hour=7, minute=30),
+        trigger=CronTrigger(hour=6, minute=0),
         id="rain_alert",
         replace_existing=True,
         max_instances=1,
@@ -192,6 +192,17 @@ async def rain_alert_job():
                     # ── Combined alert: อากาศ + ดิน ──
                     soil_risk = assess_soil_waterlog_risk(soil_data)
                     alert = evaluate_combined_risk(forecast, soil_risk)
+
+                    # Gap 1: combined_score >= 60 → force critical + notify immediately
+                    if alert["combined_score"] >= 60 and alert["alert_level"] != "critical":
+                        alert = dict(alert)
+                        alert["alert_level"] = "critical"
+                        alert["should_notify"] = True
+                        alert["alert_title"] = "🔴 วิกฤต: คะแนนความเสี่ยงสูง — ต้องดำเนินการทันที"
+                        logger.warning(
+                            f"🚨 Critical threshold override: {user_id} plot '{name}' "
+                            f"combined_score={alert['combined_score']}"
+                        )
 
                     if alert["should_notify"]:
                         flex = build_combined_alert_flex(

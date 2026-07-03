@@ -113,8 +113,44 @@ SELECT
     MAX(created_at)                                         AS latest_at
 FROM analyses;
 
--- ── 7. ตรวจสอบว่าสร้างสำเร็จ ─────────────────────────
+-- ── 7. IoT Sensor readings (Gap 2) ──────────────────
+CREATE TABLE IF NOT EXISTS iot_readings (
+    id           BIGSERIAL PRIMARY KEY,
+    plot_id      BIGINT REFERENCES plots(id) ON DELETE CASCADE,
+    sensor_id    TEXT NOT NULL,
+    depth_cm     INT NOT NULL,
+    moisture_pct REAL NOT NULL,
+    temp_c       REAL NOT NULL,
+    timestamp    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_iot_plot_id ON iot_readings(plot_id);
+CREATE INDEX IF NOT EXISTS idx_iot_timestamp ON iot_readings(timestamp DESC);
+ALTER TABLE iot_readings ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'backend only' AND tablename = 'iot_readings') THEN
+        CREATE POLICY "backend only" ON iot_readings FOR ALL USING (FALSE);
+    END IF;
+END $$;
+
+-- ── 8. Field observations (Gap 5: retrain data) ──────
+CREATE TABLE IF NOT EXISTS field_observations (
+    id                  BIGSERIAL PRIMARY KEY,
+    plot_id             BIGINT REFERENCES plots(id) ON DELETE CASCADE,
+    actual_yield_kg     REAL NOT NULL,
+    root_rot_occurred   BOOLEAN NOT NULL DEFAULT FALSE,
+    observation_date    DATE NOT NULL,
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_obs_plot_id ON field_observations(plot_id);
+ALTER TABLE field_observations ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'backend only' AND tablename = 'field_observations') THEN
+        CREATE POLICY "backend only" ON field_observations FOR ALL USING (FALSE);
+    END IF;
+END $$;
+
+-- ── 9. ตรวจสอบว่าสร้างสำเร็จ ─────────────────────────
 SELECT table_name
 FROM information_schema.tables
 WHERE table_schema = 'public'
-  AND table_name IN ('analyses', 'users', 'plots');
+  AND table_name IN ('analyses', 'users', 'plots', 'iot_readings', 'field_observations');

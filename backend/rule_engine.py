@@ -51,6 +51,44 @@ def predict_yield(ndvi_now: float, topsoil_risk_level: str,
     return round(base)
 
 
+def calculate_root_rot_risk(data: dict) -> dict:
+    """
+    คะแนนความเสี่ยงรากเน่า 0-100 รวมทุกปัจจัย
+    คืน: { "score", "level": critical/warning/watch/safe, "days_to_act" }
+    """
+    score = 0
+
+    if data.get("elevation_diff", 0) < -1.5:
+        score += 30
+    swab_idx = data.get("swab", {}).get("swab_index", 0)
+    if swab_idx > 0.30:
+        score += 30
+    if data.get("soil_moisture_vv", -15) > -10:
+        score += 20
+    if data.get("ndvi_change", 0) < -0.10:
+        score += 10
+    if data.get("displacement", {}).get("change_level") == "high":
+        score += 10
+
+    # Bonus จาก wetness streak (Gap 4)
+    ws = data.get("wetness_streak", {})
+    if ws.get("is_prolonged") and swab_idx > 0.10:
+        score += 25
+
+    score = min(100, score)
+
+    if score >= 80:
+        level, days = "critical", 1
+    elif score >= 60:
+        level, days = "warning", 2
+    elif score >= 40:
+        level, days = "watch", 5
+    else:
+        level, days = "safe", 14
+
+    return {"score": score, "level": level, "days_to_act": days}
+
+
 def format_message(data: dict, lat: float, lng: float) -> str:
     """สร้างข้อความรายงานภาษาไทยจาก dict ผลวิเคราะห์"""
 

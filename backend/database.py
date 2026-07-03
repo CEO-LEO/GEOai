@@ -502,6 +502,76 @@ async def get_recent_analyses(plot_id: int, weeks: int = 3) -> list[dict]:
     return resp.json()
 
 
+async def get_plot_by_id(plot_id: int) -> dict | None:
+    """ดึงข้อมูล plot (รวม user_id) จาก plot_id — ใช้โดย IoT endpoint"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/plots",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={"id": f"eq.{plot_id}", "select": "id,user_id,lat,lng,name", "limit": "1"},
+        )
+    if resp.status_code != 200 or not resp.json():
+        return None
+    return resp.json()[0]
+
+
+async def save_iot_reading(plot_id: int, sensor_id: str, depth_cm: int,
+                           moisture_pct: float, temp_c: float,
+                           timestamp: str | None = None) -> int | None:
+    """บันทึก IoT sensor reading ลง Supabase → คืน id"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    payload: dict = {
+        "plot_id":      plot_id,
+        "sensor_id":    sensor_id,
+        "depth_cm":     depth_cm,
+        "moisture_pct": moisture_pct,
+        "temp_c":       temp_c,
+    }
+    if timestamp:
+        payload["timestamp"] = timestamp
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/iot_readings",
+            headers={**_HEADERS(), "Prefer": "return=representation"},
+            json=payload,
+        )
+    if resp.status_code in (200, 201):
+        rows = resp.json()
+        return rows[0]["id"] if rows else None
+    logger.error(f"Supabase save_iot_reading failed: {resp.status_code} — {resp.text}")
+    return None
+
+
+async def save_field_observation(plot_id: int, actual_yield_kg: float,
+                                  root_rot_occurred: bool,
+                                  observation_date: str) -> int | None:
+    """บันทึก field observation จริงจากเกษตรกร (Gap 5: ใช้ retrain model)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    payload = {
+        "plot_id":           plot_id,
+        "actual_yield_kg":   actual_yield_kg,
+        "root_rot_occurred": root_rot_occurred,
+        "observation_date":  observation_date,
+        "created_at":        datetime.now(timezone.utc).isoformat(),
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/field_observations",
+            headers={**_HEADERS(), "Prefer": "return=representation"},
+            json=payload,
+        )
+    if resp.status_code in (200, 201):
+        rows = resp.json()
+        return rows[0]["id"] if rows else None
+    logger.error(f"Supabase save_field_observation failed: {resp.status_code} — {resp.text}")
+    return None
+
+
 async def get_latest_plot_analysis(plot_id: int) -> dict | None:
     """ดึงผลวิเคราะห์ล่าสุดของแปลง (รวม displacement + soil data สำหรับ weather alert)"""
     if not SUPABASE_URL or not SUPABASE_KEY:
