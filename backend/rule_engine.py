@@ -28,6 +28,74 @@ NDWI_SURFACE_WATER          =  0.10   # MNDWI > นี้ = มีน้ำบ�
 PREDICT_BASE_YIELD_KG       = 1500    # กก./ไร่ — ผลผลิตฐานทุเรียนหมอนทองอายุ 8+ ปี
 
 
+def calculate_root_rot_risk(data: dict) -> dict:
+    """
+    Gap 3: คะแนนความเสี่ยงรากเน่า 0-100 + level + days_to_act
+    รวมปัจจัยทั้งหมดเป็น unified score
+
+    ปัจจัย:
+      elevation_diff   → แอ่งน้ำ              +30 / +10
+      swab_index       → น้ำในโซนราก          +30 / +15
+      soil_moisture_vv → ความชื้นผิวดิน SAR   +20 / +10
+      ndvi_change      → ต้นเครียดแล้ว        +10
+      displacement     → ดินทรุด              +10
+      wetness_streak   → ดินเปียกสะสม ≥6วัน  +25 (Gap 4 bonus)
+    """
+    score = 0
+
+    elev_diff      = float(data.get("elevation_diff") or 0)
+    swab           = data.get("swab") or {}
+    swab_index     = float(swab.get("swab_index") or 0)
+    moisture_vv    = float(data.get("soil_moisture_vv") or -15)
+    ndvi_change    = float(data.get("ndvi_change") or 0)
+    displacement   = data.get("displacement") or {}
+    disp_level     = displacement.get("change_level", "low")
+    wetness_streak = data.get("wetness_streak") or {}
+
+    # 1. แอ่งน้ำ
+    if elev_diff < -1.5:
+        score += 30
+    elif elev_diff < -0.5:
+        score += 10
+
+    # 2. SWAB: น้ำในโซนราก
+    if swab_index >= SWAB_WATERLOG_THRESHOLD:    # 0.30
+        score += 30
+    elif swab_index >= SWAB_WET_THRESHOLD:       # 0.10
+        score += 15
+
+    # 3. SAR: ความชื้นผิวดิน
+    if moisture_vv > MOISTURE_WET_THRESHOLD:     # -10 dB
+        score += 20
+    elif moisture_vv > -12:
+        score += 10
+
+    # 4. NDVI: ต้นเครียดแล้ว
+    if ndvi_change < NDVI_DECLINE_THRESHOLD:     # -0.10
+        score += 10
+
+    # 5. Displacement: ดินทรุด
+    if disp_level == "high":
+        score += 10
+
+    # 6. SAR wetness streak: ดินเปียกสะสม ≥6 วัน (Gap 4 bonus +25)
+    if wetness_streak.get("is_prolonged"):
+        score += 25
+
+    score = min(100, score)
+
+    if score >= 70:
+        level, days_to_act = "critical", 1
+    elif score >= 50:
+        level, days_to_act = "warning", 3
+    elif score >= 30:
+        level, days_to_act = "watch", 7
+    else:
+        level, days_to_act = "safe", None
+
+    return {"score": score, "level": level, "days_to_act": days_to_act}
+
+
 def predict_yield(ndvi_now: float, topsoil_risk_level: str,
                   elevation_diff: float) -> int:
     """
@@ -49,44 +117,6 @@ def predict_yield(ndvi_now: float, topsoil_risk_level: str,
         base *= 0.90   # -10%
 
     return round(base)
-
-
-def calculate_root_rot_risk(data: dict) -> dict:
-    """
-    คะแนนความเสี่ยงรากเน่า 0-100 รวมทุกปัจจัย
-    คืน: { "score", "level": critical/warning/watch/safe, "days_to_act" }
-    """
-    score = 0
-
-    if data.get("elevation_diff", 0) < -1.5:
-        score += 30
-    swab_idx = data.get("swab", {}).get("swab_index", 0)
-    if swab_idx > 0.30:
-        score += 30
-    if data.get("soil_moisture_vv", -15) > -10:
-        score += 20
-    if data.get("ndvi_change", 0) < -0.10:
-        score += 10
-    if data.get("displacement", {}).get("change_level") == "high":
-        score += 10
-
-    # Bonus จาก wetness streak (Gap 4)
-    ws = data.get("wetness_streak", {})
-    if ws.get("is_prolonged") and swab_idx > 0.10:
-        score += 25
-
-    score = min(100, score)
-
-    if score >= 80:
-        level, days = "critical", 1
-    elif score >= 60:
-        level, days = "warning", 2
-    elif score >= 40:
-        level, days = "watch", 5
-    else:
-        level, days = "safe", 14
-
-    return {"score": score, "level": level, "days_to_act": days}
 
 
 def format_message(data: dict, lat: float, lng: float) -> str:
