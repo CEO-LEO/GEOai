@@ -516,8 +516,79 @@ class FieldObservation(BaseModel):
     observation_date:   str
 
 
+@app.post("/admin/seed-nayaiam", dependencies=[Depends(verify_admin)])
+async def seed_nayaiam():
+    """Seed 5-year historical test data for Na Yai Am durian garden"""
+    import random, httpx as _httpx
+    from datetime import datetime, timezone, timedelta
+
+    SUPA_URL = os.environ.get("SUPABASE_URL", "")
+    SUPA_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not SUPA_URL or not SUPA_KEY:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+    USER_ID = "U211bed9a05c229e9775c133e13f95117"
+    LAT, LNG = 12.9648, 101.9669
+    random.seed(2024)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    records = []
+
+    for i in range(20):
+        dt = now - timedelta(days=90 * i)
+        month = dt.month
+        is_rainy = 5 <= month <= 10
+        trend = i / 20.0
+        base = 0.62 if is_rainy else 0.44
+        base -= trend * 0.08
+        ndvi_now = round(base + random.uniform(-0.04, 0.04), 3)
+        ndvi_prev = round(ndvi_now - random.uniform(-0.06, 0.06), 3)
+        ndvi_change = round(ndvi_now - ndvi_prev, 3)
+        moisture = round(random.uniform(-12, -9) if is_rainy else random.uniform(-17, -13), 1)
+        elev = round(random.uniform(45, 55), 1)
+        elev_diff = round(random.uniform(-0.8, 0.8), 1)
+        stability = round(random.uniform(0.75, 0.95), 2)
+        fert_n = round(random.uniform(0.6, 1.0), 2)
+        fert_p = round(random.uniform(0.2, 0.4), 2)
+        fert_k = round(random.uniform(0.8, 1.2), 2)
+        fert_ca = round(random.uniform(0.15, 0.30), 2)
+        fert_mg = round(random.uniform(0.08, 0.18), 2)
+        is_harvest = month in (12, 1, 2, 3)
+        yield_kg = random.randint(1100, 1500) if is_harvest else random.randint(800, 1200)
+        yield_q = "high" if yield_kg > 1300 else ("medium" if yield_kg > 1000 else "low")
+        label = "ดีมาก" if ndvi_now > 0.60 else ("ดี" if ndvi_now > 0.45 else "ปานกลาง")
+        season = "หน้าฝน" if is_rainy else "หน้าแล้ง"
+        msg = (f"แปลงทุเรียนนายายอาม {dt.strftime('%b %Y')} | NDVI={ndvi_now:.3f}({label}) {season} | "
+               f"ความชื้น={moisture}dB | ผลผลิต={yield_kg}กก./ไร่ | ปุ๋ย N={fert_n} P={fert_p} K={fert_k}")
+        records.append({
+            "user_id": USER_ID, "lat": LAT, "lng": LNG,
+            "ndvi_now": ndvi_now, "ndvi_prev": ndvi_prev, "ndvi_change": ndvi_change,
+            "soil_moisture_vv": moisture, "elevation": elev, "elevation_diff": elev_diff,
+            "displacement_vv_change": round(random.uniform(-1.2, 0.5), 2),
+            "displacement_vh_change": round(random.uniform(-0.9, 0.4), 2),
+            "surface_stability": stability,
+            "displacement_level": "low" if stability > 0.80 else "medium",
+            "fertilizer_n": fert_n, "fertilizer_p": fert_p, "fertilizer_k": fert_k,
+            "fertilizer_ca": fert_ca, "fertilizer_mg": fert_mg, "fertilizer_level": "maintenance",
+            "yield_estimated_kg": yield_kg, "yield_quality": yield_q,
+            "land_impact_severity": "low", "land_impact_score": random.randint(10, 30),
+            "message": msg, "created_at": dt.isoformat(),
+        })
+
+    records.sort(key=lambda r: r["created_at"])
+    headers = {
+        "apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}",
+        "Content-Type": "application/json", "Prefer": "return=minimal",
+    }
+    async with _httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(f"{SUPA_URL}/rest/v1/analyses", headers=headers, json=records)
+
+    if resp.status_code in (200, 201):
+        logger.info(f"Seeded {len(records)} Na Yai Am records")
+        return {"status": "ok", "inserted": len(records), "range": f"{records[0]['created_at'][:7]} → {records[-1]['created_at'][:7]}"}
+    raise HTTPException(status_code=500, detail=f"Supabase error {resp.status_code}: {resp.text[:200]}")
+
+
 @app.post("/admin/feedback", dependencies=[Depends(verify_admin)])
-async def admin_feedback(req: FieldObservation):
     """Gap 5: บันทึก field observation จริงจากเกษตรกร — ใช้ retrain ML model"""
     obs_id = await save_field_observation(
         req.plot_id, req.actual_yield_kg,

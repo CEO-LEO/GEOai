@@ -264,7 +264,7 @@ def _main_menu() -> dict:
 
 
 def _liff_button() -> dict:
-    liff_url = os.environ.get("LIFF_URL") or "https://iamroot.onrender.com/liff/"
+    liff_url = os.environ.get("LIFF_URL") or "https://liff.line.me/2010580115-di08GvXS"
     return {
         "type": "flex",
         "altText": "กดเพื่อปักหมุดแปลงของคุณ",
