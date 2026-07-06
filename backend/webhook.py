@@ -210,7 +210,7 @@ def _main_menu() -> dict:
                         "type": "text",
                         "text": "เลือกสิ่งที่ต้องการด้านล่าง",
                         "size": "sm",
-                        "color": "#888",
+                        "color": "#888888",
                         "margin": "sm"
                     }
                 ]
@@ -287,7 +287,7 @@ def _liff_button() -> dict:
                         "wrap": True,
                         "margin": "md",
                         "size": "sm",
-                        "color": "#555"
+                        "color": "#555555"
                     }
                 ]
             },
@@ -340,14 +340,14 @@ def _settings_menu() -> dict:
                         "text": "🔔 แจ้งเตือนรายสัปดาห์",
                         "weight": "bold",
                         "size": "sm",
-                        "color": "#333"
+                        "color": "#333333"
                     },
                     {
                         "type": "text",
                         "text": "ระบบจะสแกนแปลงของคุณทุกวันจันทร์ 07:00 น.\nและแจ้งเตือนหากพบความเสี่ยงหรือฝนหนักกำลังจะมา",
                         "wrap": True,
                         "size": "sm",
-                        "color": "#666",
+                        "color": "#666666",
                         "margin": "sm"
                     }
                 ]
