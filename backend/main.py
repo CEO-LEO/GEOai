@@ -589,6 +589,7 @@ async def seed_nayaiam():
 
 
 @app.post("/admin/feedback", dependencies=[Depends(verify_admin)])
+async def save_feedback(req: FieldObservation):
     """Gap 5: บันทึก field observation จริงจากเกษตรกร — ใช้ retrain ML model"""
     obs_id = await save_field_observation(
         req.plot_id, req.actual_yield_kg,
