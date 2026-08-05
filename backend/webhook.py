@@ -8,12 +8,13 @@ LINE Webhook Handler
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import base64
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from database import get_latest_report, upsert_user, set_notify
 from flex_messages import build_result_flex
@@ -43,25 +44,45 @@ def _verify_signature(body: bytes, signature: str) -> bool:
 # ─────────────────────────────────────────────────────
 
 @router.post("/webhook")
-async def webhook(request: Request):
+async def webhook(request: Request, background: BackgroundTasks):
+    """
+    ตอบ 200 กลับ LINE ทันที แล้วค่อยประมวลผล event เบื้องหลัง
+
+    LINE รอ response ไม่เกิน ~10 วินาที ถ้าเกินจะถือว่า fail
+    และหยุดส่ง event ต่อ (บอทเงียบ) — จึงต้องไม่ทำงานหนักใน request นี้
+    """
     body      = await request.body()
     signature = request.headers.get("X-Line-Signature", "")
 
     if not _verify_signature(body, signature):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    payload = await request.json()
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        logger.warning("Webhook received invalid JSON body")
+        raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    for event in payload.get("events", []):
-        event_type = event.get("type")
-        if event_type == "message":
-            await _handle_message(event)
-        elif event_type == "postback":
-            await _handle_postback(event)
-        elif event_type == "follow":
-            await _handle_follow(event)
+    events = payload.get("events", [])
+    if events:
+        background.add_task(_process_events, events)
 
     return {"status": "ok"}
+
+
+async def _process_events(events: list):
+    """ประมวลผล event เบื้องหลัง — error ของ event หนึ่งต้องไม่ล้มทั้งชุด"""
+    for event in events:
+        event_type = event.get("type")
+        try:
+            if event_type == "message":
+                await _handle_message(event)
+            elif event_type == "postback":
+                await _handle_postback(event)
+            elif event_type == "follow":
+                await _handle_follow(event)
+        except Exception:
+            logger.exception(f"Error handling {event_type} event")
 
 
 # ─────────────────────────────────────────────────────
