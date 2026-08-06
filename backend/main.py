@@ -1,6 +1,7 @@
 import os
 import json
 import csv
+import asyncio
 import logging
 import tempfile
 import io
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import ee
-from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi import FastAPI, HTTPException, Depends, Security, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, Response
@@ -136,6 +137,98 @@ class PlotListRequest(BaseModel):
     user_id: str = Field(..., min_length=1, max_length=100)
 
 
+# ── GEE call helper ─────────────────────────────────────
+# analyze_durian_plot() ใช้ ee SDK แบบ synchronous (blocking I/O) —
+# ต้องรันใน threadpool ไม่งั้นจะบล็อก event loop ของทั้งเซิร์ฟเวอร์
+# ระหว่างรอ GEE ตอบ (พบจริงจากการทดสอบ: 11-44s ต่อ 1 คำขอ)
+#
+# เพิ่ม timeout + retry/backoff เพราะ GEE บาง request จะ throttle/ค้าง
+# นานผิดปกติเมื่อยิงถี่ต่อเนื่อง — retry แทนที่จะปล่อยให้ค้างไม่จำกัดเวลา
+GEE_CALL_TIMEOUT_S   = 40
+GEE_MAX_RETRIES      = 2
+GEE_RETRY_BACKOFF_S  = [3, 8]
+
+
+class NoSatelliteDataError(Exception):
+    """
+    analyze_durian_plot() ไม่ raise error แม้พิกัดไม่มีข้อมูลดาวเทียมเลย (เช่น
+    กลางทะเล/ขั้วโลก) — แต่ละ metric จะ fallback เป็นค่า default ของตัวเอง
+    (_safe_getInfo) แล้วคืนผลลัพธ์แบบ "สำเร็จ" ที่เป็นข้อมูลปลอมล้วนๆ แทน
+    (พบจากการทดสอบจริง: ยิง lat=0,lng=0 ได้ 200 OK พร้อมคำแนะนำปุ๋ยปลอม ทั้งที่
+    เป็นกลางทะเล) จุดสังเกต: NDVI และ elevation จะ default เป็น 0.0 พร้อมกัน
+    เสมอเมื่อไม่มีข้อมูลจริงเลย (พืชจริงแทบไม่มีทาง NDVI=0.000 พอดี) — ใช้ค่านี้
+    เป็นลายนิ้วมือตรวจจับแทนการเชื่อผลลัพธ์ที่ได้มาตรงๆ
+    """
+    pass
+
+
+def _looks_like_no_data(data: dict) -> bool:
+    return (data.get("ndvi_now") == 0.0
+            and data.get("ndvi_prev") == 0.0
+            and data.get("elevation") == 0.0)
+
+
+async def _run_gee_analysis(lat: float, lng: float,
+                            polygon: list[list[float]] | None = None) -> dict:
+    last_exc: Exception | None = None
+    for attempt in range(GEE_MAX_RETRIES + 1):
+        try:
+            result = await asyncio.wait_for(
+                run_in_threadpool(analyze_durian_plot, lat, lng, polygon=polygon),
+                timeout=GEE_CALL_TIMEOUT_S,
+            )
+            if _looks_like_no_data(result):
+                raise NoSatelliteDataError(f"No satellite data for lat={lat} lng={lng}")
+            return result
+        except NoSatelliteDataError:
+            raise  # ไม่มีข้อมูลจริง — retry ไปก็ไม่ช่วย ให้ fail ทันที
+        except asyncio.TimeoutError as e:
+            last_exc = e
+            logger.warning(
+                f"GEE call timed out after {GEE_CALL_TIMEOUT_S}s "
+                f"(attempt {attempt + 1}/{GEE_MAX_RETRIES + 1}) lat={lat} lng={lng}"
+            )
+        except ee.EEException as e:
+            last_exc = e
+            logger.warning(
+                f"GEE error (attempt {attempt + 1}/{GEE_MAX_RETRIES + 1}) "
+                f"lat={lat} lng={lng}: {e}"
+            )
+        if attempt < GEE_MAX_RETRIES:
+            await asyncio.sleep(GEE_RETRY_BACKOFF_S[attempt])
+    raise last_exc
+
+
+# คำที่มักปรากฏใน error เมื่อพิกัดไม่มีข้อมูลดาวเทียมครอบคลุม (กลางทะเล/ขั้วโลก/
+# นอกพื้นที่ที่ดาวเทียมสแกนถึง) — พบจากการทดสอบจริงว่า Sentinel band บางตัว
+# (VV, VH, NDVI, BSI, NDWI, VV_stdDev) จะขาดหายไปในพื้นที่แบบนี้
+_NO_DATA_HINTS = ("does not contain key", "no bands", "empty", "not found")
+
+
+def _gee_failure_detail(exc: Exception) -> tuple[int, str]:
+    """แปลง exception จาก GEE ให้เป็นข้อความที่เป็นมิตรและช่วยแก้ปัญหาได้จริง"""
+    if isinstance(exc, NoSatelliteDataError):
+        return 422, (
+            "พิกัดนี้ไม่มีข้อมูลภาพถ่ายดาวเทียม — ตำแหน่งอาจอยู่กลางทะเล ขั้วโลก "
+            "หรือนอกพื้นที่ที่ดาวเทียมสำรวจ กรุณาตรวจสอบตำแหน่งปักหมุดว่าอยู่ในแปลงจริง"
+        )
+    if isinstance(exc, asyncio.TimeoutError):
+        return 504, (
+            "ดึงข้อมูลดาวเทียมสำหรับพิกัดนี้ไม่สำเร็จ อาจเป็นเพราะตำแหน่งอยู่กลางทะเล "
+            "หรือนอกพื้นที่ที่ดาวเทียมมีข้อมูลครอบคลุม กรุณาตรวจสอบตำแหน่งปักหมุดว่าอยู่ในแปลงจริง "
+            "แล้วลองวิเคราะห์ใหม่อีกครั้ง"
+        )
+    if isinstance(exc, ee.EEException):
+        msg = str(exc).lower()
+        if any(hint in msg for hint in _NO_DATA_HINTS):
+            return 502, (
+                "ไม่พบข้อมูลภาพถ่ายดาวเทียมสำหรับพิกัดนี้ พื้นที่นี้อาจอยู่กลางทะเล "
+                "หรือนอกเขตที่ระบบรองรับ กรุณาตรวจสอบพิกัดที่ปักหมุดอีกครั้ง"
+            )
+        return 502, "ไม่สามารถดึงข้อมูลดาวเทียมได้ในขณะนี้ กรุณาลองใหม่อีกครั้งในภายหลัง"
+    return 500, "เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง"
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "GEOai", "cache": cache_stats()}
@@ -171,7 +264,7 @@ async def liff_config():
 async def analyze(req: AnalysisRequest):
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
     try:
-        data     = analyze_durian_plot(req.lat, req.lng, polygon=req.polygon)
+        data     = await _run_gee_analysis(req.lat, req.lng, polygon=req.polygon)
         message  = format_message(data, req.lat, req.lng)
         flex     = build_result_flex(data, req.lat, req.lng, message)
 
@@ -183,27 +276,35 @@ async def analyze(req: AnalysisRequest):
         await send_line_message(req.user_id, message, flex=flex)
         await save_analysis(req.user_id, data, message, plot_id=plot_id)
         return {"status": "ok", "plot_id": plot_id, "data": data}
-    except ee.EEException as e:
-        logger.error(f"GEE error: {e}")
-        raise HTTPException(status_code=502, detail="ไม่สามารถดึงข้อมูลดาวเทียมได้ในขณะนี้")
+    except (asyncio.TimeoutError, ee.EEException, NoSatelliteDataError) as e:
+        logger.error(f"GEE failure: lat={req.lat} lng={req.lng}: {e}")
+        status_code, detail = _gee_failure_detail(e)
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน")
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง")
 
 
 @app.get("/analyze/preview")
-async def analyze_preview(lat: float, lng: float):
+async def analyze_preview(
+    lat: float = Query(..., ge=-90, le=90),
+    lng: float = Query(..., ge=-180, le=180),
+):
     """
     GET endpoint สำหรับทดสอบวิเคราะห์เร็ว (ไม่บันทึก DB / ไม่ส่ง LINE)
     ใช้: /analyze/preview?lat=12.61&lng=102.10
     """
     try:
-        data    = analyze_durian_plot(lat, lng)
+        data    = await _run_gee_analysis(lat, lng)
         message = format_message(data, lat, lng)
         return {"status": "ok", "data": data, "message": message}
+    except (asyncio.TimeoutError, ee.EEException, NoSatelliteDataError) as e:
+        logger.error(f"GEE failure: lat={lat} lng={lng}: {e}")
+        status_code, detail = _gee_failure_detail(e)
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
         logger.error(f"Preview error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง")
 
 
 @app.get("/weather-alert/preview")

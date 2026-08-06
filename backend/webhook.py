@@ -24,6 +24,9 @@ router = APIRouter()
 
 LINE_API    = "https://api.line.me/v2/bot/message/reply"
 
+_DB_DOWN = ("⚠️ ระบบฐานข้อมูลขัดข้องชั่วคราว ยังใช้งานส่วนอื่นได้ตามปกติ\n"
+            "กรุณาลองใหม่อีกครั้งภายหลังครับ 🙏")
+
 
 # ─────────────────────────────────────────────────────
 # Signature verification (ป้องกัน request ปลอม)
@@ -85,26 +88,48 @@ async def _process_events(events: list):
             logger.exception(f"Error handling {event_type} event")
 
 
+async def _safe(fn, *args) -> bool:
+    """
+    เรียกงานที่ 'ไม่จำเป็น' (เช่นเขียน DB) แบบไม่ให้ล้มการตอบข้อความ
+
+    ถ้า Supabase ล่มหรือ resolve ไม่ได้ บอทต้องยังตอบเกษตรกรได้ตามปกติ
+    คืน True เมื่อสำเร็จ, False เมื่อพัง (log ไว้แล้ว)
+    """
+    try:
+        await fn(*args)
+        return True
+    except Exception:
+        logger.exception(f"non-fatal: {fn.__name__} failed")
+        return False
+
+
 # ─────────────────────────────────────────────────────
 # Event handlers
 # ─────────────────────────────────────────────────────
 
 async def _handle_follow(event: dict):
-    """ผู้ใช้ Add LINE OA → บันทึก user + ส่ง welcome message"""
+    """ผู้ใช้ Add LINE OA → ส่ง welcome message ก่อน แล้วค่อยบันทึก user"""
     reply_token = event["replyToken"]
     user_id     = event["source"]["userId"]
-    profile     = await _get_profile(user_id)
+
+    await _reply(reply_token, [_welcome_message()])   # ตอบก่อนเสมอ
+
+    profile = None
+    try:
+        profile = await _get_profile(user_id)
+    except Exception:
+        logger.exception("non-fatal: _get_profile failed")
     display_name = profile.get("displayName", "") if profile else ""
-    await upsert_user(user_id, display_name)
-    await _reply(reply_token, [_welcome_message()])
+    await _safe(upsert_user, user_id, display_name)
 
 
 async def _handle_message(event: dict):
-    """ผู้ใช้ส่งข้อความ → upsert user + ส่ง main menu"""
+    """ผู้ใช้ส่งข้อความ → ส่ง main menu ก่อน แล้วค่อย upsert user"""
     reply_token = event["replyToken"]
     user_id     = event["source"]["userId"]
-    await upsert_user(user_id)
-    await _reply(reply_token, [_main_menu()])
+
+    await _reply(reply_token, [_main_menu()])         # ตอบก่อนเสมอ
+    await _safe(upsert_user, user_id)
 
 
 async def _handle_postback(event: dict):
@@ -117,7 +142,12 @@ async def _handle_postback(event: dict):
         await _reply(reply_token, [_liff_button()])
 
     elif data == "action=history":
-        report = await get_latest_report(user_id)
+        try:
+            report = await get_latest_report(user_id)
+        except Exception:
+            logger.exception("get_latest_report failed")
+            await _reply(reply_token, [{"type": "text", "text": _DB_DOWN}])
+            return
         if report:
             from rule_engine import format_message
             plain = format_message(report, report["lat"], report["lng"])
@@ -131,17 +161,19 @@ async def _handle_postback(event: dict):
         await _reply(reply_token, [_settings_menu()])
 
     elif data == "action=notify_on":
-        await set_notify(user_id, True)
+        ok = await _safe(set_notify, user_id, True)
         await _reply(reply_token, [{
             "type": "text",
             "text": "🔔 เปิดการแจ้งเตือนรายสัปดาห์แล้ว\nคุณจะได้รับรายงานทุกวันจันทร์ 07:00 น. หากตรวจพบความเสี่ยง 🌿"
+                    if ok else _DB_DOWN
         }])
 
     elif data == "action=notify_off":
-        await set_notify(user_id, False)
+        ok = await _safe(set_notify, user_id, False)
         await _reply(reply_token, [{
             "type": "text",
             "text": "🔕 ปิดการแจ้งเตือนรายสัปดาห์แล้ว\nคุณยังสามารถตรวจสอบแปลงเองตลอดเวลา ✅"
+                    if ok else _DB_DOWN
         }])
 
     elif data == "action=help":
