@@ -8,7 +8,7 @@ v2: เพิ่ม Land Displacement Detection, Fertilizer Recommendation, Yiel
 
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import ee
 from cache import get_cached, set_cached
 from rule_engine import predict_yield, calculate_root_rot_risk
@@ -199,6 +199,81 @@ def get_sar_wetness_streak(lat: float, lng: float) -> dict:
         wetness_days = 0
 
     return {"wetness_days": wetness_days, "is_prolonged": wetness_days >= 6}
+
+
+# ─── WeatherNext (Google DeepMind AI forecast, via Earth Engine) ─────
+# ต้องขอสิทธิ์เข้าถึง dataset ก่อน (WeatherNext Data Request form) —
+# ถ้ายังไม่ได้รับอนุมัติ ee.ImageCollection(...) หรือ getInfo() จะ raise
+# ee.EEException (permission denied) — ให้ caller (weather_alert.get_7day_rain)
+# จับแล้ว fallback ไป Open-Meteo แทน ไม่ต้อง retry เพราะ permission error
+# ไม่ใช่ปัญหาชั่วคราวที่ retry แล้วจะหาย
+WEATHERNEXT_COLLECTION = "projects/gcp-public-data-weathernext/assets/weathernext_2_0_0_mean"
+
+
+def get_weathernext_rain_forecast(lat: float, lng: float, days: int = 7) -> dict:
+    """
+    พยากรณ์ฝนล่วงหน้าจาก Google DeepMind WeatherNext 2 (ensemble mean, ผ่าน Earth Engine)
+    คืนรูปแบบเดียวกับ weather_alert.WeatherForecast
+
+    ความละเอียดพื้นที่: 0.25° (~27.8 กม./จุด) — หยาบกว่า point-forecast ทั่วไปมาก
+    เหมาะกับแนวโน้มฝนระดับภูมิภาค ไม่ใช่พยากรณ์รายจุดละเอียด อัปเดตทุก 6 ชม.
+    (00/06/12/18 UTC) ล่วงหน้าได้ถึง 15 วัน
+
+    ฟังก์ชัน sync/blocking (เรียก GEE) — ผู้เรียกต้องห่อด้วย run_in_threadpool
+    เหมือนฟังก์ชัน GEE อื่นๆ ไม่งั้นจะบล็อก event loop
+    """
+    if not _gee_ready:
+        raise RuntimeError("GEE not initialized — WeatherNext unavailable")
+
+    point = ee.Geometry.Point([lng, lat])
+
+    # หา init time ล่าสุดที่น่าจะเผยแพร่แล้ว (ย้อนหลังอย่างน้อย 6 ชม. จากรอบ
+    # 6-ชม.ปัจจุบัน กันกรณี Google ยังประมวลผล/เผยแพร่ไม่เสร็จ)
+    now = datetime.now(timezone.utc)
+    latest_init = (now - timedelta(hours=(now.hour % 6) + 6)).replace(
+        minute=0, second=0, microsecond=0)
+    init_str = latest_init.strftime("%Y-%m-%dT%H:00:00Z")
+
+    coll = (
+        ee.ImageCollection(WEATHERNEXT_COLLECTION)
+        .filter(ee.Filter.eq("start_time", init_str))
+        .filter(ee.Filter.lte("forecast_hour", days * 24))
+        .select(["total_precipitation_6hr"])
+    )
+
+    def to_feat(img):
+        val = img.reduceRegion(ee.Reducer.mean(), point, 27830).get("total_precipitation_6hr")
+        return ee.Feature(None, {"precip_m": val, "forecast_hour": img.get("forecast_hour")})
+
+    fc = _retry_gee(coll.map(to_feat).getInfo)
+    steps = fc.get("features", [])
+    if not steps:
+        raise RuntimeError(f"WeatherNext: no forecast steps for init_time={init_str}")
+
+    # รวมเป็นรายวัน (4 ช่วง 6 ชม./วัน) แปลงหน่วย เมตร → มม.
+    daily_totals: dict[int, float] = {}
+    for feat in steps:
+        props = feat["properties"]
+        fh = props.get("forecast_hour")
+        precip_mm = (props.get("precip_m") or 0.0) * 1000.0
+        if fh is None:
+            continue
+        day_idx = (int(fh) - 1) // 24
+        daily_totals[day_idx] = daily_totals.get(day_idx, 0.0) + precip_mm
+
+    daily_rain = [round(daily_totals.get(i, 0.0), 1) for i in range(days)]
+    total      = sum(daily_rain)
+    max_daily  = max(daily_rain) if daily_rain else 0.0
+    rainy_days = sum(1 for v in daily_rain if v > 5.0)
+
+    return {
+        "total_rain_mm": round(total, 1),
+        "max_daily_mm":  round(max_daily, 1),
+        "rainy_days":    rainy_days,
+        "is_heavy_rain": total >= 60.0 or max_daily >= 40.0,
+        "source":        "weathernext",
+        "init_time":     init_str,
+    }
 
 
 def _retry_gee(fn, *args, **kwargs):

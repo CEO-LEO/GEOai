@@ -7,13 +7,22 @@ weather_alert.py — ระบบแจ้งเตือนล่วงหน�
 ถูกเรียกจาก scheduler.py ทุกวันจันทร์
 """
 
+import asyncio
 import httpx
 import logging
 from typing import TypedDict
 
+from fastapi.concurrency import run_in_threadpool
+import gee_analysis
+
 logger = logging.getLogger(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+# WeatherNext (Google DeepMind AI forecast ผ่าน Earth Engine) ต้องขอสิทธิ์
+# เข้าถึง dataset ก่อน — ระหว่างรออนุมัติ (หรือถ้า reject) ระบบจะ fallback ไป
+# Open-Meteo อัตโนมัติ ไม่ต้องแก้โค้ด/deploy ใหม่เมื่อได้รับอนุมัติแล้ว
+WEATHERNEXT_TIMEOUT_S = 25
 
 # ─── Thresholds (ปรับสำหรับ อ.นายายอาม จ.จันทบุรี — ฝนสูงตลอดปี) ──────────────
 # ฝนสะสม 7 วัน (มม.) ที่ถือว่า "หนัก" — ลดจาก 80 เหลือ 60 (เพราะดินชื้นอยู่แล้ว)
@@ -39,10 +48,32 @@ class WeatherForecast(TypedDict):
     max_daily_mm:    float
     rainy_days:      int
     is_heavy_rain:   bool
+    source:          str   # "weathernext" | "open-meteo" — ใช้ debug/แสดงผลว่าข้อมูลมาจากไหน
 
 
-async def get_7day_rain(lat: float, lng: float) -> WeatherForecast:
-    """ดึงพยากรณ์ฝน 7 วันจาก Open-Meteo"""
+async def _get_7day_rain_weathernext(lat: float, lng: float) -> WeatherForecast:
+    """
+    พยากรณ์ฝน 7 วันจาก Google DeepMind WeatherNext (ผ่าน Earth Engine)
+    ไม่มี retry — ถ้าล้มเหลว (ยังไม่ได้รับสิทธิ์เข้าถึง dataset, GEE ไม่พร้อม ฯลฯ)
+    ให้ raise แล้วปล่อยให้ get_7day_rain() fallback ไป Open-Meteo ทันที
+    """
+    if not gee_analysis._gee_ready:
+        raise RuntimeError("GEE not ready")
+    result = await asyncio.wait_for(
+        run_in_threadpool(gee_analysis.get_weathernext_rain_forecast, lat, lng, 7),
+        timeout=WEATHERNEXT_TIMEOUT_S,
+    )
+    return WeatherForecast(
+        total_rain_mm = result["total_rain_mm"],
+        max_daily_mm  = result["max_daily_mm"],
+        rainy_days    = result["rainy_days"],
+        is_heavy_rain = result["is_heavy_rain"],
+        source        = "weathernext",
+    )
+
+
+async def _get_7day_rain_openmeteo(lat: float, lng: float) -> WeatherForecast:
+    """ดึงพยากรณ์ฝน 7 วันจาก Open-Meteo (ฟรี ไม่ต้องมี API key)"""
     params = {
         "latitude":         lat,
         "longitude":        lng,
@@ -67,7 +98,22 @@ async def get_7day_rain(lat: float, lng: float) -> WeatherForecast:
         max_daily_mm   = round(max_daily, 1),
         rainy_days     = rainy_days,
         is_heavy_rain  = total >= RAIN_THRESHOLD_MM or max_daily >= 40.0,
+        source         = "open-meteo",
     )
+
+
+async def get_7day_rain(lat: float, lng: float) -> WeatherForecast:
+    """
+    ดึงพยากรณ์ฝน 7 วัน — ลอง WeatherNext (Google DeepMind AI) ก่อน
+    ถ้าใช้ไม่ได้ (ยังไม่ได้รับสิทธิ์เข้าถึง/error ใดๆ) fallback ไป Open-Meteo
+    ทันทีแบบไม่มี retry เพราะ WeatherNext มีความละเอียดพื้นที่หยาบ (~27กม./จุด)
+    Open-Meteo ยังเป็นแหล่งหลักที่เชื่อถือได้และละเอียดกว่าสำหรับพยากรณ์รายจุด
+    """
+    try:
+        return await _get_7day_rain_weathernext(lat, lng)
+    except Exception as e:
+        logger.info(f"WeatherNext unavailable ({e}) — falling back to Open-Meteo")
+        return await _get_7day_rain_openmeteo(lat, lng)
 
 
 def build_rain_alert_message(forecast: WeatherForecast,
