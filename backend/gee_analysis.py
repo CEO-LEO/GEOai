@@ -100,16 +100,20 @@ def _mock_analyze(lat: float, lng: float) -> dict:
 
     # ── ใช้ฟังก์ชันจริงในการคำนวณ (logic อยู่ใน pure python ไม่ต้องใช้ GEE) ──
     fertilizer = _recommend_fertilizer(ndvi_now, ndvi_change, soil_moisture_vv, elevation_diff)
-    yield_est = _estimate_yield(ndvi_now, ndvi_change, soil_moisture_vv, elevation_diff)
+    yield_est = _estimate_yield(ndvi_now, ndvi_change, soil_moisture_vv, elevation_diff, bsi)
     land_impact = _assess_land_impact(displacement, elevation_diff, soil_moisture_vv, ndvi_change)
 
     # ── Soil Water-Air Balance (v3) ──
     swab = _calc_swab(soil_moisture_vv, bsi, elevation_diff, ndwi)
 
-    # ── Predictive AI: yield forecast (ML model → fallback to rule-based) ──
-    ml_yield = _predict_from_ml(ndvi_now, bsi, elevation_diff,
-                                swab["swab_index"], swab["soil_water_pct"]) if _ML_AVAILABLE else -1
-    predicted_yield = ml_yield if ml_yield > 0 else predict_yield(ndvi_now, topsoil_risk_level, elevation_diff)
+    # ── Yield forecast (v4): ใช้ yield_estimate (rule-based + BSI) เป็นค่าหลักเสมอ ──
+    # เดิมใช้โมเดล ML (RandomForest) เป็นหลัก แต่ backtest จริง 20 ตัวอย่างพบว่าทายสูงกว่า
+    # yield_estimate อย่างมีระบบ (+7.8% ถึง +68%, เฉลี่ย +37%) เพราะเทรนจาก logic คนละสูตร
+    # (predict_yield แบบขั้นบันได) บนข้อมูลจำลองล้วนๆ — ปิดใช้งานไว้ก่อน ไม่ลบโค้ด/โมเดล
+    # เผื่อ retrain ด้วยข้อมูลจริงจาก field_observations ในอนาคตแล้วนำกลับมาใช้
+    # ml_yield = _predict_from_ml(ndvi_now, bsi, elevation_diff,
+    #                             swab["swab_index"], swab["soil_water_pct"]) if _ML_AVAILABLE else -1
+    predicted_yield = yield_est["estimated_kg_per_rai"]
 
     # ── Mock SAR wetness streak (Gap 4) ──
     ws_seed = abs(hash(seed + 6)) % 10
@@ -285,8 +289,8 @@ def analyze_durian_plot(lat: float, lng: float,
     # ── v2: Fertilizer recommendation ──
     fertilizer = _recommend_fertilizer(ndvi_now, ndvi_change, soil_moisture_vv, elevation_diff)
 
-    # ── v2: Yield estimation ──
-    yield_est = _estimate_yield(ndvi_now, ndvi_change, soil_moisture_vv, elevation_diff)
+    # ── v2: Yield estimation (v4: เพิ่ม BSI) ──
+    yield_est = _estimate_yield(ndvi_now, ndvi_change, soil_moisture_vv, elevation_diff, bsi)
 
     # ── v2: Impact analysis from land changes ──
     land_impact = _assess_land_impact(displacement, elevation_diff, soil_moisture_vv, ndvi_change)
@@ -294,10 +298,14 @@ def analyze_durian_plot(lat: float, lng: float,
     # ── v3: Soil Water-Air Balance ──
     swab = _calc_swab(soil_moisture_vv, bsi, elevation_diff, ndwi)
 
-    # ── Predictive AI: yield forecast (ML model → fallback to rule-based) ──
-    ml_yield = _predict_from_ml(ndvi_now, bsi, elevation_diff,
-                                swab["swab_index"], swab["soil_water_pct"]) if _ML_AVAILABLE else -1
-    predicted_yield = ml_yield if ml_yield > 0 else predict_yield(ndvi_now, topsoil_risk_level, elevation_diff)
+    # ── Yield forecast (v4): ใช้ yield_estimate (rule-based + BSI) เป็นค่าหลักเสมอ ──
+    # เดิมใช้โมเดล ML (RandomForest) เป็นหลัก แต่ backtest จริง 20 ตัวอย่างพบว่าทายสูงกว่า
+    # yield_estimate อย่างมีระบบ (+7.8% ถึง +68%, เฉลี่ย +37%) เพราะเทรนจาก logic คนละสูตร
+    # (predict_yield แบบขั้นบันได) บนข้อมูลจำลองล้วนๆ — ปิดใช้งานไว้ก่อน ไม่ลบโค้ด/โมเดล
+    # เผื่อ retrain ด้วยข้อมูลจริงจาก field_observations ในอนาคตแล้วนำกลับมาใช้
+    # ml_yield = _predict_from_ml(ndvi_now, bsi, elevation_diff,
+    #                             swab["swab_index"], swab["soil_water_pct"]) if _ML_AVAILABLE else -1
+    predicted_yield = yield_est["estimated_kg_per_rai"]
 
     # ── Gap 4: SAR wetness streak ──
     wetness_streak = get_sar_wetness_streak(lat, lng)
@@ -671,14 +679,18 @@ def _recommend_fertilizer(ndvi_now: float, ndvi_change: float,
 
 
 def _estimate_yield(ndvi_now: float, ndvi_change: float,
-                    moisture_vv: float, elev_diff: float) -> dict:
+                    moisture_vv: float, elev_diff: float,
+                    bsi: float = 0.0) -> dict:
     """
-    ประเมินผลผลิตเบื้องต้น (กก./ไร่/ปี) สำหรับทุเรียนหมอนทอง
+    ประเมินผลผลิตเบื้องต้น (กก./ไร่/ปี) สำหรับทุเรียนหมอนทอง — โมเดลหลัก (v4)
 
     สมมติฐาน:
     - ทุเรียนอายุ 8+ ปี (ให้ผลผลิตเต็มที่)
     - ผลผลิตฐาน ~1,500 กก./ไร่/ปี ที่ NDVI 0.70 (สวนสมบูรณ์)
-    - ปรับด้วย factor จากสุขภาพพืช, ความชื้น, ระดับพื้นที่, แนวโน้ม
+    - ปรับด้วย factor จากสุขภาพพืช, ความชื้น, ระดับพื้นที่, แนวโน้ม, หน้าดินเปิดโล่ง (BSI)
+
+    v4: เพิ่ม BSI factor — ใช้ threshold เดียวกับ topsoil_risk_level (>0.2) เพื่อความสอดคล้อง
+    กับส่วนอื่นของระบบ (ดินเปิดโล่ง/อัดแน่น → รากดูดซึมน้ำ-ธาตุอาหารแย่ลง → ผลผลิตลด)
     """
     base = DURIAN_BASE_YIELD_KG_PER_RAI
 
@@ -713,7 +725,16 @@ def _estimate_yield(ndvi_now: float, ndvi_change: float,
     else:
         elev_factor = 1.0
 
-    total_factor = ndvi_factor * trend_factor * moisture_factor * elev_factor
+    # Factor 5 (v4): หน้าดินเปิดโล่ง (BSI) — threshold เดียวกับ topsoil_risk_level
+    # เพื่อความสอดคล้องกันทั้งระบบ ดินอัดแน่น/ไม่มีพืชคลุม → รากดูดซึมน้ำ-ธาตุอาหารแย่ลง
+    if bsi > 0.30:
+        bsi_factor = 0.80    # ดินเปิดโล่งมาก
+    elif bsi > 0.20:
+        bsi_factor = 0.90    # ดินเปิดโล่งปานกลาง
+    else:
+        bsi_factor = 1.0     # ปกติ (มีพืชคลุม)
+
+    total_factor = ndvi_factor * trend_factor * moisture_factor * elev_factor * bsi_factor
     estimated_kg = round(base * total_factor)
 
     # ── ช่วง confidence ──
@@ -746,6 +767,7 @@ def _estimate_yield(ndvi_now: float, ndvi_change: float,
             "trend":     round(trend_factor, 2),
             "moisture":  round(moisture_factor, 2),
             "elevation": round(elev_factor, 2),
+            "bsi":       round(bsi_factor, 2),
         },
     }
 
