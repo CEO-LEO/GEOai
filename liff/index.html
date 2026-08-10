@@ -763,8 +763,9 @@
     document.getElementById("grid-legend").classList.remove("show");
   }
 
-  async function showMoistureGrid() {
-    if (!polygonCoords || polygonCoords.length < 3) {
+  async function showMoistureGrid(polyOverride) {
+    const poly = polyOverride || polygonCoords;
+    if (!poly || poly.length < 3) {
       return showToast("❌ กรุณาวาดขอบเขตแปลงก่อน");
     }
     clearGridOverlay();
@@ -773,7 +774,7 @@
       const res = await fetch(`${API_URL}/analyze/grid`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ polygon: polygonCoords, spacing_m: 10 }),
+        body: JSON.stringify({ polygon: poly, spacing_m: 10 }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.detail || "วิเคราะห์ไม่สำเร็จ");
@@ -851,10 +852,10 @@
           text: `📍 ส่งพิกัดแปลง "${plotName}" เรียบร้อย\nกำลังวิเคราะห์ข้อมูลดาวเทียม รอผลใน LINE 🛰️`
         }]);
         // Show result briefly before closing
-        showResult(json.data, plotName);
+        showResult(json.data, plotName, polyCoords);
       } else {
         // Browser / dev mode — show full result
-        showResult(json.data, plotName);
+        showResult(json.data, plotName, polyCoords);
         await loadUserPlots();
         if (map) addPlotOverlays();
       }
@@ -1088,7 +1089,7 @@
   }
 
   // ─── Result Display (farmer-friendly) ──────────────
-  function showResult(data, plotName) {
+  function showResult(data, plotName, polyCoords) {
     const d = data;
     const disp = d.displacement || {};
     const fert = d.fertilizer || {};
@@ -1163,6 +1164,11 @@
         <div class="result-status" style="color:${statusColor}">${statusText}</div>
         <div class="result-coords">📍 ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)} — "${escHtml(plotName)}"</div>
       </div>
+
+      ${polyCoords && polyCoords.length >= 3 ? `
+      <div class="result-section" style="text-align:center">
+        <button id="grid-view-btn" class="btn-secondary" style="width:100%">🌊 ดูจุดน้ำขัง/ความชื้นในแปลงนี้</button>
+      </div>` : ''}
 
       <!-- สุขภาพต้นไม้ -->
       <div class="result-section">
@@ -1323,6 +1329,20 @@
     document.getElementById("modal-title").textContent = `🛰️ ผลวิเคราะห์แปลง "${plotName}"`;
     document.getElementById("modal-body").innerHTML = html;
     document.getElementById("detail-modal").classList.add("show");
+
+    const gridViewBtn = document.getElementById("grid-view-btn");
+    if (gridViewBtn) {
+      gridViewBtn.addEventListener("click", () => {
+        document.getElementById("detail-modal").classList.remove("show");
+        if (map && polyCoords && polyCoords.length >= 3) {
+          const sumLat = polyCoords.reduce((s, c) => s + c[1], 0) / polyCoords.length;
+          const sumLng = polyCoords.reduce((s, c) => s + c[0], 0) / polyCoords.length;
+          map.location({ lon: sumLng, lat: sumLat }, true);
+          map.zoom(18, true);
+        }
+        showMoistureGrid(polyCoords);
+      });
+    }
   }
 </script>
 </body>
