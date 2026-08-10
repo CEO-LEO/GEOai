@@ -859,6 +859,15 @@
         await loadUserPlots();
         if (map) addPlotOverlays();
       }
+
+      // มีขอบเขตแปลง → แสดงจุดน้ำขัง/ความชื้นบนแผนที่ทันที ไม่ต้องกดปุ่มซ้อน
+      if (map && polyCoords && polyCoords.length >= 3) {
+        const sumLat = polyCoords.reduce((s, c) => s + c[1], 0) / polyCoords.length;
+        const sumLng = polyCoords.reduce((s, c) => s + c[0], 0) / polyCoords.length;
+        map.location({ lon: sumLng, lat: sumLat }, true);
+        map.zoom(18, true);
+        await showMoistureGrid(polyCoords);
+      }
     } catch (e) {
       showToast("❌ เกิดข้อผิดพลาด: " + e.message);
     } finally {
@@ -1166,8 +1175,8 @@
       </div>
 
       ${polyCoords && polyCoords.length >= 3 ? `
-      <div class="result-section" style="text-align:center">
-        <button id="grid-view-btn" class="btn-secondary" style="width:100%">🌊 ดูจุดน้ำขัง/ความชื้นในแปลงนี้</button>
+      <div class="result-section" style="text-align:center;color:#1a7a3c;font-size:13px">
+        🌊 ปักจุดน้ำขัง/ความชื้นบนแผนที่แล้ว — ปิดหน้าต่างนี้เพื่อดู แล้วแตะจุดสีเพื่อดูรายละเอียด
       </div>` : ''}
 
       <!-- สุขภาพต้นไม้ -->
@@ -1329,20 +1338,6 @@
     document.getElementById("modal-title").textContent = `🛰️ ผลวิเคราะห์แปลง "${plotName}"`;
     document.getElementById("modal-body").innerHTML = html;
     document.getElementById("detail-modal").classList.add("show");
-
-    const gridViewBtn = document.getElementById("grid-view-btn");
-    if (gridViewBtn) {
-      gridViewBtn.addEventListener("click", () => {
-        document.getElementById("detail-modal").classList.remove("show");
-        if (map && polyCoords && polyCoords.length >= 3) {
-          const sumLat = polyCoords.reduce((s, c) => s + c[1], 0) / polyCoords.length;
-          const sumLng = polyCoords.reduce((s, c) => s + c[0], 0) / polyCoords.length;
-          map.location({ lon: sumLng, lat: sumLat }, true);
-          map.zoom(18, true);
-        }
-        showMoistureGrid(polyCoords);
-      });
-    }
   }
 </script>
 </body>
