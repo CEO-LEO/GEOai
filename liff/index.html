@@ -152,6 +152,23 @@
     }
     button.btn-draw:active{ transform: scale(.96); }
     button.btn-draw.drawing { background: #c62828; box-shadow:0 3px 12px rgba(198,40,40,.35); }
+    button.btn-grid {
+      background: #0288d1; color: white; border: none;
+      padding: 12px 10px; border-radius: 12px; font-size: 13.5px;
+      font-weight: 700; cursor: pointer; flex: 1; transition: transform .12s;
+    }
+    button.btn-grid:active{ transform: scale(.96); }
+    #grid-legend {
+      display: none; flex-wrap: wrap; gap: 6px 12px;
+      margin-top: 10px; padding: 9px 11px; background: #f3f8fb;
+      border-radius: 10px; font-size: 11.5px; color: #33473b;
+    }
+    #grid-legend.show { display: flex; }
+    #grid-legend .legend-item { display: flex; align-items: center; gap: 4px; }
+    #grid-legend .legend-item i {
+      width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.1);
+    }
 
     #detail-modal {
     display: none; position: fixed; inset: 0; z-index: 9990;
@@ -367,6 +384,16 @@
       <button class="btn-draw" id="draw-btn">🔷 วาดขอบเขต</button>
       <button class="btn-primary"   id="submit-btn" disabled>🔍 ตรวจสอบแปลงนี้</button>
     </div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn-grid" id="grid-btn" disabled>🌊 จุดน้ำขังในแปลง</button>
+    </div>
+    <div id="grid-legend">
+      <span class="legend-item"><i style="background:#b71c1c"></i>แล้งวิกฤต</span>
+      <span class="legend-item"><i style="background:#fdd835"></i>แห้งเกิน</span>
+      <span class="legend-item"><i style="background:#06C755"></i>สมดุลดี</span>
+      <span class="legend-item"><i style="background:#fb8c00"></i>ชื้นเกิน</span>
+      <span class="legend-item"><i style="background:#e53935"></i>น้ำขังวิกฤต</span>
+    </div>
   </div>
 </div>
 
@@ -404,6 +431,7 @@
   let drawDots       = [];
   let drawLine       = null;
   let plotOverlays   = [];
+  let gridMarkers    = [];   // sphere.Dot[] — จุดตารางความชื้น/น้ำขัง
 
   // ─── Init ─────────────────────────────────────────
   liff.init({ liffId: LIFF_ID })
@@ -701,6 +729,7 @@
     document.getElementById("coords-display").innerHTML =
       `🔷 วาดขอบเขตแล้ว (${drawPoints.length} จุด) — ศูนย์กลาง <b>${selLat.toFixed(4)}</b>, <b>${selLng.toFixed(4)}</b>`;
     document.getElementById("submit-btn").disabled = false;
+    document.getElementById("grid-btn").disabled = false;
   }
 
   function clearDrawing() {
@@ -715,7 +744,60 @@
     isDrawing = false;
     drawBtn.textContent = "🔷 วาดขอบเขต";
     drawBtn.classList.remove("drawing");
+    document.getElementById("grid-btn").disabled = true;
+    clearGridOverlay();
   }
+
+  // ─── Moisture/waterlog grid overlay ────────────────
+  const SWAB_COLORS = {
+    waterlogged: "#e53935",
+    wet:         "#fb8c00",
+    optimal:     "#06C755",
+    dry:         "#fdd835",
+    drought:     "#b71c1c",
+  };
+
+  function clearGridOverlay() {
+    gridMarkers.forEach(d => { try { map.Overlays.remove(d); } catch {} });
+    gridMarkers = [];
+    document.getElementById("grid-legend").classList.remove("show");
+  }
+
+  async function showMoistureGrid() {
+    if (!polygonCoords || polygonCoords.length < 3) {
+      return showToast("❌ กรุณาวาดขอบเขตแปลงก่อน");
+    }
+    clearGridOverlay();
+    showSpinner("⏳ กำลังวิเคราะห์จุดความชื้นในแปลง...");
+    try {
+      const res = await fetch(`${API_URL}/analyze/grid`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ polygon: polygonCoords, spacing_m: 10 }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "วิเคราะห์ไม่สำเร็จ");
+
+      json.points.forEach(p => {
+        const dot = new sphere.Dot(
+          { lon: p.lng, lat: p.lat },
+          { lineWidth: 8, lineColor: SWAB_COLORS[p.status] || "#999" }
+        );
+        map.Overlays.add(dot);
+        gridMarkers.push(dot);
+      });
+
+      document.getElementById("grid-legend").classList.add("show");
+      const waterlogged = json.points.filter(p => p.status === "waterlogged" || p.status === "drought").length;
+      showToast(`🌊 พบ ${json.count} จุด — ${waterlogged} จุดเสี่ยง (น้ำขัง/แล้งวิกฤต)`);
+    } catch (e) {
+      showToast(`❌ ${e.message || "วิเคราะห์จุดน้ำขังไม่สำเร็จ"}`);
+    } finally {
+      hideSpinner();
+    }
+  }
+
+  document.getElementById("grid-btn").addEventListener("click", showMoistureGrid);
 
   // ─── GPS button ───────────────────────────────────
   document.getElementById("gps-btn").addEventListener("click", () => {
