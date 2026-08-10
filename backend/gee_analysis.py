@@ -698,12 +698,14 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
             "lat": round(p_lat, 6),
             "lng": round(p_lng, 6),
             "soil_moisture_vv": round(vv, 2),
+            "soil_water_pct": swab["soil_water_pct"],
             "bsi":  round(bsi, 3) if bsi is not None else None,
             "ndwi": round(ndwi, 3) if ndwi is not None else None,
             "swab_index":  swab["swab_index"],
             "status":      swab["status"],
             "status_th":   swab["status_th"],
             "severity":    swab["severity"],
+            "advice":      swab["advice"],
         })
 
     if not points:

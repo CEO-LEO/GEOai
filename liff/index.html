@@ -779,12 +779,18 @@
       if (!res.ok) throw new Error(json.detail || "วิเคราะห์ไม่สำเร็จ");
 
       json.points.forEach(p => {
-        const dot = new sphere.Dot(
+        const mk = new sphere.Marker(
           { lon: p.lng, lat: p.lat },
-          { lineWidth: 8, lineColor: SWAB_COLORS[p.status] || "#999" }
+          {
+            title: p.status_th || p.status,
+            detail: `💧 น้ำในดิน ${p.soil_water_pct ?? '-'}%  |  📍 ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}` +
+                    (p.advice ? `\n${p.advice}` : ""),
+            color: SWAB_COLORS[p.status] || "#999",
+            size: "small",
+          }
         );
-        map.Overlays.add(dot);
-        gridMarkers.push(dot);
+        map.Overlays.add(mk);
+        gridMarkers.push(mk);
       });
 
       document.getElementById("grid-legend").classList.add("show");
