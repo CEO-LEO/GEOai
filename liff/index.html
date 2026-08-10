@@ -432,6 +432,30 @@
   let drawLine       = null;
   let plotOverlays   = [];
   let gridMarkers    = [];   // sphere.Dot[] — จุดตารางความชื้น/น้ำขัง
+  let gridPointsData = [];   // ข้อมูลดิบของแต่ละจุด (lat/lng/status/...) ไว้จับคู่ตอนแตะแผนที่
+  let __onModalClose = null; // callback ที่ต้องรอให้ modal ปิดก่อนถึงจะทำงาน (ดู closeDetailModal)
+
+  // ปักจุดบนแผนที่ (sphere.Dot/Marker) ตอนที่ #detail-modal ยังเปิดคลุมจออยู่
+  // จะไม่ขึ้นบนแผนที่เลยแม้ modal จะปิดไปแล้ว (ยืนยันด้วย headless browser test —
+  // WebGL canvas ที่ถูกบัง ดูเหมือนจะดรอป render ของ overlay ที่เพิ่มระหว่างนั้น
+  // ถาวร ไม่กลับมาแม้บังคับ resize/re-zoom ทีหลัง) จึงต้องเลื่อนการ "วาด" ไปทำ
+  // หลัง modal ปิดเสมอ แม้จะ "ดึงข้อมูล" ระหว่าง modal เปิดอยู่ก็ได้ตามปกติ
+  function closeDetailModal() {
+    document.getElementById("detail-modal").classList.remove("show");
+    if (__onModalClose) {
+      const cb = __onModalClose;
+      __onModalClose = null;
+      cb();
+    }
+  }
+
+  function runAfterModalClosed(cb) {
+    if (document.getElementById("detail-modal").classList.contains("show")) {
+      __onModalClose = cb;
+    } else {
+      cb();
+    }
+  }
 
   // ─── Init ─────────────────────────────────────────
   liff.init({ liffId: LIFF_ID })
@@ -448,7 +472,16 @@
         profile ? `สวัสดี ${profile.displayName}` : "";
 
       await loadUserPlots();
+
+      // sphere.Map ต้องถูกสร้างตอนที่ container "มองเห็นอยู่" (ไม่ใช่ display:none)
+      // ไม่งั้น canvas จะได้ขนาด 0x0 ตั้งแต่แรก แล้ว overlay ที่ปักทีหลัง (จุดน้ำขัง
+      // ฯลฯ) จะไม่ขึ้นบนแผนที่เลยแม้จะ resize/สลับแท็บทีหลัง (ยืนยันด้วยการทดสอบ
+      // จริงผ่าน headless browser) — สลับไปแท็บแผนที่ชั่วคราวตอน init แล้วสลับกลับ
+      switchTab("new-plot");
       initSphereMap();
+      await new Promise(r => setTimeout(r, 500));
+      switchTab("my-plots");
+
       hideSpinner();
     });
 
@@ -578,6 +611,8 @@
         map.Event.bind(sphere.EventName.Click, (e) => {
           if (isDrawing) {
             addDrawPoint(e.lon, e.lat);
+          } else if (gridPointsData.length > 0 && showGridPointDetail(e.lat, e.lon)) {
+            // แตะตรงจุดน้ำขัง/ความชื้น → โชว์รายละเอียด ไม่ต้องปักหมุดใหม่
           } else {
             setPin(e.lat, e.lon);
           }
@@ -762,7 +797,33 @@
   function clearGridOverlay() {
     gridMarkers.forEach(d => { try { map.Overlays.remove(d); } catch {} });
     gridMarkers = [];
+    gridPointsData = [];
     document.getElementById("grid-legend").classList.remove("show");
+  }
+
+  // sphere.Marker (ใช้ title/detail popup) พังเงียบๆ เมื่อปักหลายจุดรัว — ปักได้
+  // (ไม่ throw) แต่ไม่ขึ้นบนแผนที่จริงเลย (ตรวจสอบแล้วด้วย headless browser test)
+  // sphere.Dot ใช้ pattern เดียวกับจุดวาดขอบเขต (addDrawPoint) ที่ทำงานเสถียรกว่า
+  // จึงใช้ Dot ปักจุด แล้วจับคู่ตำแหน่งที่แตะบนแผนที่กับจุดที่ใกล้ที่สุดแทน
+  // การผูก popup กับตัว marker โดยตรง
+  function findNearestGridPoint(lat, lng) {
+    let nearest = null, minDist = Infinity;
+    for (const p of gridPointsData) {
+      const d = Math.hypot(p.lat - lat, p.lng - lng);
+      if (d < minDist) { minDist = d; nearest = p; }
+    }
+    // ~0.00035° ≈ 35-39ม. ที่ละติจูดไทย — กว้างพอสำหรับแตะด้วยนิ้วบนจอมือถือ
+    return (nearest && minDist < 0.00035) ? nearest : null;
+  }
+
+  function showGridPointDetail(lat, lng) {
+    const p = findNearestGridPoint(lat, lng);
+    if (!p) return false;
+    showToast(
+      `${p.status_th || p.status}  💧${p.soil_water_pct ?? '-'}%  ` +
+      `📍${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`
+    );
+    return true;
   }
 
   async function showMoistureGrid(polyOverride) {
@@ -781,22 +842,21 @@
       const json = await res.json();
       if (!res.ok) throw new Error(json.detail || "วิเคราะห์ไม่สำเร็จ");
 
-      json.points.forEach(p => {
-        const mk = new sphere.Marker(
-          { lon: p.lng, lat: p.lat },
-          {
-            title: p.status_th || p.status,
-            detail: `💧 น้ำในดิน ${p.soil_water_pct ?? '-'}%  |  📍 ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}` +
-                    (p.advice ? `\n${p.advice}` : ""),
-            color: SWAB_COLORS[p.status] || "#999",
-            size: "small",
-          }
-        );
-        map.Overlays.add(mk);
-        gridMarkers.push(mk);
+      // ดึงข้อมูลได้ตอนนี้เลย แต่ "วาด" ลงแผนที่ต้องรอให้ #detail-modal ปิดก่อน
+      // (ดูคอมเมนต์ที่ runAfterModalClosed) ไม่งั้นจุดจะไม่ขึ้นแม้ modal จะปิดไปแล้ว
+      runAfterModalClosed(() => {
+        gridPointsData = json.points;
+        json.points.forEach(p => {
+          const dot = new sphere.Dot(
+            { lon: p.lng, lat: p.lat },
+            { lineWidth: 10, lineColor: SWAB_COLORS[p.status] || "#999" }
+          );
+          map.Overlays.add(dot);
+          gridMarkers.push(dot);
+        });
+        document.getElementById("grid-legend").classList.add("show");
       });
 
-      document.getElementById("grid-legend").classList.add("show");
       const waterlogged = json.points.filter(p => p.status === "waterlogged" || p.status === "drought").length;
       showToast(`🌊 พบ ${json.count} จุด — ${waterlogged} จุดเสี่ยง (น้ำขัง/แล้งวิกฤต)`);
     } catch (e) {
@@ -871,8 +931,12 @@
         map.resize();
         const sumLat = polyCoords.reduce((s, c) => s + c[1], 0) / polyCoords.length;
         const sumLng = polyCoords.reduce((s, c) => s + c[0], 0) / polyCoords.length;
-        map.location({ lon: sumLng, lat: sumLat }, true);
-        map.zoom(18, true);
+        // location(...,true) กับ zoom(...,true) เรียกติดกันแบบ animate ทั้งคู่ทำให้
+        // แข่งกัน — zoom ชนะแล้ว location ไม่ขยับเลย (ยืนยันด้วยการทดสอบจริง:
+        // map.location() หลังเรียกทั้งคู่ยังคงเป็นพิกัด default ไม่ใช่พิกัดแปลง)
+        // ใช้ animate=false (เปลี่ยนทันที ไม่มี transition ให้แข่งกัน) แทน
+        map.location({ lon: sumLng, lat: sumLat }, false);
+        map.zoom(18, false);
         await showMoistureGrid(polyCoords);
       }
     } catch (e) {
@@ -1001,12 +1065,9 @@
     </svg>`;
   }
 
-  document.getElementById("close-modal-btn").addEventListener("click", () => {    document.getElementById("detail-modal").classList.remove("show");
-  });
+  document.getElementById("close-modal-btn").addEventListener("click", closeDetailModal);
   document.getElementById("detail-modal").addEventListener("click", e => {
-    if (e.target === document.getElementById("detail-modal")) {
-      document.getElementById("detail-modal").classList.remove("show");
-    }
+    if (e.target === document.getElementById("detail-modal")) closeDetailModal();
   });
 
   // ─── NDVI Timeseries Chart ───────────────────────
