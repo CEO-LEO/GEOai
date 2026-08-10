@@ -307,6 +307,42 @@ async def analyze_preview(
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง")
 
 
+class GridRequest(BaseModel):
+    polygon: list[list[float]] = Field(
+        ..., min_length=3,
+        description="พิกัดขอบเขตแปลง [[lng,lat], ...] อย่างน้อย 3 จุด"
+    )
+    spacing_m: int = Field(10, ge=10, le=50, description="ระยะห่างระหว่างจุดตาราง (เมตร)")
+
+
+GRID_TIMEOUT_S = 45
+
+
+@app.post("/analyze/grid")
+async def analyze_grid(req: GridRequest):
+    """
+    วิเคราะห์ตารางจุดความชื้น/น้ำขังละเอียดภายในแปลงที่วาด — สุ่มจุดตาราง
+    ทุก spacing_m เมตร แล้วคืนค่าความชื้นดิน + สถานะน้ำขัง (SWAB) รายจุด
+    สำหรับวาดเป็น heatmap ทับแปลงในแอป
+    """
+    try:
+        points = await asyncio.wait_for(
+            run_in_threadpool(gee_analysis.get_moisture_grid, req.polygon, req.spacing_m),
+            timeout=GRID_TIMEOUT_S,
+        )
+        return {"status": "ok", "count": len(points), "spacing_m": req.spacing_m, "points": points}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="วิเคราะห์ตารางความชื้นใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ee.EEException as e:
+        logger.error(f"Grid GEE error: {e}")
+        raise HTTPException(status_code=502, detail="ไม่สามารถดึงข้อมูลดาวเทียมสำหรับตารางนี้ได้ กรุณาลองใหม่ภายหลัง")
+    except Exception as e:
+        logger.error(f"Grid analysis error: {e}")
+        raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง")
+
+
 @app.get("/weather-alert/preview")
 async def weather_alert_preview(lat: float, lng: float):
     """

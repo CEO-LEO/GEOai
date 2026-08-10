@@ -610,6 +610,108 @@ def _calc_swab(moisture_vv: float, bsi: float,
     }
 
 
+# ─── Grid analysis: จุดความชื้น/น้ำขังละเอียดภายในแปลงที่วาด ────────
+GRID_MAX_POINTS = 400       # กันแปลงใหญ่ผิดปกติยิง GEE หนักเกินไป
+GRID_MIN_SPACING_M = 10     # ต่ำกว่านี้ไม่มีประโยชน์ — ต่ำกว่าความละเอียด pixel จริงของ Sentinel-1/2
+
+
+def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[dict]:
+    """
+    สุ่มจุดตาราง (grid) ภายในขอบเขตแปลงที่ผู้ใช้วาด แล้วดึงค่าความชื้น/น้ำขัง
+    ทีละจุดแบบ batched — ยิง GEE ครั้งเดียว (image.sample) แทนที่จะวนยิงทีละจุด
+
+    คืน list ของ {"lat","lng","soil_moisture_vv","ndwi","bsi",
+                  "swab_index","status","status_th","severity"}
+
+    หมายเหตุ: ใช้ elevation_diff ของทั้งแปลง (ค่าเดียว ไม่ได้คำนวณต่อจุด) เพราะ
+    เป็นค่าที่วัดระดับ "แปลงเทียบรอบข้าง" ไม่ใช่ตัวแปรที่ต่างกันมากภายในแปลง
+    เดียวกันซึ่งมักเล็กกว่าหลักร้อยเมตร — จุดต่างกันหลักๆ มาจาก VV/BSI/NDWI จริง
+    """
+    if not _gee_ready:
+        raise RuntimeError("GEE not initialized — grid analysis unavailable")
+    if not polygon or len(polygon) < 3:
+        raise ValueError("ต้องมี polygon อย่างน้อย 3 จุด")
+
+    spacing_m = max(GRID_MIN_SPACING_M, spacing_m)
+    ee_polygon = ee.Geometry.Polygon([polygon])
+
+    # ประเมินขนาดแปลงก่อน กันแปลงใหญ่ผิดปกติสร้างจุดเป็นพัน (safety cap)
+    area_sqm = _safe_getInfo(ee_polygon.area(1), default=0.0)
+    est_points = area_sqm / (spacing_m ** 2)
+    if est_points > GRID_MAX_POINTS:
+        spacing_m = max(GRID_MIN_SPACING_M, int((area_sqm / GRID_MAX_POINTS) ** 0.5) + 1)
+        logger.warning(
+            f"Grid too dense (~{est_points:.0f} pts at {GRID_MIN_SPACING_M}m) — "
+            f"widened spacing to {spacing_m}m to stay under {GRID_MAX_POINTS} points"
+        )
+
+    today = datetime.now(timezone.utc)
+    # VV (SAR) ไม่โดนเมฆบัง ใช้ช่วงสั้นให้ค่าความชื้นเป็นปัจจุบันที่สุด
+    vv_start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    # S2 (BSI/NDWI) โดนเมฆบังได้ — หน้าฝนอาจไม่มีภาพปลอดเมฆใน 30 วัน ใช้ช่วงยาวกว่า
+    # (เท่ากับที่ analyze_durian_plot ใช้) เพิ่มโอกาสเจอภาพที่ใช้ได้
+    s2_start = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+    end_date = today.strftime("%Y-%m-%d")
+
+    # VV backscatter (ความชื้นดิน proxy)
+    vv_img = (
+        ee.ImageCollection("COPERNICUS/S1_GRD")
+        .filterBounds(ee_polygon).filterDate(vv_start, end_date)
+        .filter(ee.Filter.eq("instrumentMode", "IW"))
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+        .select("VV").mean().rename("VV")
+    )
+
+    s2 = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(ee_polygon).filterDate(s2_start, end_date)
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+    )
+    bsi_img = s2.map(lambda img: img.expression(
+        '((B11 + B4) - (B8 + B2)) / ((B11 + B4) + (B8 + B2))',
+        {'B11': img.select('B11'), 'B4': img.select('B4'),
+         'B8': img.select('B8'), 'B2': img.select('B2')}
+    ).rename("BSI")).mean()
+    ndwi_img = s2.map(lambda img: img.normalizedDifference(["B3", "B11"]).rename("NDWI")).mean()
+
+    composite = vv_img.addBands(bsi_img).addBands(ndwi_img)
+
+    samples = _retry_gee(
+        composite.addBands(ee.Image.pixelLonLat())
+        .sample(region=ee_polygon, scale=spacing_m, geometries=False)
+        .limit(GRID_MAX_POINTS)
+        .getInfo
+    )
+
+    points = []
+    for feat in samples.get("features", []):
+        props = feat["properties"]
+        p_lat = props.get("latitude")
+        p_lng = props.get("longitude")
+        vv    = props.get("VV")
+        bsi   = props.get("BSI")
+        ndwi  = props.get("NDWI")
+        if p_lat is None or p_lng is None or vv is None:
+            continue
+        swab = _calc_swab(vv, bsi or 0.0, 0.0, ndwi or -0.2)
+        points.append({
+            "lat": round(p_lat, 6),
+            "lng": round(p_lng, 6),
+            "soil_moisture_vv": round(vv, 2),
+            "bsi":  round(bsi, 3) if bsi is not None else None,
+            "ndwi": round(ndwi, 3) if ndwi is not None else None,
+            "swab_index":  swab["swab_index"],
+            "status":      swab["status"],
+            "status_th":   swab["status_th"],
+            "severity":    swab["severity"],
+        })
+
+    if not points:
+        raise RuntimeError("Grid sample returned no points — polygon may be too small for the grid spacing")
+
+    return points
+
+
 def _get_land_displacement(area, start_now, end_now, start_prev, end_prev) -> dict:
     """
     ตรวจจับการเปลี่ยนแปลงพื้นผิวดิน (Land Displacement) ด้วย Sentinel-1 SAR
