@@ -876,8 +876,11 @@
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
         setPin(lat, lon);
-        map.location({ lon: lon, lat: lat }, true);
-        map.zoom(15, true);
+        // location(...,true) + zoom(...,true) ติดกันแข่งกันเอง — zoom ชนะ
+        // location ไม่ขยับ (บั๊กเดียวกับที่เจอในปุ่ม "ตรวจสอบแปลงนี้" มาก่อน)
+        // ใช้ animate=false ทั้งคู่กันแข่งกัน
+        map.location({ lon: lon, lat: lat }, false);
+        map.zoom(15, false);
       },
       () => showToast("ไม่สามารถดึงตำแหน่งได้ กรุณาอนุญาต Location")
     );
