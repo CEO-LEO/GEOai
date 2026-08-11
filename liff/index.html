@@ -913,19 +913,21 @@
           type: "text",
           text: `📍 ส่งพิกัดแปลง "${plotName}" เรียบร้อย\nกำลังวิเคราะห์ข้อมูลดาวเทียม รอผลใน LINE 🛰️`
         }]);
-        // Show result briefly before closing
-        showResult(json.data, plotName, polyCoords);
       } else {
-        // Browser / dev mode — show full result
-        showResult(json.data, plotName, polyCoords);
         await loadUserPlots();
         if (map) addPlotOverlays();
       }
 
-      // มีขอบเขตแปลง → แสดงจุดน้ำขัง/ความชื้นบนแผนที่ทันที ไม่ต้องกดปุ่มซ้อน
-      // ต้องสลับไปแท็บ "เพิ่มแปลงใหม่" ก่อน เพราะแผนที่อยู่ในแท็บนั้น — ถ้าผู้ใช้
-      // กด "ตรวจ" จากแท็บ "แปลงของฉัน" แผนที่จะซ่อนอยู่ (สูง/กว้าง 0) มองไม่เห็นจุดที่ปัก
-      if (map && polyCoords && polyCoords.length >= 3) {
+      const hasPolygon = polyCoords && polyCoords.length >= 3;
+
+      if (hasPolygon && map) {
+        // มีขอบเขตแปลง → เอาแผนที่ + จุดน้ำขังขึ้นให้เห็นทันที "ไม่มี modal บัง"
+        // เดิมเปิด modal ผลวิเคราะห์เต็มก่อนแล้วให้ผู้ใช้ปิดเองเพื่อดูแผนที่ —
+        // จริงบนมือถือ modal สูงเกือบเต็มจอ (max-height:90dvh) เหลือพื้นที่แผนที่
+        // แค่เป็นเส้นบางๆ ด้านบน ผู้ใช้จริงมองไม่เห็นว่ามีแผนที่อยู่เลย จึงตัด
+        // modal ออกจาก flow นี้ไปเลย โชว์แค่ toast สถานะสั้นๆ แทน (รายละเอียดเต็ม
+        // ส่งไปทาง LINE อยู่แล้วถ้าเปิดจากแอป LINE)
+        const status = computeOverallStatus(json.data);
         switchTab("new-plot");
         await new Promise(r => setTimeout(r, 150));   // รอ map.resize() ให้ layout นิ่งก่อน
         map.resize();
@@ -937,7 +939,12 @@
         // ใช้ animate=false (เปลี่ยนทันที ไม่มี transition ให้แข่งกัน) แทน
         map.location({ lon: sumLng, lat: sumLat }, false);
         map.zoom(18, false);
+        showToast(`${status.icon} "${plotName}" — ${status.text} · กำลังปักจุดน้ำขัง/ความชื้น...`);
         await showMoistureGrid(polyCoords);
+      } else {
+        // ไม่มีขอบเขตแปลง (ปักหมุดจุดเดียว) — ไม่มีจุดตารางให้โชว์บนแผนที่
+        // ใช้หน้าต่างผลวิเคราะห์แบบเต็มตามเดิม
+        showResult(json.data, plotName, polyCoords);
       }
     } catch (e) {
       showToast("❌ เกิดข้อผิดพลาด: " + e.message);
@@ -1165,6 +1172,21 @@
             .replace(/"/g,"&quot;");
   }
 
+  // ── สถานะรวม (ใช้ร่วมกันระหว่าง modal เต็มและ toast แบบย่อ) ──
+  function computeOverallStatus(d) {
+    const disp = d.displacement || {};
+    const imp  = d.land_impact || {};
+    const swab = d.swab || {};
+    const topsoilRisk = d.topsoil_risk_level || 'low';
+    const isHigh = (d.ndvi_change < -0.20) || disp.change_level === "high" || imp.severity === "high" || topsoilRisk === "high" || swab.severity === "high";
+    const isMed  = (d.ndvi_change < -0.10) || disp.change_level === "medium" || imp.severity === "medium" || topsoilRisk === "medium" || swab.severity === "medium";
+    return {
+      icon:  isHigh ? "🔴" : isMed ? "🟡" : "🟢",
+      text:  isHigh ? "ต้องดูแลเร่งด่วน" : isMed ? "ควรเฝ้าระวัง" : "สวนสมบูรณ์ดี",
+      color: isHigh ? "#c62828" : isMed ? "#e65100" : "#1a7a3c",
+    };
+  }
+
   // ─── Result Display (farmer-friendly) ──────────────
   function showResult(data, plotName, polyCoords) {
     const d = data;
@@ -1177,11 +1199,7 @@
     const topsoilRisk = d.topsoil_risk_level || 'low';
 
     // ── Overall status ──
-    const isHigh = (d.ndvi_change < -0.20) || disp.change_level === "high" || imp.severity === "high" || topsoilRisk === "high" || swab.severity === "high";
-    const isMed  = (d.ndvi_change < -0.10) || disp.change_level === "medium" || imp.severity === "medium" || topsoilRisk === "medium" || swab.severity === "medium";
-    const statusIcon  = isHigh ? "🔴" : isMed ? "🟡" : "🟢";
-    const statusText  = isHigh ? "ต้องดูแลเร่งด่วน" : isMed ? "ควรเฝ้าระวัง" : "สวนสมบูรณ์ดี";
-    const statusColor = isHigh ? "#c62828" : isMed ? "#e65100" : "#1a7a3c";
+    const { icon: statusIcon, text: statusText, color: statusColor } = computeOverallStatus(d);
 
     // ── NDVI → farmer language ──
     const ndviPct = Math.round(d.ndvi_now * 100);
