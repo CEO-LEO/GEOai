@@ -840,7 +840,7 @@
         body: JSON.stringify({ polygon: poly, spacing_m: 10 }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.detail || "วิเคราะห์ไม่สำเร็จ");
+      if (!res.ok) throw new Error(friendlyErrorMessage(json.detail, "วิเคราะห์ไม่สำเร็จ"));
 
       // ดึงข้อมูลได้ตอนนี้เลย แต่ "วาด" ลงแผนที่ต้องรอให้ #detail-modal ปิดก่อน
       // (ดูคอมเมนต์ที่ runAfterModalClosed) ไม่งั้นจุดจะไม่ขึ้นแม้ modal จะปิดไปแล้ว
@@ -908,14 +908,23 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(friendlyErrorMessage(await res.text(), "ส่งข้อมูลไม่สำเร็จ"));
       const json = await res.json();
 
       if (liff.isInClient()) {
-        await liff.sendMessages([{
-          type: "text",
-          text: `📍 ส่งพิกัดแปลง "${plotName}" เรียบร้อย\nกำลังวิเคราะห์ข้อมูลดาวเทียม รอผลใน LINE 🛰️`
-        }]);
+        // sendMessages ต้องการ scope "chat_message.write" — ถ้า LIFF app ยังไม่ได้เปิด scope
+        // นี้ไว้ใน LINE Developers Console จะโยน "The permission is not in LIFF app scope"
+        // การส่งข้อความยืนยันนี้เป็นแค่ของแถม (ผลวิเคราะห์จริงถูก push เข้าแชทจาก backend
+        // อยู่แล้วไม่ว่ากรณีนี้จะสำเร็จหรือไม่) จึงห้ามให้ error ตรงนี้ทำให้ทั้งฟังก์ชันหยุด
+        // ทำงานก่อนถึงส่วนแสดงแผนที่/จุดน้ำขังด้านล่าง — ครอบ try/catch แยกไว้ต่างหาก
+        try {
+          await liff.sendMessages([{
+            type: "text",
+            text: `📍 ส่งพิกัดแปลง "${plotName}" เรียบร้อย\nกำลังวิเคราะห์ข้อมูลดาวเทียม รอผลใน LINE 🛰️`
+          }]);
+        } catch (sendErr) {
+          console.warn("liff.sendMessages failed (non-fatal):", sendErr);
+        }
       } else {
         await loadUserPlots();
         if (map) addPlotOverlays();
@@ -966,7 +975,7 @@
         `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}`,
         { method: "DELETE" }
       );
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(friendlyErrorMessage(await res.text(), "ลบไม่สำเร็จ"));
       showToast(`🗑️ ลบ "${plotName}" แล้ว`);
       await loadUserPlots();
       if (map) addPlotOverlays();
@@ -1158,6 +1167,26 @@
   }
 
   // ─── Helpers ─────────────────────────────────────
+  // แปลง error response ให้เป็นข้อความอ่านได้เสมอ — FastAPI validation error (422)
+  // ส่ง detail เป็น array ของ object มา ถ้าเอาไปใส่ตรงๆ ใน `new Error(detail)`
+  // จะได้ e.message เป็น "[object Object]" (Error() coerce object เป็น string ด้วย
+  // toString ธรรมดา) ผู้ใช้เห็นแล้วงงว่า error อะไร — ฟังก์ชันนี้แกะให้เป็นข้อความจริง
+  function friendlyErrorMessage(raw, fallback) {
+    let detail = raw;
+    if (typeof detail === "string") {
+      try { detail = JSON.parse(detail).detail ?? detail; } catch { /* ไม่ใช่ JSON ก็ใช้ตามเดิม */ }
+    }
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (Array.isArray(detail) && detail.length) {
+      return detail.map(d => (d && typeof d === "object") ? (d.msg || JSON.stringify(d)) : String(d))
+                    .join(", ");
+    }
+    if (detail && typeof detail === "object") {
+      return detail.msg || detail.message || JSON.stringify(detail);
+    }
+    return fallback;
+  }
+
   function showToast(msg) {    const t = document.getElementById("toast");
     t.textContent = msg;
     t.classList.add("show");

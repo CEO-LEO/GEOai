@@ -201,12 +201,32 @@ async def save_analysis(user_id: str, data: dict, message: str,
     if plot_id is not None:
         payload["plot_id"] = plot_id
 
+    # v5: เก็บ dict ผลวิเคราะห์ทั้งก้อนแบบดิบ (nested) ไว้ด้วย — คอลัมน์ flat ด้านบน
+    # ใช้ชื่อ/โครงสร้างต่างจาก data จริง (เช่น bsi_score vs bsi) และไม่มีที่เก็บ
+    # swab เลย ทำให้ get_latest_report() คืนค่าที่ build_result_flex() ใช้ไม่ได้ตรงๆ
+    # ต้องมี full_data ไว้ reconstruct ให้ตรงกับผลวิเคราะห์สดเป๊ะ (ดู migrate_v5.sql)
+    payload["full_data"] = data
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             f"{SUPABASE_URL}/rest/v1/analyses",
             headers=_HEADERS(),
             json=payload,
         )
+
+        # เผื่อยังไม่ได้รัน migrate_v5.sql (คอลัมน์ full_data ยังไม่มี) — ไม่ให้การบันทึก
+        # ทั้งแถวพังไปเลย ลองใหม่แบบไม่มี full_data แทน (เสีย history detail แต่ยังบันทึกได้)
+        if resp.status_code not in (200, 201) and "full_data" in payload:
+            logger.warning(
+                f"Supabase insert with full_data failed ({resp.status_code}) — "
+                f"retrying without it (ยังไม่ได้รัน migrate_v5.sql?): {resp.text}"
+            )
+            payload.pop("full_data")
+            resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/analyses",
+                headers=_HEADERS(),
+                json=payload,
+            )
 
     if resp.status_code not in (200, 201):
         logger.error(f"Supabase insert failed: {resp.status_code} — {resp.text}")
@@ -236,7 +256,24 @@ async def get_latest_report(user_id: str) -> dict | None:
         return None
 
     rows = resp.json()
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    return _reconstruct_full_report(rows[0])
+
+
+def _reconstruct_full_report(row: dict) -> dict:
+    """
+    build_result_flex()/format_message() ต้องการ dict รูปแบบ nested เหมือนผลวิเคราะห์สด
+    จาก analyze_durian_plot() (เช่น data["bsi"], data["swab"], data["yield_estimate"])
+    แต่แถวที่เก็บใน Supabase เป็นคอลัมน์ flat ชื่อไม่ตรงกัน (เช่น bsi_score) และไม่มี
+    ที่เก็บ swab เลย — ถ้ามี full_data (v5+, ดู migrate_v5.sql) ให้ใช้ก้อนนั้นแทน
+    (เก็บ nested ตรงกับของสดทุกอย่างอยู่แล้ว) ทับคอลัมน์ flat ที่มาพร้อมกัน
+    ส่วนแถวเก่าก่อน migrate_v5 (full_data เป็น null) จะได้แค่คอลัมน์ flat เหมือนเดิม
+    """
+    full_data = row.get("full_data")
+    if not full_data:
+        return row
+    return {**row, **full_data}
 
 
 async def get_all_reports(limit: int = 100) -> list[dict]:
