@@ -478,12 +478,12 @@ async def get_notifiable_users() -> set[str]:
     return {row["user_id"] for row in resp.json()}
 
 
-async def get_recent_analyses(plot_id: int, weeks: int = 3) -> list[dict]:
-    """ดึงผลวิเคราะห์ล่าสุด n สัปดาห์ สำหรับตรวจ escalation"""
+async def get_recent_analyses(plot_id: int, days: int = 10) -> list[dict]:
+    """ดึงผลวิเคราะห์ล่าสุด n วัน สำหรับตรวจ escalation (scan รายวัน)"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(weeks=weeks)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(

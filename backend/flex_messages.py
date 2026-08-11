@@ -594,10 +594,10 @@ def _build_topsoil_high_warning() -> list[dict]:
 
 
 def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str) -> dict:
-    """Flex สำหรับแจ้งเตือนรายสัปดาห์ — มี header สีส้มบอกว่าเป็น alert"""
+    """Flex สำหรับแจ้งเตือนรายวัน — มี header สีส้มบอกว่าเป็น alert"""
     base = build_result_flex(data, lat, lng, plain_text)
     # Prepend alert banner ใน body
-    base["altText"] = "⚠️ แจ้งเตือนรายสัปดาห์ — GEOai"
+    base["altText"] = "⚠️ แจ้งเตือนประจำวัน — GEOai"
     base["contents"]["body"]["contents"].insert(0, {
         "type": "box",
         "layout": "horizontal",
@@ -606,7 +606,7 @@ def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str)
         "paddingAll": "10px",
         "contents": [
             {"type": "text", "text": "⚠️", "size": "lg", "flex": 0},
-            {"type": "text", "text": "การแจ้งเตือนรายสัปดาห์ ระบบตรวจพบความผิดปกติในสวนของคุณ",
+            {"type": "text", "text": "การแจ้งเตือนประจำวัน ระบบตรวจพบความผิดปกติในสวนของคุณ",
              "size": "sm", "wrap": True, "color": "#E65100", "margin": "md"}
         ]
     })
@@ -614,13 +614,13 @@ def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str)
 
 
 def build_escalation_flex(data: dict, lat: float, lng: float,
-                          plain_text: str, consecutive_weeks: int) -> dict:
+                          plain_text: str, consecutive_days: int) -> dict:
     """
-    Flex สำหรับ escalation alert — เสี่ยงสูงต่อเนื่อง 2+ สัปดาห์
+    Flex สำหรับ escalation alert — เสี่ยงสูงต่อเนื่อง 2+ วัน
     เน้นสีแดง + เตือนซ้ำรุนแรงขึ้น
     """
     base = build_result_flex(data, lat, lng, plain_text)
-    base["altText"] = f"🚨 แจ้งเตือนฉุกเฉิน — เสี่ยงสูงต่อเนื่อง {consecutive_weeks} สัปดาห์"
+    base["altText"] = f"🚨 แจ้งเตือนฉุกเฉิน — เสี่ยงสูงต่อเนื่อง {consecutive_days} วัน"
 
     escalation_banner = {
         "type": "box",
@@ -641,7 +641,7 @@ def build_escalation_flex(data: dict, lat: float, lng: float,
                         "contents": [
                             {
                                 "type": "text",
-                                "text": f"เสี่ยงสูงต่อเนื่อง {consecutive_weeks} สัปดาห์!",
+                                "text": f"เสี่ยงสูงต่อเนื่อง {consecutive_days} วัน!",
                                 "size": "sm",
                                 "weight": "bold",
                                 "color": "#C62828",

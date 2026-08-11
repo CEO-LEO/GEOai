@@ -164,7 +164,7 @@ async def _handle_postback(event: dict):
         ok = await _safe(set_notify, user_id, True)
         await _reply(reply_token, [{
             "type": "text",
-            "text": "🔔 เปิดการแจ้งเตือนรายสัปดาห์แล้ว\nคุณจะได้รับรายงานทุกวันจันทร์ 07:00 น. หากตรวจพบความเสี่ยง 🌿"
+            "text": "🔔 เปิดการแจ้งเตือนประจำวันแล้ว\nคุณจะได้รับรายงานทุกวัน 07:00 น. หากตรวจพบความเสี่ยง 🌿"
                     if ok else _DB_DOWN
         }])
 
@@ -172,7 +172,7 @@ async def _handle_postback(event: dict):
         ok = await _safe(set_notify, user_id, False)
         await _reply(reply_token, [{
             "type": "text",
-            "text": "🔕 ปิดการแจ้งเตือนรายสัปดาห์แล้ว\nคุณยังสามารถตรวจสอบแปลงเองตลอดเวลา ✅"
+            "text": "🔕 ปิดการแจ้งเตือนประจำวันแล้ว\nคุณยังสามารถตรวจสอบแปลงเองตลอดเวลา ✅"
                     if ok else _DB_DOWN
         }])
 
@@ -390,14 +390,14 @@ def _settings_menu() -> dict:
                 "contents": [
                     {
                         "type": "text",
-                        "text": "🔔 แจ้งเตือนรายสัปดาห์",
+                        "text": "🔔 แจ้งเตือนประจำวัน",
                         "weight": "bold",
                         "size": "sm",
                         "color": "#333333"
                     },
                     {
                         "type": "text",
-                        "text": "ระบบจะสแกนแปลงของคุณทุกวันจันทร์ 07:00 น.\nและแจ้งเตือนหากพบความเสี่ยงหรือฝนหนักกำลังจะมา",
+                        "text": "ระบบจะสแกนแปลงของคุณทุกวัน 07:00 น.\nและแจ้งเตือนหากพบความเสี่ยงหรือฝนหนักกำลังจะมา",
                         "wrap": True,
                         "size": "sm",
                         "color": "#666666",

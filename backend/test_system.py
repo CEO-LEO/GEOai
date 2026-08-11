@@ -471,7 +471,7 @@ class TestI18n:
 
     def test_placeholder_formatting(self):
         from i18n import t
-        result = t("escalation.body", "th", weeks=3)
+        result = t("escalation.body", "th", days=3)
         assert "3" in result
 
     def test_missing_key_returns_key(self):

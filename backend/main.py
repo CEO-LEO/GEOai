@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
 
     scheduler = create_scheduler()
     scheduler.start()
-    logger.info("Scheduler started — weekly scan every Monday 07:00")
+    logger.info("Scheduler started — daily scan every day 07:00")
 
     yield
 
@@ -426,7 +426,7 @@ async def admin_stats(lang: Lang = "th"):
 
 @app.patch("/user/{user_id}/notify")
 async def user_notify(user_id: str, enabled: bool):
-    """เปิด/ปิดการแจ้งเตือนรายสัปดาห์"""
+    """เปิด/ปิดการแจ้งเตือนประจำวัน"""
     ok = await set_notify(user_id, enabled)
     if not ok:
         raise HTTPException(status_code=500, detail="อัพเดตการตั้งค่าไม่สำเร็จ")

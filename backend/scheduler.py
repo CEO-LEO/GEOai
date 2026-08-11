@@ -1,6 +1,6 @@
 """
 scheduler.py — ระบบแจ้งเตือนอัตโนมัติ
-  Job 1 (ทุกวันจันทร์ 07:00): สแกนแปลงทุกราย — แจ้งเตือนเมื่อเสี่ยงสูง
+  Job 1 (ทุกวัน 07:00): สแกนแปลงทุกราย — แจ้งเตือนเมื่อเสี่ยงสูง
   Job 2 (ทุกวัน 06:00): ตรวจพยากรณ์ฝน 7 วัน + ผนวกดิน — แจ้งเตือนก่อนฝนหนัก/รากเน่า
 """
 
@@ -40,7 +40,7 @@ def _is_high_risk(data: dict) -> bool:
     )
 
 
-ESCALATION_WEEKS = 2  # แจ้งเตือนฉุกเฉินถ้าเสี่ยงสูงติดต่อกัน ≥ n สัปดาห์
+ESCALATION_DAYS = 2  # แจ้งเตือนฉุกเฉินถ้าเสี่ยงสูงติดต่อกัน ≥ n วัน (scan รายวัน)
 
 
 def _count_consecutive_high_risk(analyses: list[dict]) -> int:
@@ -57,9 +57,9 @@ def _count_consecutive_high_risk(analyses: list[dict]) -> int:
 # ─────────────────────────────────────────────────
 # Main job
 # ─────────────────────────────────────────────────
-async def weekly_scan_job():
+async def daily_scan_job():
     """วิเคราะห์ทุกแปลงของทุกราย — ส่งเตือนเฉพาะกรณีเสี่ยง"""
-    logger.info("🕐 Weekly scan started")
+    logger.info("🕐 Daily scan started")
 
     # ดึง unique users จาก reports
     all_reports = await get_all_reports(limit=1000)
@@ -90,13 +90,13 @@ async def weekly_scan_job():
                                     plot_id=plot_id)
 
                 if _is_high_risk(data) and user_id in notifiable:
-                    # ── Check escalation: ติดต่อกัน ≥ ESCALATION_WEEKS ──
+                    # ── Check escalation: ติดต่อกัน ≥ ESCALATION_DAYS วัน ──
                     if plot_id:
                         recent = await get_recent_analyses(
-                            plot_id, weeks=ESCALATION_WEEKS + 1
+                            plot_id, days=ESCALATION_DAYS + 5
                         )
                         consec = _count_consecutive_high_risk(recent)
-                        if consec >= ESCALATION_WEEKS:
+                        if consec >= ESCALATION_DAYS:
                             flex = build_escalation_flex(
                                 data, lat, lng, message, consec
                             )
@@ -104,7 +104,7 @@ async def weekly_scan_job():
                             escalated += 1
                             logger.warning(
                                 f"🚨 Escalation alert: {user_id} plot {plot_id} "
-                                f"— high risk {consec} consecutive weeks"
+                                f"— high risk {consec} consecutive days"
                             )
                             continue
 
@@ -113,10 +113,10 @@ async def weekly_scan_job():
                     alerted += 1
 
         except Exception as e:
-            logger.error(f"Weekly scan failed for {user_id}: {e}")
+            logger.error(f"Daily scan failed for {user_id}: {e}")
 
     logger.info(
-        f"✅ Weekly scan done — {len(seen_users)} users, "
+        f"✅ Daily scan done — {len(seen_users)} users, "
         f"{total_plots} plots scanned, {alerted} alerts sent, "
         f"{escalated} escalations"
     )
@@ -129,11 +129,11 @@ def create_scheduler() -> AsyncIOScheduler:
     """สร้าง scheduler พร้อม jobs — เรียกจาก lifespan ใน main.py"""
     scheduler = AsyncIOScheduler(timezone="Asia/Bangkok")
 
-    # Job 1: ทุกวันจันทร์ 07:00 — สแกนความเสี่ยงดาวเทียม
+    # Job 1: ทุกวัน 07:00 — สแกนความเสี่ยงดาวเทียม
     scheduler.add_job(
-        weekly_scan_job,
-        trigger=CronTrigger(day_of_week="mon", hour=7, minute=0),
-        id="weekly_scan",
+        daily_scan_job,
+        trigger=CronTrigger(hour=7, minute=0),
+        id="daily_scan",
         replace_existing=True,
         max_instances=1,
     )

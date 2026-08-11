@@ -30,8 +30,8 @@ _STRINGS: dict[str, dict[Lang, str]] = {
     # ── Escalation alerts ──
     "escalation.title":   {"th": "⚠️ แจ้งเตือนฉุกเฉิน — ความเสี่ยงต่อเนื่อง",
                            "en": "⚠️ Escalation Alert — Persistent Risk"},
-    "escalation.body":    {"th": "แปลงของคุณมีความเสี่ยงสูงติดต่อกัน {weeks} สัปดาห์",
-                           "en": "Your plot has been at high risk for {weeks} consecutive weeks"},
+    "escalation.body":    {"th": "แปลงของคุณมีความเสี่ยงสูงติดต่อกัน {days} วัน",
+                           "en": "Your plot has been at high risk for {days} consecutive days"},
 
     # ── Time labels ──
     "time.week":          {"th": "สัปดาห์",           "en": "week(s)"},
