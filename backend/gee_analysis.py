@@ -7,6 +7,7 @@ v2: เพิ่ม Land Displacement Detection, Fertilizer Recommendation, Yiel
 """
 
 import time
+import math
 import logging
 from datetime import datetime, timedelta, timezone
 import ee
@@ -613,6 +614,31 @@ def _calc_swab(moisture_vv: float, bsi: float,
 # ─── Grid analysis: จุดความชื้น/น้ำขังละเอียดภายในแปลงที่วาด ────────
 GRID_MAX_POINTS = 400       # กันแปลงใหญ่ผิดปกติยิง GEE หนักเกินไป
 GRID_MIN_SPACING_M = 10     # ต่ำกว่านี้ไม่มีประโยชน์ — ต่ำกว่าความละเอียด pixel จริงของ Sentinel-1/2
+FLOW_ARROW_LEN_M = 12       # ความยาวเส้นลูกศรทิศทางน้ำไหลที่วาดจากแต่ละจุด (เมตร)
+FLOW_MIN_SLOPE_DEG = 1.5    # พื้นที่ลาดน้อยกว่านี้ถือว่าแบน ทิศทางไม่น่าเชื่อถือ ไม่วาดลูกศร
+
+
+def _offset_latlng(lat: float, lng: float, bearing_deg: float, distance_m: float) -> tuple[float, float]:
+    """
+    หาพิกัดปลายทางเมื่อเดินจาก (lat,lng) ไปทาง bearing_deg (0=เหนือ, 90=ตะวันออก,
+    ตามเข็มนาฬิกา — เดียวกับ convention ของ ee.Terrain.aspect) เป็นระยะ distance_m เมตร
+    ใช้สูตร spherical law of cosines แบบมาตรฐาน (แม่นยำพอสำหรับระยะไม่กี่สิบเมตร)
+    """
+    R = 6371000.0  # รัศมีโลกเฉลี่ย (เมตร)
+    lat1 = math.radians(lat)
+    lng1 = math.radians(lng)
+    brng = math.radians(bearing_deg)
+    ang_dist = distance_m / R
+
+    lat2 = math.asin(
+        math.sin(lat1) * math.cos(ang_dist) +
+        math.cos(lat1) * math.sin(ang_dist) * math.cos(brng)
+    )
+    lng2 = lng1 + math.atan2(
+        math.sin(brng) * math.sin(ang_dist) * math.cos(lat1),
+        math.cos(ang_dist) - math.sin(lat1) * math.sin(lat2)
+    )
+    return math.degrees(lat2), math.degrees(lng2)
 
 
 def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[dict]:
@@ -674,7 +700,17 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
     ).rename("BSI")).mean()
     ndwi_img = s2.map(lambda img: img.normalizedDifference(["B3", "B11"]).rename("NDWI")).mean()
 
-    composite = vv_img.addBands(bsi_img).addBands(ndwi_img)
+    # ── ทิศทางน้ำไหล (จากภูมิประเทศ SRTM) ──
+    # aspect = ทิศที่พื้นที่ลาดลง (0=เหนือ, 90=ตะวันออก, ... ตามเข็มนาฬิกา) = ทิศที่น้ำไหล
+    # slope  = ความชันเป็นองศา ใช้กรองจุดที่แบนเกินไปจนทิศทางไม่มีความหมาย
+    dem = ee.Image("USGS/SRTMGL1_003")
+    slope_img  = ee.Terrain.slope(dem).rename("SLOPE")
+    aspect_img = ee.Terrain.aspect(dem).rename("ASPECT")
+
+    composite = (
+        vv_img.addBands(bsi_img).addBands(ndwi_img)
+        .addBands(slope_img).addBands(aspect_img)
+    )
 
     samples = _retry_gee(
         composite.addBands(ee.Image.pixelLonLat())
@@ -691,9 +727,18 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
         vv    = props.get("VV")
         bsi   = props.get("BSI")
         ndwi  = props.get("NDWI")
+        slope_deg  = props.get("SLOPE")
+        aspect_deg = props.get("ASPECT")
         if p_lat is None or p_lng is None or vv is None:
             continue
         swab = _calc_swab(vv, bsi or 0.0, 0.0, ndwi or -0.2)
+
+        # ── ลูกศรทิศทางน้ำไหล: มีความหมายเฉพาะจุดที่ลาดพอสมควร ──
+        flow_to = None
+        if slope_deg is not None and slope_deg >= FLOW_MIN_SLOPE_DEG and aspect_deg is not None:
+            f_lat, f_lng = _offset_latlng(p_lat, p_lng, aspect_deg, FLOW_ARROW_LEN_M)
+            flow_to = {"lat": round(f_lat, 6), "lng": round(f_lng, 6)}
+
         points.append({
             "lat": round(p_lat, 6),
             "lng": round(p_lng, 6),
@@ -706,6 +751,8 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
             "status_th":   swab["status_th"],
             "severity":    swab["severity"],
             "advice":      swab["advice"],
+            "slope_deg":   round(slope_deg, 1) if slope_deg is not None else None,
+            "flow_to":     flow_to,
         })
 
     if not points:

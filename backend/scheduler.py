@@ -4,14 +4,16 @@ scheduler.py — ระบบแจ้งเตือนอัตโนมัต
   Job 2 (ทุกวัน 06:00): ตรวจพยากรณ์ฝน 7 วัน + ผนวกดิน — แจ้งเตือนก่อนฝนหนัก/รากเน่า
 """
 
+import asyncio
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from fastapi.concurrency import run_in_threadpool
 
 from database import (get_all_reports, save_analysis, get_user_plots,
                       get_notifiable_users, get_recent_analyses,
-                      get_latest_plot_analysis)
-from gee_analysis import analyze_durian_plot
+                      get_latest_plot_analysis, save_grid_snapshot)
+from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message
 from flex_messages import build_weekly_alert_flex, build_escalation_flex
 from line_sender import send_line_message
@@ -41,6 +43,7 @@ def _is_high_risk(data: dict) -> bool:
 
 
 ESCALATION_DAYS = 2  # แจ้งเตือนฉุกเฉินถ้าเสี่ยงสูงติดต่อกัน ≥ n วัน (scan รายวัน)
+GRID_SNAPSHOT_TIMEOUT_S = 45  # กันจุดชื้นสะสม (grid snapshot) ค้างนานเกินไปต่อแปลง
 
 
 def _count_consecutive_high_risk(analyses: list[dict]) -> int:
@@ -83,11 +86,27 @@ async def daily_scan_job():
                 lat = float(plot["lat"])
                 lng = float(plot["lng"])
                 plot_id = plot.get("id")
+                polygon = plot.get("polygon")
 
-                data    = analyze_durian_plot(lat, lng)
+                # เรียกผ่าน threadpool กัน GEE call (blocking) ค้าง event loop ทั้งตัว
+                # ระหว่างสแกน — เหมือน fix เดิมที่ทำกับ /analyze
+                data    = await run_in_threadpool(analyze_durian_plot, lat, lng)
                 message = format_message(data, lat, lng)
                 await save_analysis(user_id, data, message,
                                     plot_id=plot_id)
+
+                # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ──
+                # เฉพาะแปลงที่วาดขอบเขตไว้ (polygon) เท่านั้น ถึงจะมีตาราง grid ให้เก็บ
+                # แยก try/except ต่างหาก ไม่ให้ grid ล้มเหลวกระทบการแจ้งเตือนเสี่ยงหลักของแปลงนี้
+                if polygon and plot_id and len(polygon) >= 3:
+                    try:
+                        points = await asyncio.wait_for(
+                            run_in_threadpool(get_moisture_grid, polygon),
+                            timeout=GRID_SNAPSHOT_TIMEOUT_S,
+                        )
+                        await save_grid_snapshot(plot_id, points)
+                    except Exception as e:
+                        logger.warning(f"Grid snapshot failed for plot {plot_id}: {e}")
 
                 if _is_high_risk(data) and user_id in notifiable:
                     # ── Check escalation: ติดต่อกัน ≥ ESCALATION_DAYS วัน ──

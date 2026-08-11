@@ -34,7 +34,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
                       upsert_user, save_iot_reading, get_plot_by_id,
-                      save_field_observation)
+                      save_field_observation, get_persistent_wet_points)
 from webhook import router as webhook_router
 from scheduler import create_scheduler
 from middleware import RateLimitMiddleware
@@ -553,6 +553,18 @@ async def plot_history(user_id: str, plot_id: int, limit: int = 20):
     """ประวัติการวิเคราะห์ของแปลง (เรียงล่าสุดก่อน)"""
     rows = await get_plot_history(plot_id, limit=limit)
     return {"plot_id": plot_id, "count": len(rows), "history": rows}
+
+
+@app.get("/plots/{user_id}/{plot_id}/persistent-wet")
+async def plot_persistent_wet(user_id: str, plot_id: int, days: int = 14):
+    """
+    จุดที่ "ชื้น/น้ำขัง" ซ้ำๆ ต่อเนื่องหลายวัน (จาก grid snapshot รายวัน) —
+    สัญญาณบ่งชี้แนวโน้มทางน้ำไหลใต้ผิวดินตรงจุดนั้น ไม่ใช่แค่ฝนตกครั้งเดียว
+    ต้องมี daily_scan_job เก็บ snapshot สะสมมาแล้วอย่างน้อยไม่กี่วันถึงจะมีผล
+    """
+    days = min(max(days, 3), 90)
+    points = await get_persistent_wet_points(plot_id, days=days)
+    return {"plot_id": plot_id, "days": days, "count": len(points), "points": points}
 
 
 @app.get("/plots/{user_id}/{plot_id}/ndvi-timeseries")

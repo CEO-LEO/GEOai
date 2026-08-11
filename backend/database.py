@@ -631,3 +631,114 @@ async def get_latest_plot_analysis(plot_id: int) -> dict | None:
     if resp.status_code != 200 or not resp.json():
         return None
     return resp.json()[0]
+
+
+# ─────────────────────────────────────────────────────────
+# Grid snapshots — เก็บผลตารางความชื้น/น้ำขังรายวันของแต่ละแปลง
+# ใช้หาจุด "ชื้นซ้ำๆ ต่อเนื่อง" → บ่งชี้แนวโน้มทางน้ำไหลใต้ผิวดิน (ดู migrate_v6.sql)
+# ─────────────────────────────────────────────────────────
+
+async def save_grid_snapshot(plot_id: int, points: list[dict]) -> bool:
+    """
+    บันทึกผลตาราง grid ของแปลงหนึ่งๆ ณ เวลานี้ (1 แถวต่อ 1 จุด) — insert
+    เป็นก้อนเดียว (bulk) ไม่วนยิงทีละจุด ให้ daily_scan_job เรียกทุกวันสำหรับ
+    แปลงที่มี polygon เพื่อสะสมประวัติไว้คำนวณ persistence
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    if not points:
+        return False
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {
+            "plot_id":    plot_id,
+            "lat":        p["lat"],
+            "lng":        p["lng"],
+            "status":     p.get("status", "optimal"),
+            "swab_index": p.get("swab_index"),
+            "created_at": now_iso,
+        }
+        for p in points
+    ]
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/grid_snapshots",
+            headers=_HEADERS(),
+            json=rows,
+        )
+
+    if resp.status_code not in (200, 201):
+        logger.error(f"Supabase save_grid_snapshot failed for plot {plot_id}: "
+                     f"{resp.status_code} — {resp.text}")
+        return False
+    return True
+
+
+async def get_persistent_wet_points(
+    plot_id: int, days: int = 14, min_days_observed: int = 3, min_wet_ratio: float = 0.6
+) -> list[dict]:
+    """
+    หาจุดที่ "ชื้น/น้ำขัง" ซ้ำๆ ในหลายๆ วันที่ผ่านมา (ไม่ใช่แค่ฝนตกวันเดียวแล้วแห้ง)
+    รวมจุดจาก grid_snapshots ตาม lat/lng ที่ปัดเป็นบัคเก็ตหยาบๆ (~11ม.) เพราะจุดตาราง
+    ที่สุ่มจาก GEE แต่ละวันอาจไม่ได้พิกัดตรงเป๊ะทุก decimal เหมือนกันทุกครั้ง
+    คืนเฉพาะจุดที่สังเกตมาแล้วอย่างน้อย min_days_observed วัน และ "ชื้น/น้ำขัง"
+    ในสัดส่วน ≥ min_wet_ratio ของวันที่สังเกต — เรียงจาก wet_ratio มากไปน้อย
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/grid_snapshots",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "plot_id":    f"eq.{plot_id}",
+                "created_at": f"gte.{cutoff}",
+                "select":     "lat,lng,status,swab_index,created_at",
+            },
+        )
+    if resp.status_code != 200:
+        logger.error(f"Supabase get_persistent_wet_points failed: {resp.status_code}")
+        return []
+
+    rows = resp.json()
+    if not rows:
+        return []
+
+    WET_STATUSES = {"waterlogged", "wet"}
+    buckets: dict[tuple[float, float], dict] = {}
+    for r in rows:
+        key = (round(r["lat"], 4), round(r["lng"], 4))  # ~11ม. ที่ละติจูดไทย
+        b = buckets.setdefault(key, {"days": set(), "wet_days": 0, "swab_sum": 0.0, "swab_n": 0})
+        day = r["created_at"][:10]  # YYYY-MM-DD — นับ 1 ครั้งต่อวัน แม้มีหลาย snapshot วันเดียวกัน
+        if day in b["days"]:
+            continue
+        b["days"].add(day)
+        if r.get("status") in WET_STATUSES:
+            b["wet_days"] += 1
+        if r.get("swab_index") is not None:
+            b["swab_sum"] += r["swab_index"]
+            b["swab_n"] += 1
+
+    persistent = []
+    for (lat, lng), b in buckets.items():
+        days_observed = len(b["days"])
+        if days_observed < min_days_observed:
+            continue
+        wet_ratio = b["wet_days"] / days_observed
+        if wet_ratio < min_wet_ratio:
+            continue
+        persistent.append({
+            "lat": lat,
+            "lng": lng,
+            "days_observed": days_observed,
+            "wet_days": b["wet_days"],
+            "wet_ratio": round(wet_ratio, 2),
+            "avg_swab_index": round(b["swab_sum"] / b["swab_n"], 3) if b["swab_n"] else None,
+        })
+
+    persistent.sort(key=lambda p: p["wet_ratio"], reverse=True)
+    return persistent
