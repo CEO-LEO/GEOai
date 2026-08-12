@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import ee
-from fastapi import FastAPI, HTTPException, Depends, Security, Query
+from fastapi import FastAPI, HTTPException, Depends, Security, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, Response
@@ -36,7 +36,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       upsert_user, save_iot_reading, get_plot_by_id,
                       save_field_observation, get_persistent_wet_points)
 from webhook import router as webhook_router
-from scheduler import create_scheduler
+from scheduler import create_scheduler, daily_scan_job, rain_alert_job
 from middleware import RateLimitMiddleware
 from cache import cache_stats
 from i18n import t, Lang
@@ -689,6 +689,31 @@ class FieldObservation(BaseModel):
     actual_yield_kg:    float = Field(..., ge=0, le=10000)
     root_rot_occurred:  bool
     observation_date:   str
+
+
+@app.post("/admin/trigger/daily-scan", dependencies=[Depends(verify_admin)])
+async def trigger_daily_scan(background_tasks: BackgroundTasks):
+    """
+    เรียกงานสแกนความเสี่ยงรายวัน (daily_scan_job) ด้วยตนเอง — สำหรับผูกกับ cron
+    ภายนอก (เช่น cron-job.org) ให้ยิงมาทุกวัน 07:00 น.
+
+    เหตุผลที่ต้องมี endpoint นี้: Render free tier ให้บริการ sleep service ทิ้งหลังไม่มี
+    traffic 15 นาที — ตัวจับเวลาในโปรเซส (APScheduler) จะไม่ทำงานเลยถ้าแอปกำลังหลับ
+    อยู่พอดีตอน 07:00 (ไม่ catch-up ทีหลังด้วย) request ที่ยิงมาที่ endpoint นี้เองจะ
+    ปลุกแอปให้ตื่นก่อน (Render wake ตอนมี HTTP request เข้า) แล้วค่อยสั่งรันงานจริง
+
+    รันเป็น background task แล้วตอบกลับทันที (ไม่รอผลลัพธ์) เพราะสแกนทุกแปลงของ
+    ทุกคนอาจใช้เวลาหลายนาที ยิงยาวเกิน timeout ปกติของ cron ภายนอกได้
+    """
+    background_tasks.add_task(daily_scan_job)
+    return {"status": "started", "job": "daily_scan"}
+
+
+@app.post("/admin/trigger/rain-alert", dependencies=[Depends(verify_admin)])
+async def trigger_rain_alert(background_tasks: BackgroundTasks):
+    """เหมือน trigger_daily_scan แต่สำหรับงานแจ้งเตือนฝน (rain_alert_job) — ผูก cron ไว้ 06:00 น."""
+    background_tasks.add_task(rain_alert_job)
+    return {"status": "started", "job": "rain_alert"}
 
 
 @app.post("/admin/seed-nayaiam", dependencies=[Depends(verify_admin)])
