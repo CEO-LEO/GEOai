@@ -888,7 +888,7 @@
           if (p.flow_to) {
             const line = new sphere.Polyline(
               [{ lon: p.lng, lat: p.lat }, { lon: p.flow_to.lng, lat: p.flow_to.lat }],
-              { lineColor: "#0d47a1", lineWidth: 3 }
+              { lineColor: "#0d47a1", lineWidth: 2 }
             );
             map.Overlays.add(line);
             flowLines.push(line);

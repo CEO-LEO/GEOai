@@ -614,8 +614,12 @@ def _calc_swab(moisture_vv: float, bsi: float,
 # ─── Grid analysis: จุดความชื้น/น้ำขังละเอียดภายในแปลงที่วาด ────────
 GRID_MAX_POINTS = 400       # กันแปลงใหญ่ผิดปกติยิง GEE หนักเกินไป
 GRID_MIN_SPACING_M = 10     # ต่ำกว่านี้ไม่มีประโยชน์ — ต่ำกว่าความละเอียด pixel จริงของ Sentinel-1/2
-FLOW_ARROW_LEN_M = 12       # ความยาวเส้นลูกศรทิศทางน้ำไหลที่วาดจากแต่ละจุด (เมตร)
 FLOW_MIN_SLOPE_DEG = 1.5    # พื้นที่ลาดน้อยกว่านี้ถือว่าแบน ทิศทางไม่น่าเชื่อถือ ไม่วาดลูกศร
+# ลูกศร 1 เส้นต่อจุดตาราง (ระยะห่างเท่า spacing_m เดิม) รกจนบังจุดสีของกันเอง —
+# วาดแค่ 1 เส้นต่อ "บล็อกหยาบ" (FLOW_BUCKET_FACTOR เท่าของ spacing_m) แทน ให้ลูกศร
+# กระจายห่างพอมองเห็นทิศทางโดยรวมได้ ไม่ทับกันเป็นพรืด
+FLOW_BUCKET_FACTOR = 3.0
+FLOW_ARROW_LEN_FACTOR = 0.8  # ความยาวลูกศร = spacing_m คูณค่านี้ กันยาวจนล้ำเข้าบล็อกข้างๆ
 
 
 def _offset_latlng(lat: float, lng: float, bearing_deg: float, distance_m: float) -> tuple[float, float]:
@@ -719,6 +723,11 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
         .getInfo
     )
 
+    # ── ตั้งค่าความห่างของลูกศร (กันรกทับจุดกันเอง) ──
+    flow_bucket_deg  = (spacing_m * FLOW_BUCKET_FACTOR) / 111320.0
+    flow_arrow_len_m = spacing_m * FLOW_ARROW_LEN_FACTOR
+    used_flow_buckets: set[tuple[int, int]] = set()
+
     points = []
     for feat in samples.get("features", []):
         props = feat["properties"]
@@ -733,11 +742,15 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
             continue
         swab = _calc_swab(vv, bsi or 0.0, 0.0, ndwi or -0.2)
 
-        # ── ลูกศรทิศทางน้ำไหล: มีความหมายเฉพาะจุดที่ลาดพอสมควร ──
+        # ── ลูกศรทิศทางน้ำไหล: มีความหมายเฉพาะจุดที่ลาดพอสมควร และวาดแค่ 1 เส้น
+        # ต่อบล็อกหยาบ (ดู FLOW_BUCKET_FACTOR) กันลูกศรทึบจนบังจุดสีของกันเอง
         flow_to = None
         if slope_deg is not None and slope_deg >= FLOW_MIN_SLOPE_DEG and aspect_deg is not None:
-            f_lat, f_lng = _offset_latlng(p_lat, p_lng, aspect_deg, FLOW_ARROW_LEN_M)
-            flow_to = {"lat": round(f_lat, 6), "lng": round(f_lng, 6)}
+            bucket_key = (round(p_lat / flow_bucket_deg), round(p_lng / flow_bucket_deg))
+            if bucket_key not in used_flow_buckets:
+                used_flow_buckets.add(bucket_key)
+                f_lat, f_lng = _offset_latlng(p_lat, p_lng, aspect_deg, flow_arrow_len_m)
+                flow_to = {"lat": round(f_lat, 6), "lng": round(f_lng, 6)}
 
         points.append({
             "lat": round(p_lat, 6),
