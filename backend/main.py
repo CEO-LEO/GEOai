@@ -27,7 +27,7 @@ try:
     from ml_model import get_model_meta as _get_model_meta
 except Exception:
     _get_model_meta = None
-from rule_engine import format_message
+from rule_engine import format_message, compute_risk_level
 from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
 from database import (save_analysis, get_all_reports, save_plot,
@@ -376,6 +376,34 @@ async def weather_alert_preview(lat: float, lng: float):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _row_risk_level(r: dict) -> str:
+    """
+    ระดับความเสี่ยงรวมของแถวรายงานที่ดึงมาจาก Supabase (ใช้ร่วมกันทั้ง /admin/stats,
+    /admin/reports, /plots/.../history) — เดิมแต่ละ endpoint คำนวณเองจากคอลัมน์ flat
+    บางส่วน (ไม่รวม SWAB/BSI/land_impact เลย) ทำให้ dashboard นับ "เสี่ยงสูง/ปานกลาง"
+    ตกหล่นเทียบกับที่ LIFF แสดง (ดู formula-audit)
+
+    ลำดับความสำคัญ: full_data.overall_risk_level (คำนวณตอนวิเคราะห์สด, ครบทุกปัจจัย)
+    > คำนวณจาก full_data ทั้งก้อน (แถวหลัง migrate_v5 ที่ยังไม่มี field นี้)
+    > ประกอบจากคอลัมน์ flat เท่าที่มี (แถวเก่าก่อน migrate_v5 — ไม่มี SWAB ให้กู้คืน
+    เพราะไม่เคยถูกบันทึกไว้เลย แต่ยังรวม displacement/topsoil/land_impact ได้ครบกว่าเดิม)
+    """
+    full_data = r.get("full_data") or {}
+    overall = full_data.get("overall_risk_level")
+    if overall in ("high", "medium", "ok"):
+        return overall
+    if full_data:
+        return compute_risk_level(full_data)
+    return compute_risk_level({
+        "ndvi_change":        r.get("ndvi_change", 0),
+        "elevation_diff":     r.get("elevation_diff", 0),
+        "soil_moisture_vv":   r.get("soil_moisture_vv", -15),
+        "displacement":       {"change_level": r.get("displacement_level", "low")},
+        "topsoil_risk_level": r.get("risk_level", "low"),  # คอลัมน์ DB "risk_level" = BSI/topsoil (คนละอันกับ overall)
+        "land_impact":        {"severity": r.get("land_impact_severity", "low")},
+    })
+
+
 @app.get("/admin/stats", dependencies=[Depends(verify_admin)])
 async def admin_stats(lang: Lang = "th"):
     """สถิติรวมสำหรับ dashboard (รองรับ ?lang=en)"""
@@ -388,17 +416,7 @@ async def admin_stats(lang: Lang = "th"):
                            for k in ("total", "high_risk", "medium_risk", "ok",
                                      "unique_users", "avg_ndvi")}}
 
-    def _level(r):
-        if r.get("ndvi_change", 0) < -0.20 or \
-           (r.get("elevation_diff", 0) < -1.5 and r.get("soil_moisture_vv", 0) > -10) or \
-           r.get("displacement_level") == "high":
-            return "high"
-        if r.get("ndvi_change", 0) < -0.10 or r.get("elevation_diff", 0) < -1.5 or \
-           r.get("displacement_level") == "medium":
-            return "medium"
-        return "ok"
-
-    levels       = [_level(r) for r in reports]
+    levels       = [_row_risk_level(r) for r in reports]
     ndvi_vals    = [r["ndvi_now"] for r in reports if r.get("ndvi_now") is not None]
     unique_users = len({r["user_id"] for r in reports})
 
@@ -455,6 +473,10 @@ async def admin_failed_messages(limit: int = 50):
 async def admin_reports(limit: int = 100):
     """API สำหรับ admin dashboard ดึงรายงานทั้งหมด"""
     reports = await get_all_reports(limit=limit)
+    # แนบ risk_level ที่คำนวณแบบเดียวกับ /admin/stats ให้ dashboard อ่านตรงๆ
+    # แทนที่จะคำนวณเองฝั่ง JS (เคยเป็นสาเหตุ dashboard/LIFF ไม่ตรงกัน — ดู formula-audit)
+    for r in reports:
+        r["risk_level"] = _row_risk_level(r)
     return {"count": len(reports), "reports": reports}
 
 
@@ -552,6 +574,10 @@ async def list_plots(user_id: str):
 async def plot_history(user_id: str, plot_id: int, limit: int = 20):
     """ประวัติการวิเคราะห์ของแปลง (เรียงล่าสุดก่อน)"""
     rows = await get_plot_history(plot_id, limit=limit)
+    # เดิม LIFF คำนวณ risk badge เองจาก ndvi_change/displacement_level เท่านั้น
+    # (ไม่รวม SWAB/BSI) แนบ risk_level ที่นี่ให้ตรงกับที่อื่นทั้งระบบแทน (ดู formula-audit)
+    for r in rows:
+        r["risk_level"] = _row_risk_level(r)
     return {"plot_id": plot_id, "count": len(rows), "history": rows}
 
 

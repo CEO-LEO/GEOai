@@ -8,22 +8,23 @@ v2: เพิ่ม land displacement, fertilizer, yield estimation
 
 from typing import Literal
 
+from rule_engine import compute_risk_level
+
 
 RiskLevel = Literal["high", "medium", "ok"]
 
 
 def _risk_level(data: dict) -> RiskLevel:
-    swab = data.get("swab", {})
-    if (data["ndvi_change"] < -0.20
-            or (data["elevation_diff"] < -1.5 and data["soil_moisture_vv"] > -10)
-            or data.get("displacement", {}).get("change_level") == "high"
-            or swab.get("severity") == "high"):
-        return "high"
-    if (data["ndvi_change"] < -0.10 or data["elevation_diff"] < -1.5
-            or data.get("displacement", {}).get("change_level") == "medium"
-            or swab.get("severity") == "medium"):
-        return "medium"
-    return "ok"
+    """
+    เดิมคำนวณ threshold ซ้ำเองที่นี่ (คนละชุดกับ dashboard/LIFF/scheduler และไม่รวม
+    topsoil_risk_level/land_impact.severity เหมือนกัน) ตอนนี้ใช้ analyze_durian_plot()'s
+    overall_risk_level ตรงๆ ถ้ามี (ข้อมูลสด) ไม่งั้น fallback ไปคำนวณด้วยฟังก์ชันกลาง
+    เดียวกับที่อื่นทั้งระบบ (ดู formula-audit)
+    """
+    overall = data.get("overall_risk_level")
+    if overall in ("high", "medium", "ok"):
+        return overall
+    return compute_risk_level(data)
 
 
 _COLORS: dict[RiskLevel, dict] = {
@@ -260,7 +261,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
                     *(_build_topsoil_section(bsi, topsoil_risk)),
 
                     # AI yield prediction row
-                    *(_build_ai_yield_section(predicted_yield_kg)),
+                    *(_build_ai_yield_section(predicted_yield_kg, yield_est.get("quality"))),
 
                     # Advice
                     {
@@ -470,13 +471,27 @@ def _build_topsoil_section(bsi, topsoil_risk: str) -> list[dict]:
     ]
 
 
-def _build_ai_yield_section(predicted_yield) -> list[dict]:
-    """แถว AI คาดการณ์ผลผลิต — สีเขียว/ส้ม/แดง ตามเกณฑ์"""
+def _build_ai_yield_section(predicted_yield, quality: str | None = None) -> list[dict]:
+    """
+    แถว AI คาดการณ์ผลผลิต — สีเขียว/ส้ม/แดง ตามเกณฑ์
+
+    เดิมตัดสีจากตัวเลข กก./ไร่ เองที่นี่ (≥1500/≥1000) คนละเกณฑ์กับ quality จริงที่
+    _estimate_yield() คำนวณไว้แล้ว (≥1200/≥800) ทำให้ผลผลิตที่ระบบเรียกว่า "ดี" ขึ้น
+    เป็นสีส้ม "ปานกลาง" ในการ์ดนี้ได้ (ดู formula-audit) — ใช้ quality ตรงๆ ถ้ามี
+    ตัวเลขเกณฑ์ด้านล่างเหลือไว้แค่เป็น fallback สำหรับกรณีไม่มี quality ส่งมา
+    """
     if predicted_yield is None or predicted_yield < 0:
         return []
-    if predicted_yield >= 1500:
+    if quality is not None:
+        color, label = {
+            "high":     ("#2E7D32", "✅ ดี"),
+            "medium":   ("#E65100", "🟠 ปานกลาง"),
+            "low":      ("#C62828", "🔴 ต่ำ"),
+            "very_low": ("#C62828", "🔴 ต่ำมาก"),
+        }.get(quality, ("#555555", ""))
+    elif predicted_yield >= 1200:
         color, label = "#2E7D32", "✅ ดี"
-    elif predicted_yield >= 1000:
+    elif predicted_yield >= 800:
         color, label = "#E65100", "🟠 ปานกลาง"
     else:
         color, label = "#C62828", "🔴 ต่ำ"

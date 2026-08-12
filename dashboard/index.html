@@ -408,7 +408,12 @@
     if (v >= 0.15) return '#fb923c';
     return '#f43f5e';
   }
+  // เดิมคำนวณ threshold เองที่นี่ (ไม่รวม SWAB/BSI/land_impact เลย) ทำให้แปลงที่
+  // LIFF ขึ้นแดงเพราะน้ำขังโซนราก ยังถูกนับเป็น "ปกติ" ในหน้านี้ — ตอนนี้ backend
+  // (/admin/reports) แนบ risk_level ที่คำนวณครบทุกปัจจัยมาให้ต่อแถวแล้ว ใช้ตรงๆ
+  // (ดู formula-audit) เหลือ fallback ไว้เผื่อ field หายไปจากเหตุผลอื่น
   function riskLevel(r){
+    if (r.risk_level) return r.risk_level;
     if (r.ndvi_change < -0.20 || (r.elevation_diff < -1.5 && r.soil_moisture_vv > -10) || r.displacement_level === 'high') return 'high';
     if (r.ndvi_change < -0.10 || r.elevation_diff < -1.5 || r.displacement_level === 'medium') return 'medium';
     return 'ok';

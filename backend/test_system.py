@@ -828,12 +828,24 @@ class TestAnalyzePredictedYield:
 class TestEscalation:
     def test_count_consecutive_high_risk(self):
         from scheduler import _count_consecutive_high_risk
+        # ndvi_change ต้อง < -0.20 (NDVI_SEVERE_THRESHOLD) ถึงจะนับเป็น "high" จริง —
+        # -0.10 ถึง -0.20 เป็นแค่ "medium" (ดู formula-audit / compute_risk_level)
         analyses = [
-            {"ndvi_change": -0.15, "elevation_diff": 0, "soil_moisture_vv": -12},
-            {"ndvi_change": -0.12, "elevation_diff": 0, "soil_moisture_vv": -12},
+            {"ndvi_change": -0.25, "elevation_diff": 0, "soil_moisture_vv": -12},
+            {"ndvi_change": -0.22, "elevation_diff": 0, "soil_moisture_vv": -12},
             {"ndvi_change": 0.02, "elevation_diff": 0, "soil_moisture_vv": -14},
         ]
         assert _count_consecutive_high_risk(analyses) == 2
+
+    def test_medium_ndvi_change_is_not_counted_as_high(self):
+        """
+        Regression: scheduler._is_high_risk เคยใช้เกณฑ์ -0.10 (ระดับ "น่ากังวล/ปานกลาง")
+        แทนที่จะเป็น -0.20 (ระดับ "วิกฤต/สูง") ทำให้แจ้งเตือนไวเกินไปเทียบกับ
+        dashboard/LIFF ที่ใช้ -0.20 เป็นเกณฑ์ "สูง" เหมือนกันหมด
+        """
+        from scheduler import _is_high_risk
+        data = {"ndvi_change": -0.15, "elevation_diff": 0, "soil_moisture_vv": -12}
+        assert _is_high_risk(data) is False
 
     def test_no_escalation_when_ok(self):
         from scheduler import _count_consecutive_high_risk

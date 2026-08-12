@@ -1136,8 +1136,13 @@
          </div>` +
         rows.map(r => {
         const change  = ((r.ndvi_change || 0) * 100).toFixed(1);
-        const isHigh  = r.ndvi_change < -0.20 || r.displacement_level === 'high';
-        const isMed   = r.ndvi_change < -0.10 || r.displacement_level === 'medium';
+        // backend แนบ risk_level มาให้แล้ว (คำนวณครบ NDVI+SWAB+BSI+displacement+land_impact
+        // เหมือนหน้าผลวิเคราะห์หลัก) เดิมที่นี่เช็คแค่ NDVI/displacement เอง เบากว่า
+        // computeOverallStatus ในไฟล์เดียวกัน ทำให้ badge ประวัติกับหน้าผลจริงไม่ตรงกัน
+        const lvl     = r.risk_level || (r.ndvi_change < -0.20 || r.displacement_level === 'high' ? 'high'
+                        : r.ndvi_change < -0.10 || r.displacement_level === 'medium' ? 'medium' : 'ok');
+        const isHigh  = lvl === 'high';
+        const isMed   = lvl === 'medium';
         const cls     = isHigh ? "hist-red" : isMed ? "hist-orange" : "hist-green";
         const label   = isHigh ? "🔴 เสี่ยงสูง" : isMed ? "🟠 ปานกลาง" : "🟢 ปกติ";
         const arrow   = r.ndvi_change >= 0 ? "▲" : "▼";
@@ -1323,17 +1328,24 @@
   }
 
   // ── สถานะรวม (ใช้ร่วมกันระหว่าง modal เต็มและ toast แบบย่อ) ──
+  // เกณฑ์ด้านล่างตรงกับ compute_risk_level() ฝั่ง backend (rule_engine.py) เป๊ะ —
+  // ใช้ d.overall_risk_level ตรงๆ ถ้า backend คำนวณมาให้แล้ว (ผลวิเคราะห์สดทุกจุด
+  // มีอยู่แล้ว) เหลือสูตรด้านล่างไว้เป็น fallback สำหรับข้อมูลเก่าที่ไม่มี field นี้
   function computeOverallStatus(d) {
     const disp = d.displacement || {};
     const imp  = d.land_impact || {};
     const swab = d.swab || {};
     const topsoilRisk = d.topsoil_risk_level || 'low';
-    const isHigh = (d.ndvi_change < -0.20) || disp.change_level === "high" || imp.severity === "high" || topsoilRisk === "high" || swab.severity === "high";
-    const isMed  = (d.ndvi_change < -0.10) || disp.change_level === "medium" || imp.severity === "medium" || topsoilRisk === "medium" || swab.severity === "medium";
+    let level = d.overall_risk_level;
+    if (level !== "high" && level !== "medium" && level !== "ok") {
+      const isHigh = (d.ndvi_change < -0.20) || disp.change_level === "high" || imp.severity === "high" || topsoilRisk === "high" || swab.severity === "high";
+      const isMed  = (d.ndvi_change < -0.10) || disp.change_level === "medium" || imp.severity === "medium" || topsoilRisk === "medium" || swab.severity === "medium";
+      level = isHigh ? "high" : isMed ? "medium" : "ok";
+    }
     return {
-      icon:  isHigh ? "🔴" : isMed ? "🟡" : "🟢",
-      text:  isHigh ? "ต้องดูแลเร่งด่วน" : isMed ? "ควรเฝ้าระวัง" : "สวนสมบูรณ์ดี",
-      color: isHigh ? "#c62828" : isMed ? "#e65100" : "#1a7a3c",
+      icon:  level === "high" ? "🔴" : level === "medium" ? "🟡" : "🟢",
+      text:  level === "high" ? "ต้องดูแลเร่งด่วน" : level === "medium" ? "ควรเฝ้าระวัง" : "สวนสมบูรณ์ดี",
+      color: level === "high" ? "#c62828" : level === "medium" ? "#e65100" : "#1a7a3c",
     };
   }
 
@@ -1361,12 +1373,15 @@
     const ndviChangePct = Math.abs(d.ndvi_change * 100).toFixed(1);
 
     // ── Stability meter ──
+    // เกณฑ์ต้องตรงกับ _get_land_displacement() ฝั่ง backend เป๊ะ (stability<0.5=medium,
+    // <0.3=high) เดิมใช้ 70/40 เอง ทำให้ป้าย "✅ เสถียร" (จาก change_level ของ backend)
+    // กับแถบเปอร์เซ็นต์ข้างๆ (จากเกณฑ์นี้) ขัดกันเองในบางช่วงค่า (ดู formula-audit)
     const stabPct = Math.round((disp.surface_stability || 0) * 100);
-    const stabColor = stabPct >= 70 ? "#1a7a3c" : stabPct >= 40 ? "#fb8c00" : "#e53935";
-    const stabLabel = stabPct >= 70 ? "ดินเสถียรดี ✅"
-                    : stabPct >= 40 ? "ดินขยับบ้าง เฝ้าระวัง 🔶"
+    const stabColor = stabPct >= 50 ? "#1a7a3c" : stabPct >= 30 ? "#fb8c00" : "#e53935";
+    const stabLabel = stabPct >= 50 ? "ดินเสถียรดี ✅"
+                    : stabPct >= 30 ? "ดินขยับบ้าง เฝ้าระวัง 🔶"
                     : "ดินไม่เสถียร! เสี่ยงทรุดตัว ⚠️";
-    const dispClass = stabPct >= 70 ? "" : stabPct >= 40 ? "warn" : "danger";
+    const dispClass = stabPct >= 50 ? "" : stabPct >= 30 ? "warn" : "danger";
 
     // ── Yield → farmer language ──
     const yieldKg = yld.estimated_kg_per_rai || 0;

@@ -14,7 +14,7 @@ from database import (get_all_reports, save_analysis, get_user_plots,
                       get_notifiable_users, get_recent_analyses,
                       get_latest_plot_analysis, save_grid_snapshot)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
-from rule_engine import format_message
+from rule_engine import format_message, compute_risk_level
 from flex_messages import build_weekly_alert_flex, build_escalation_flex
 from line_sender import send_line_message
 from weather_alert import (
@@ -34,12 +34,17 @@ logger = logging.getLogger(__name__)
 # Risk thresholds (ส่งเตือนเฉพาะกรณีเสี่ยง)
 # ─────────────────────────────────────────────────
 def _is_high_risk(data: dict) -> bool:
-    return (
-        data["ndvi_change"] < -0.10
-        or (data["elevation_diff"] < -1.5 and data["soil_moisture_vv"] > -10)
-        or data.get("displacement", {}).get("change_level") == "high"
-        or data.get("swab", {}).get("severity") == "high"  # v3: SWAB root-zone risk (นายายอาม)
-    )
+    """
+    เดิมเขียน threshold เองที่นี่ (NDVI < -0.10) ซึ่งจริงๆ เป็นเกณฑ์ "น่ากังวล/ปานกลาง"
+    ของทั้งระบบ ไม่ใช่เกณฑ์ "สูง" (-0.20) ทำให้แจ้งเตือนไวเกินไปเทียบกับที่ dashboard/LIFF
+    แสดง (ดู formula-audit) — ใช้ overall_risk_level ที่ analyze_durian_plot() คำนวณ
+    มาให้แล้วแทน (ถ้าไม่มี เช่นแถวประวัติเก่าจาก get_recent_analyses ที่ query แค่บาง
+    column สำหรับเช็ค escalation ก็ fallback ไปคำนวณจากเท่าที่มีด้วยฟังก์ชันเดียวกัน)
+    """
+    overall = data.get("overall_risk_level")
+    if overall is None:
+        overall = compute_risk_level(data)
+    return overall == "high"
 
 
 ESCALATION_DAYS = 2  # แจ้งเตือนฉุกเฉินถ้าเสี่ยงสูงติดต่อกัน ≥ n วัน (scan รายวัน)

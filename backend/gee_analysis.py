@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 import ee
 from cache import get_cached, set_cached
-from rule_engine import predict_yield, calculate_root_rot_risk
+from rule_engine import predict_yield, calculate_root_rot_risk, compute_risk_level
 try:
     from ml_model import predict_from_ml as _predict_from_ml
     _ML_AVAILABLE = True
@@ -143,6 +143,9 @@ def _mock_analyze(lat: float, lng: float) -> dict:
         "wetness_streak": wetness_streak,
     }
     result["root_rot_risk"] = calculate_root_rot_risk(result)
+    # จุดคำนวณเดียวของ "ระดับความเสี่ยงรวม" — ทุกที่ (scheduler, LINE flex, ข้อความ
+    # LINE, dashboard, LIFF) ควรอ่าน field นี้แทนคำนวณเอง (ดู formula-audit)
+    result["overall_risk_level"] = compute_risk_level(result)
     logger.info(f"[MOCK] analyze ({lat:.4f}, {lng:.4f}) → NDVI={ndvi_now}, "
                 f"displacement={change_level}, yield={yield_est['estimated_kg_per_rai']}kg, "
                 f"root_rot={result['root_rot_risk']['level']}")
@@ -408,6 +411,9 @@ def analyze_durian_plot(lat: float, lng: float,
         "wetness_streak":   wetness_streak,
     }
     result["root_rot_risk"] = calculate_root_rot_risk(result)
+    # จุดคำนวณเดียวของ "ระดับความเสี่ยงรวม" — ทุกที่ (scheduler, LINE flex, ข้อความ
+    # LINE, dashboard, LIFF) ควรอ่าน field นี้แทนคำนวณเอง (ดู formula-audit)
+    result["overall_risk_level"] = compute_risk_level(result)
     set_cached(lat, lng, result)
     return result
 

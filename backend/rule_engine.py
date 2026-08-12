@@ -19,13 +19,57 @@ ELEVATION_LOW_THRESHOLD     = -1.5    # เมตร: ต่ำกว่าร�
 
 # ── Root-Zone Thresholds (v3) ─────────────────────
 # รากทุเรียน อ.นายายอาม: ตื้น 30–50 ซม. ไวต่อน้ำขังมาก
+# ต้องตรงกับ breakpoint จริงใน gee_analysis.py::_calc_swab() เป๊ะ — นั่นคือจุดที่
+# กำหนด data["swab"]["status"]/["severity"] จริง ค่าที่นี่แค่ใช้ประกอบข้อความ LINE
+# (เคยเพี้ยนไป −0.25/−0.40 มาก่อน ทำให้ข้อความบอก "ดินแห้งเกิน" ทั้งที่การ์ดบอก
+# "แล้งวิกฤต" อยู่แล้วในช่วง −0.30 ถึง −0.40 — ดู formula-audit)
 SWAB_WATERLOG_THRESHOLD     =  0.30   # SWAB index > นี้ = น้ำขัง (รุนแรงกว่าเดิม 0.35)
 SWAB_WET_THRESHOLD          =  0.10   # เฝ้าระวัง (เตือนไวขึ้นเพราะฝนสูงตลอดปี)
-SWAB_DRY_THRESHOLD          = -0.25   # แห้งเกิน (เนินเขา → แห้งเร็ว)
-SWAB_DROUGHT_THRESHOLD      = -0.40   # แล้งวิกฤต
+SWAB_DRY_THRESHOLD          = -0.15   # แห้งเกิน (เนินเขา → แห้งเร็ว)
+SWAB_DROUGHT_THRESHOLD      = -0.30   # แล้งวิกฤต
 NDWI_SURFACE_WATER          =  0.10   # MNDWI > นี้ = มีน้ำบนผิวดิน/ใกล้ผิวดิน
 
 PREDICT_BASE_YIELD_KG       = 1500    # กก./ไร่ — ผลผลิตฐานทุเรียนหมอนทองอายุ 8+ ปี
+
+
+# ─────────────────────────────────────────────────
+# ระดับความเสี่ยงรวม (high/medium/ok) — จุดคำนวณเดียวของทั้งระบบ
+# ─────────────────────────────────────────────────
+def compute_risk_level(data: dict) -> str:
+    """
+    ระดับความเสี่ยงรวมของแปลง — 'high' / 'medium' / 'ok'
+
+    ก่อนหน้านี้ทุกจุดที่ต้องใช้ค่านี้ (การ์ด LINE, ข้อความ LINE, scheduler ตัดสินใจ
+    แจ้งเตือน, dashboard, LIFF) ต่างคำนวณเองแยกกันคนละที่ — threshold ค่อยๆ เพี้ยน
+    ไม่ตรงกันทีละจุด (เช่น scheduler เผลอใช้เกณฑ์ "น่ากังวล" −0.10 แทน "วิกฤต" −0.20
+    จนแจ้งเตือนไวเกินไป, dashboard ลืมนับ SWAB/BSI จน KPI ตกหล่น) ดู formula-audit
+    ทุกจุดควรเรียกฟังก์ชันนี้ (หรืออ่าน data["overall_risk_level"] ที่
+    analyze_durian_plot() ใส่มาให้แล้ว) แทนการคำนวณเอง
+    """
+    ndvi_change = data.get("ndvi_change") or 0
+    elev_diff   = data.get("elevation_diff") or 0
+    moisture    = data.get("soil_moisture_vv")
+    moisture    = moisture if moisture is not None else -15
+    disp_level  = (data.get("displacement") or {}).get("change_level", "low")
+    topsoil     = data.get("topsoil_risk_level", "low")
+    swab_sev    = (data.get("swab") or {}).get("severity", "low")
+    impact_sev  = (data.get("land_impact") or {}).get("severity", "low")
+
+    if (ndvi_change < NDVI_SEVERE_THRESHOLD
+            or (elev_diff < ELEVATION_LOW_THRESHOLD and moisture > MOISTURE_WET_THRESHOLD)
+            or disp_level == "high"
+            or topsoil == "high"
+            or swab_sev == "high"
+            or impact_sev == "high"):
+        return "high"
+    if (ndvi_change < NDVI_DECLINE_THRESHOLD
+            or elev_diff < ELEVATION_LOW_THRESHOLD
+            or disp_level == "medium"
+            or topsoil == "medium"
+            or swab_sev == "medium"
+            or impact_sev == "medium"):
+        return "medium"
+    return "ok"
 
 
 def calculate_root_rot_risk(data: dict) -> dict:
@@ -240,6 +284,13 @@ def format_message(data: dict, lat: float, lng: float) -> str:
         advices.append("รักษาระดับน้ำและปุ๋ยตามปกติ")
         if ndvi_now > 0.5:
             advices.append("ต้นสมบูรณ์ดี เหมาะสำหรับการบังคับดอกในช่วงนี้")
+
+    # status_icon ด้านบนไล่สะสมทีละกฎ ใช้เป็น "ตัวช่วยประกอบ" ระหว่างสร้างรายการ
+    # risks/advices เท่านั้น — อีโมจิหัวข้อความจริงต้องอิงเกณฑ์เดียวกับที่ dashboard/LIFF/
+    # scheduler ใช้ (compute_risk_level) เสมอ ไม่งั้นจะเพี้ยนแบบที่เจอใน formula-audit
+    # (เช่น ข้อความบอก 🟠 ทั้งที่การ์ด LINE ข้างๆ บอก 🔴 สำหรับข้อมูลชุดเดียวกัน)
+    overall = data.get("overall_risk_level") or compute_risk_level(data)
+    status_icon = {"high": "🔴", "medium": "🟠", "ok": "🟢"}[overall]
 
     # ─── สร้างข้อความ ───
     direction = "ต่ำกว่า" if elev_diff < 0 else "สูงกว่า"

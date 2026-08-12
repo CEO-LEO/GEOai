@@ -443,8 +443,8 @@ async def get_plot_history(plot_id: int, limit: int = 20) -> list[dict]:
                            "fertilizer_n,fertilizer_p,fertilizer_k,"
                            "fertilizer_ca,fertilizer_mg,fertilizer_level,"
                            "yield_estimated_kg,yield_quality,"
-                           "land_impact_severity,land_impact_score,"
-                           "message,created_at",
+                           "land_impact_severity,land_impact_score,risk_level,"
+                           "message,created_at,full_data",
             },
         )
 
