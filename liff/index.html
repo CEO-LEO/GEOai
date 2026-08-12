@@ -1268,8 +1268,16 @@
         return;
       }
 
+      // Chart.js (responsive:true + maintainAspectRatio:false) ต้องมี wrapper ที่มี
+      // height ตายตัวจริงๆ ครอบ canvas ไว้ — ถ้าใส่ height ตรงๆ ที่ตัว <canvas>
+      // เหมือนเดิม แล้ว parent (#modal-body ในชีทที่เลื่อนขึ้นมา สูงตาม content,
+      // overflow-y:auto) ไม่มี height ตายตัวของตัวเอง จะเกิด resize loop: canvas
+      // ขยาย → parent สูงขึ้นตาม content → ResizeObserver เห็น parent เปลี่ยน →
+      // สั่ง canvas ขยายอีก → วนไม่จบ (กราฟ "ยืดยาว" ไปเรื่อยๆ ตามที่เจอ)
       document.getElementById("modal-body").innerHTML =
-        `<canvas id="ts-chart" style="width:100%;height:220px;"></canvas>
+        `<div style="position:relative;width:100%;height:220px;">
+           <canvas id="ts-chart"></canvas>
+         </div>
          <div style="font-size:11px;color:#999;margin-top:8px;text-align:center">
            ข้อมูล Sentinel-2 รายเดือน ${series.length} เดือน | GEOai
          </div>`;

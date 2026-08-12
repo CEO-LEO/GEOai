@@ -205,8 +205,10 @@
     .imp-row .pv{font-family:var(--mono); font-size:10.5px; color:#9bf0ff; width:38px; text-align:right}
 
     .row2{display:grid; grid-template-columns:1fr 320px; gap:16px; margin-top:16px}
-    #trend-chart{padding:10px 14px 16px}
-    #donut-chart{padding:14px}
+    /* height ตายตัวจำเป็นสำหรับ Chart.js responsive+maintainAspectRatio:false — ไม่งั้น
+       เกิด resize loop กับ parent ที่สูงตาม content (เจอบั๊กนี้จริงที่กราฟ NDVI ใน LIFF) */
+    #trend-chart{padding:10px 14px 16px; position:relative; height:150px}
+    #donut-chart{padding:14px; position:relative; height:180px}
     .empty{padding:40px 20px; text-align:center; color:var(--dim); font-size:13px}
 
     /* overlay/auth */
@@ -342,7 +344,7 @@
 
             <!-- Time-series NDVI -->
             <div class="sub-head"><span>📈 ประวัติ NDVI รายเดือน (ดาวเทียม)</span><span id="ts-note" class="note">—</span></div>
-            <div style="padding:0 14px 8px"><canvas id="tsCanvas" height="120"></canvas></div>
+            <div style="padding:0 14px 8px;position:relative;height:120px"><canvas id="tsCanvas"></canvas></div>
 
             <!-- Model accuracy -->
             <div class="sub-head"><span>🤖 ความแม่นยำโมเดลพยากรณ์ผลผลิต</span><span id="model-ver" class="note">—</span></div>
@@ -371,11 +373,11 @@
       <div class="row2">
         <div class="panel">
           <div class="p-head"><span class="bar"></span><h3>แนวโน้ม NDVI รายวัน · ทุกแปลง</h3><span class="tag">30 วัน</span></div>
-          <div id="trend-chart"><canvas id="trendCanvas" height="150"></canvas></div>
+          <div id="trend-chart"><canvas id="trendCanvas"></canvas></div>
         </div>
         <div class="panel">
           <div class="p-head"><span class="bar" style="background:var(--orange);box-shadow:0 0 10px var(--orange)"></span><h3>สัดส่วนความเสี่ยง</h3></div>
-          <div id="donut-chart"><canvas id="donutCanvas" height="180"></canvas></div>
+          <div id="donut-chart"><canvas id="donutCanvas"></canvas></div>
         </div>
       </div>
     </div>
