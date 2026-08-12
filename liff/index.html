@@ -398,7 +398,7 @@
       <span class="legend-item"><i style="background:#06C755"></i>สมดุลดี</span>
       <span class="legend-item"><i style="background:#fb8c00"></i>ชื้นเกิน</span>
       <span class="legend-item"><i style="background:#e53935"></i>น้ำขังวิกฤต</span>
-      <span class="legend-item"><i style="background:#0d47a1;height:2px;width:14px;border-radius:0"></i>ทิศทางน้ำไหล</span>
+      <span class="legend-item legend-note">💧 หยดชี้ทิศ = ทิศทางน้ำไหล (สีตามสถานะจุดนั้น)</span>
     </div>
   </div>
 </div>
@@ -437,8 +437,7 @@
   let drawDots       = [];
   let drawLine       = null;
   let plotOverlays   = [];
-  let gridMarkers    = [];   // sphere.Dot[] — จุดตารางความชื้น/น้ำขัง
-  let flowLines      = [];   // sphere.Polyline[] — เส้นทิศทางน้ำไหล (จากความลาดชัน SRTM)
+  let gridMarkers    = [];   // sphere.Dot[]/sphere.Polygon[] — จุด/หยดชี้ทิศความชื้น-น้ำขัง
   let gridPointsData = [];   // ข้อมูลดิบของแต่ละจุด (lat/lng/status/...) ไว้จับคู่ตอนแตะแผนที่
   let persistentMarkers   = [];  // sphere.Dot[] — จุดชื้นสะสม (ชื้นซ้ำๆ หลายวัน)
   let persistentPointsData = []; // ข้อมูลดิบของแต่ละจุดชื้นสะสม ไว้จับคู่ตอนแตะแผนที่
@@ -820,11 +819,40 @@
     drought:     "#b71c1c",
   };
 
+  // ─── รูปทรง "หยดน้ำชี้ทิศ" สำหรับจุดที่มีทิศทางน้ำไหล (flow_to) ──────
+  // แทนที่แบบเดิม (จุดกลม + เส้นตรงสีน้ำเงินแยกกัน) ด้วยรูปเดียว คล้ายหมุดปักแผนที่
+  // แต่หมุนปลายแหลมให้ชี้ไปทาง "ทิศลาดลง" จริง และให้สีตรงกับสถานะความชื้นของจุดนั้น
+  // (ไม่ใช่สีน้ำเงินคงที่แบบเดิม) อ่านง่ายกว่าเส้นตรงเพราะเห็นทิศทางชัดจากรูปทรงเดียว
+  function offsetLatLng(lat, lng, bearingDeg, distanceM) {
+    const R = 6371000;
+    const brng = bearingDeg * Math.PI / 180;
+    const dLat = (distanceM * Math.cos(brng)) / R * (180 / Math.PI);
+    const dLng = (distanceM * Math.sin(brng)) / (R * Math.cos(lat * Math.PI / 180)) * (180 / Math.PI);
+    return { lat: lat + dLat, lng: lng + dLng };
+  }
+  function bearingBetween(lat1, lng1, lat2, lng2) {
+    const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+    const Δλ = (lng2 - lng1) * Math.PI / 180;
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+  // เทมเพลตหยดน้ำ: มุมเบี่ยง (องศา) + สัดส่วนรัศมี จากปลายแหลม (0°, r สูงสุด) วนรอบ
+  // ไปยังส่วนโค้งด้านหลัง (180°) แล้วสมมาตรกลับมา — สร้างทรงหยดน้ำ/หมุดคร่าวๆ
+  const FLOW_MARKER_SHAPE = [
+    [0, 1.00], [30, 0.42], [75, 0.55], [125, 0.62],
+    [180, 0.65], [235, 0.62], [285, 0.55], [330, 0.42],
+  ];
+  function buildFlowMarkerPolygon(lat, lng, bearingDeg, sizeM) {
+    return FLOW_MARKER_SHAPE.map(([offsetDeg, rFactor]) => {
+      const pt = offsetLatLng(lat, lng, (bearingDeg + offsetDeg) % 360, sizeM * rFactor);
+      return { lon: pt.lng, lat: pt.lat };
+    });
+  }
+
   function clearGridOverlay() {
     gridMarkers.forEach(d => { try { map.Overlays.remove(d); } catch {} });
-    flowLines.forEach(l => { try { map.Overlays.remove(l); } catch {} });
     gridMarkers = [];
-    flowLines = [];
     gridPointsData = [];
     document.getElementById("grid-legend").classList.remove("show");
     clearPersistentOverlay();   // จุดชื้นสะสมของแปลงก่อนหน้าไม่ควรค้างเวลาดูแปลงอื่น
@@ -875,23 +903,28 @@
       // (ดูคอมเมนต์ที่ runAfterModalClosed) ไม่งั้นจุดจะไม่ขึ้นแม้ modal จะปิดไปแล้ว
       runAfterModalClosed(() => {
         gridPointsData = json.points;
+        const sizeM = Math.max(4, (json.spacing_m || 10) * 0.55);
         json.points.forEach(p => {
-          const dot = new sphere.Dot(
-            { lon: p.lng, lat: p.lat },
-            { lineWidth: 10, lineColor: SWAB_COLORS[p.status] || "#999" }
-          );
-          map.Overlays.add(dot);
-          gridMarkers.push(dot);
-
-          // เส้นทิศทางน้ำไหล — มีเฉพาะจุดที่ backend ประเมินว่าลาดพอจะเชื่อถือได้
-          // (flow_to = null ถ้าพื้นที่แบนเกินไป) จุดปลายเส้นคือทิศ "ลาดลง" จาก SRTM
+          const color = SWAB_COLORS[p.status] || "#999";
           if (p.flow_to) {
-            const line = new sphere.Polyline(
-              [{ lon: p.lng, lat: p.lat }, { lon: p.flow_to.lng, lat: p.flow_to.lat }],
-              { lineColor: "#0d47a1", lineWidth: 2 }
+            // จุดที่มีทิศทางน้ำไหลน่าเชื่อถือ (backend ประเมินความชันพอ) — วาดเป็น
+            // รูปหยดน้ำสีเดียวกับสถานะความชื้น หมุนปลายแหลมชี้ไปทาง "ทิศลาดลง" จริง
+            // แทนจุดกลม + เส้นตรงแยกกันแบบเดิม อ่านทิศทางง่ายกว่าในรูปเดียว
+            const bearing = bearingBetween(p.lat, p.lng, p.flow_to.lat, p.flow_to.lng);
+            const marker = new sphere.Polygon(
+              buildFlowMarkerPolygon(p.lat, p.lng, bearing, sizeM),
+              { lineColor: color, lineWidth: 1, fillColor: color, fillOpacity: 0.95 }
             );
-            map.Overlays.add(line);
-            flowLines.push(line);
+            map.Overlays.add(marker);
+            gridMarkers.push(marker);
+          } else {
+            // พื้นที่แบนเกินไป ทิศทางไม่น่าเชื่อถือ — ใช้จุดกลมธรรมดาเหมือนเดิม
+            const dot = new sphere.Dot(
+              { lon: p.lng, lat: p.lat },
+              { lineWidth: 10, lineColor: color }
+            );
+            map.Overlays.add(dot);
+            gridMarkers.push(dot);
           }
         });
         document.getElementById("grid-legend").classList.add("show");
@@ -901,7 +934,7 @@
       const flowCount = json.points.filter(p => p.flow_to).length;
       showToast(
         `🌊 พบ ${json.count} จุด — ${waterlogged} จุดเสี่ยง (น้ำขัง/แล้งวิกฤต)` +
-        (flowCount ? ` · 🔵 ${flowCount} เส้นทิศทางน้ำไหล` : "")
+        (flowCount ? ` · 💧 ${flowCount} จุดมีทิศทางน้ำไหล` : "")
       );
     } catch (e) {
       showToast(`❌ ${e.message || "วิเคราะห์จุดน้ำขังไม่สำเร็จ"}`);
