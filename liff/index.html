@@ -401,11 +401,11 @@
     <div id="grid-legend">
       <div class="legend-gradient-bar"></div>
       <div class="legend-gradient-labels">
-        <span>🔴 แห้ง</span>
-        <span>🟢 พอดี</span>
-        <span>🔵 แฉะ/น้ำขัง</span>
+        <span>🔴 จุดแห้งสุด</span>
+        <span>🟢 ปานกลาง</span>
+        <span>🔵 จุดแฉะสุด</span>
       </div>
-      <span class="legend-item legend-note">▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟡 วงกลมทอง = จุดที่น้ำมารวมกันมาก &nbsp;·&nbsp; แตะบนแผนที่เพื่อดูรายละเอียดจุดนั้น</span>
+      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟡 วงทอง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
     </div>
   </div>
 </div>
@@ -848,6 +848,33 @@
     return "#999";
   }
 
+  // ── ยืดช่วงสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้ (contrast stretch) ──────
+  // สเกลสีของ swabColor() คลุมช่วงกว้าง (แล้งจัดสุดถึงน้ำท่วมสุดขั้ว -0.45..0.45)
+  // เพื่อให้ "สีเดียวกัน = ค่าเดียวกันเสมอ" ข้ามแปลง/ข้ามวันได้ แต่แปลงจริงส่วนใหญ่
+  // ค่าจะกระจุกอยู่แคบๆ ในช่วงเดียว (เช่น ทั้งแปลงแฉะหมด ต่างกันแค่นิดหน่อย) พอเอาไป
+  // แปะบน scale กว้างๆ สีเลยบีบอยู่ในโทนเดียวจนแยกไม่ออก (ตามที่ผู้ใช้เจอจริง) —
+  // ฟังก์ชันนี้หาค่าต่ำสุด/สูงสุดจริงของแปลงนี้ แล้วยืดให้กินสีเต็ม scale เสมอ
+  // (จุดแห้งสุดในแปลง=แดง จุดแฉะสุดในแปลง=น้ำเงินเข้ม ไม่ว่าค่าจริงจะห่างกันแค่ไหน)
+  // ค่าจริง/สถานะแม่นยำยังดูได้จากการแตะจุด — ไม่ได้หายไป แค่สีบนแผนที่เปลี่ยนไปสื่อ
+  // "เทียบกันเองภายในแปลงนี้" แทน "เทียบกับเกณฑ์ตายตัว"
+  function buildSwabNormalizer(points, accessor) {
+    accessor = accessor || (p => p.swab_index);
+    const vals = points.map(accessor).filter(v => v != null);
+    if (!vals.length) return v => v ?? 0;
+    let lo = Math.min(...vals), hi = Math.min(0.45, Math.max(...vals));
+    const MIN_RANGE = 0.12;   // กันช่วงข้อมูลแคบเกินจนยืดจน noise เด่นเกินจริง
+    if (hi - lo < MIN_RANGE) {
+      const mid = (hi + lo) / 2;
+      lo = mid - MIN_RANGE / 2;
+      hi = mid + MIN_RANGE / 2;
+    }
+    return (v) => {
+      if (v == null) return 0;
+      const t = (v - lo) / (hi - lo);
+      return -0.45 + Math.max(0, Math.min(1, t)) * 0.9;
+    };
+  }
+
   // ─── รูปทรง "หยดน้ำชี้ทิศ" สำหรับจุดที่มีทิศทางน้ำไหล (flow_to) ──────
   // แทนที่แบบเดิม (จุดกลม + เส้นตรงสีน้ำเงินแยกกัน) ด้วยรูปเดียว คล้ายหมุดปักแผนที่
   // แต่หมุนปลายแหลมให้ชี้ไปทาง "ทิศลาดลง" จริง และให้สีตรงกับสถานะความชื้นของจุดนั้น
@@ -996,6 +1023,7 @@
         gridPointsData = json.points;
         const spacingM = json.spacing_m || 10;
         const tileSizeM = spacingM * 1.12;   // ใหญ่กว่าระยะห่างจริงเล็กน้อย กันร่องว่างจากการปัดเศษ
+        const normalizeSwab = buildSwabNormalizer(json.points);   // ยืดสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้
         const { inDegree } = computeFlowGraph(json.points, spacingM);
         // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีจุดเด่น
         // กระจายเกลื่อนแทบทุกจุด (สัญญาณเสียความหมาย) ≥3 คัดเหลือแค่จุดที่รวมน้ำจาก
@@ -1007,7 +1035,7 @@
         // ผู้ใช้จริงบอกว่าดูยาก โดยเฉพาะคนไม่ถนัดเทคโนโลยี กระเบื้องชนกันพอดีไม่ทับกัน
         // เลยยังอ่านเป็นภาพสีเดียวได้ชัดแม้จุดแน่นแค่ไหน
         json.points.forEach(p => {
-          const color = swabColor(p.swab_index);
+          const color = swabColor(normalizeSwab(p.swab_index));
           const tile = new sphere.Polygon(
             buildTileSquare(p.lat, p.lng, tileSizeM),
             { lineColor: color, lineWidth: 0.5, fillColor: color, fillOpacity: 0.85 }
@@ -1118,13 +1146,14 @@
       map.resize();
 
       persistentPointsData = json.points;
+      const normalizeAvgSwab = buildSwabNormalizer(json.points, p => p.avg_swab_index);
       json.points.forEach(p => {
         // ใช้สเกลไล่เฉดเดียวกับตาราง grid วันเดียว (swabColor) แทนสีม่วงคงที่เดิม —
         // เกษตรกรอ่านสีทั้ง 2 ฟีเจอร์ด้วยตรรกะเดียวกัน (เข้ม=รุนแรง) ไม่ต้องจำ 2 ระบบสี
         // ขนาดใหญ่กว่าจุด grid ปกติ (lineWidth 14 vs 10) ไว้แยกว่าเป็น "สะสมยืนยันแล้ว"
         const dot = new sphere.Dot(
           { lon: p.lng, lat: p.lat },
-          { lineWidth: 14, lineColor: swabColor(p.avg_swab_index) }
+          { lineWidth: 14, lineColor: swabColor(normalizeAvgSwab(p.avg_swab_index)) }
         );
         map.Overlays.add(dot);
         persistentMarkers.push(dot);
