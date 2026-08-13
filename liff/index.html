@@ -401,11 +401,11 @@
     <div id="grid-legend">
       <div class="legend-gradient-bar"></div>
       <div class="legend-gradient-labels">
-        <span>🔴 แล้งจัด</span>
-        <span>🟢 ปกติ</span>
-        <span>🔵 น้ำขังวิกฤต</span>
+        <span>🔴 แห้ง</span>
+        <span>🟢 พอดี</span>
+        <span>🔵 แฉะ/น้ำขัง</span>
       </div>
-      <span class="legend-item legend-note">💧 หยดชี้ทิศ = ทิศทางน้ำไหล · เส้น = เส้นทางน้ำจริง · 🎯วงทอง = จุดรวมน้ำ · แตะจุดดูค่าจริง</span>
+      <span class="legend-item legend-note">▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟡 วงกลมทอง = จุดที่น้ำมารวมกันมาก &nbsp;·&nbsp; แตะบนแผนที่เพื่อดูรายละเอียดจุดนั้น</span>
     </div>
   </div>
 </div>
@@ -879,6 +879,34 @@
     });
   }
 
+  // ── กระเบื้องสี่เหลี่ยม สำหรับปูเป็น "แผนที่ความร้อน" (heatmap) ────────
+  // จุดตารางแต่ละจุดห่างกัน ~spacing_m เมตรสม่ำเสมออยู่แล้ว (มาจาก GEE .sample ที่
+  // scale เดียวกัน) แทนที่จะปักหมุด/หยดแยกกันทีละจุดแบบเดิม (รกมากตอนแปลงหนาแน่น —
+  // ผู้ใช้จริงบอกว่าดูยาก โดยเฉพาะคนไม่ถนัดเทคโนโลยี) วาดเป็น "กระเบื้อง" สี่เหลี่ยม
+  // ขนาดเท่า spacing_m ชนกันพอดี (ใหญ่กว่าจริงเล็กน้อยกันมีร่องว่างจากการปัดเศษ)
+  // ให้เห็นเป็นภาพสีต่อเนื่องเดียว อ่านง่ายแค่มองแล้วรู้เลยว่าโซนไหนแฉะ/แห้ง
+  function buildTileSquare(lat, lng, sizeM) {
+    const r = (sizeM / 2) * Math.SQRT2;
+    return [45, 135, 225, 315].map(bearing => {
+      const pt = offsetLatLng(lat, lng, bearing, r);
+      return { lon: pt.lng, lat: pt.lat };
+    });
+  }
+
+  // ── ลูกศรสามเหลี่ยมเรียบๆ สำหรับบอกทิศทางน้ำไหล (แยกจากสีกระเบื้อง) ────
+  // ตั้งใจให้เรียบง่ายกว่าหยดน้ำแบบเดิม และไม่ใช้สีตามสถานะ (กระเบื้องบอกสถานะอยู่
+  // แล้ว) ใช้สีเข้มตัดกับพื้นเสมอไม่ว่ากระเบื้องด้านล่างจะเป็นสีอะไร
+  function buildFlowChevron(lat, lng, bearingDeg, sizeM) {
+    const tip   = offsetLatLng(lat, lng, bearingDeg, sizeM);
+    const backL = offsetLatLng(lat, lng, (bearingDeg + 150) % 360, sizeM * 0.7);
+    const backR = offsetLatLng(lat, lng, (bearingDeg + 210) % 360, sizeM * 0.7);
+    return [
+      { lon: tip.lng,   lat: tip.lat },
+      { lon: backL.lng, lat: backL.lat },
+      { lon: backR.lng, lat: backR.lat },
+    ];
+  }
+
   // ─── เชื่อมจุดเป็น "เส้นทางน้ำไหล" + หาจุดรวมน้ำ (sink) ──────────────
   // แต่ละจุดมีแค่ "ทิศทาง" ของตัวเอง (flow_to เป็นแค่จุดสมมติห่างออกไปคงที่ ไม่ใช่
   // จุดตารางจริง) ฟังก์ชันนี้หาจุดตาราง "จริง" ที่อยู่ในทิศทางนั้นและใกล้ที่สุด มาต่อ
@@ -966,71 +994,70 @@
       // (ดูคอมเมนต์ที่ runAfterModalClosed) ไม่งั้นจุดจะไม่ขึ้นแม้ modal จะปิดไปแล้ว
       runAfterModalClosed(() => {
         gridPointsData = json.points;
-        const sizeM = Math.max(4, (json.spacing_m || 10) * 0.55);
-        const { neighborOf, inDegree } = computeFlowGraph(json.points, json.spacing_m || 10);
-        // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีวงทอง
+        const spacingM = json.spacing_m || 10;
+        const tileSizeM = spacingM * 1.12;   // ใหญ่กว่าระยะห่างจริงเล็กน้อย กันร่องว่างจากการปัดเศษ
+        const { inDegree } = computeFlowGraph(json.points, spacingM);
+        // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีจุดเด่น
         // กระจายเกลื่อนแทบทุกจุด (สัญญาณเสียความหมาย) ≥3 คัดเหลือแค่จุดที่รวมน้ำจาก
         // รอบข้างชัดเจนจริงๆ ไม่กี่จุดต่อแปลง
         gridSinkPoints = new Set(json.points.filter(p => (inDegree.get(p) || 0) >= 3));
 
-        // ── รอบที่ 1: เส้นทางน้ำไหล + วงไฮไลต์จุดรวมน้ำ (วาดก่อน ให้อยู่ "ใต้" จุด/หยด) ──
-        // เส้นเชื่อมจุดจริงที่อยู่ในทิศทางน้ำไหลของกันและกัน (ไม่ใช่แค่จุดสมมติ 12ม.
-        // แบบเดิม) ต่อกันหลายจุดจะเห็นเป็นสายน้ำพาดผ่านแปลงจริง สีตามความเข้มของ
-        // จุดต้นทาง บางและจางกว่าตัวจุด ไม่แย่งความสนใจ
-        json.points.forEach(p => {
-          const next = neighborOf.get(p);
-          if (!next) return;
-          const line = new sphere.Polyline(
-            [{ lon: p.lng, lat: p.lat }, { lon: next.lng, lat: next.lat }],
-            { lineColor: swabColor(p.swab_index), lineWidth: 1.5 }
-          );
-          map.Overlays.add(line);
-          gridMarkers.push(line);
-        });
-        gridSinkPoints.forEach(p => {
-          // วงกลมสีทองใต้จุดรวมน้ำ — ทิศทางน้ำจากรอบข้าง ≥2 ทางไหลมาบรรจบตรงนี้
-          const halo = new sphere.Dot(
-            { lon: p.lng, lat: p.lat },
-            { lineWidth: sizeM * 2.6, lineColor: "#ffc107" }
-          );
-          map.Overlays.add(halo);
-          gridMarkers.push(halo);
-        });
-
-        // ── รอบที่ 2: จุด/หยดชี้ทิศ (วาดทับบนเส้น+วงไฮไลต์) ──
+        // ── รอบที่ 1: กระเบื้องสีต่อกันเป็นแผนที่ความร้อน (ฐานหลัก) ──
+        // แทนที่หยดน้ำ/จุดแยกกันทีละจุดที่ทับกันจนดูเป็นก้อนสีเดียวตอนแปลงหนาแน่น —
+        // ผู้ใช้จริงบอกว่าดูยาก โดยเฉพาะคนไม่ถนัดเทคโนโลยี กระเบื้องชนกันพอดีไม่ทับกัน
+        // เลยยังอ่านเป็นภาพสีเดียวได้ชัดแม้จุดแน่นแค่ไหน
         json.points.forEach(p => {
           const color = swabColor(p.swab_index);
-          if (p.flow_to) {
-            // จุดที่มีทิศทางน้ำไหลน่าเชื่อถือ (backend ประเมินความชันพอ) — วาดเป็น
-            // รูปหยดน้ำสีเดียวกับสถานะความชื้น หมุนปลายแหลมชี้ไปทาง "ทิศลาดลง" จริง
-            // แทนจุดกลม + เส้นตรงแยกกันแบบเดิม อ่านทิศทางง่ายกว่าในรูปเดียว
-            const bearing = bearingBetween(p.lat, p.lng, p.flow_to.lat, p.flow_to.lng);
-            const marker = new sphere.Polygon(
-              buildFlowMarkerPolygon(p.lat, p.lng, bearing, sizeM),
-              { lineColor: color, lineWidth: 1, fillColor: color, fillOpacity: 0.95 }
-            );
-            map.Overlays.add(marker);
-            gridMarkers.push(marker);
-          } else {
-            // พื้นที่แบนเกินไป ทิศทางไม่น่าเชื่อถือ — ใช้จุดกลมธรรมดาเหมือนเดิม
-            const dot = new sphere.Dot(
-              { lon: p.lng, lat: p.lat },
-              { lineWidth: 10, lineColor: color }
-            );
-            map.Overlays.add(dot);
-            gridMarkers.push(dot);
-          }
+          const tile = new sphere.Polygon(
+            buildTileSquare(p.lat, p.lng, tileSizeM),
+            { lineColor: color, lineWidth: 0.5, fillColor: color, fillOpacity: 0.85 }
+          );
+          map.Overlays.add(tile);
+          gridMarkers.push(tile);
         });
+
+        // ── รอบที่ 2: ลูกศรทิศทางน้ำไหล แบบห่างๆ (ไม่ใช่ทุกจุด กันรกทับกระเบื้อง) ──
+        // จัดกลุ่มจุดเป็นบล็อกหยาบ (~2.5 เท่าของระยะห่างจุดตาราง) วาดลูกศรแค่ 1 อัน
+        // ต่อบล็อก สีเข้มตัดกับพื้นเสมอไม่ว่ากระเบื้องด้านล่างจะเป็นสีอะไร
+        const chevronBucketDeg = (spacingM * 2.5) / 111320;
+        const usedChevronBuckets = new Set();
+        let flowCount = 0;
+        json.points.forEach(p => {
+          if (!p.flow_to) return;
+          flowCount++;
+          const key = Math.round(p.lat / chevronBucketDeg) + "_" + Math.round(p.lng / chevronBucketDeg);
+          if (usedChevronBuckets.has(key)) return;
+          usedChevronBuckets.add(key);
+          const bearing = bearingBetween(p.lat, p.lng, p.flow_to.lat, p.flow_to.lng);
+          const chevron = new sphere.Polygon(
+            buildFlowChevron(p.lat, p.lng, bearing, tileSizeM * 0.8),
+            { lineColor: "#ffffff", lineWidth: 1.5, fillColor: "#263238", fillOpacity: 0.85 }
+          );
+          map.Overlays.add(chevron);
+          gridMarkers.push(chevron);
+        });
+
+        // ── รอบที่ 3: จุดรวมน้ำ (บนสุด) — วงขาวขอบทอง ตัดกับทุกอย่างด้านล่างชัดเจน ──
+        gridSinkPoints.forEach(p => {
+          const ring = new sphere.Dot(
+            { lon: p.lng, lat: p.lat },
+            { lineWidth: tileSizeM * 1.4, lineColor: "#ffc107" }
+          );
+          map.Overlays.add(ring);
+          gridMarkers.push(ring);
+        });
+
         document.getElementById("grid-legend").classList.add("show");
       });
 
       const waterlogged = json.points.filter(p => p.status === "waterlogged" || p.status === "drought").length;
-      const flowCount = json.points.filter(p => p.flow_to).length;
       const sinkCount = gridSinkPoints.size;
       showToast(
-        `🌊 พบ ${json.count} จุด — ${waterlogged} จุดเสี่ยง (น้ำขัง/แล้งวิกฤต)` +
-        (flowCount ? ` · 💧 ${flowCount} จุดมีทิศทางน้ำไหล` : "") +
-        (sinkCount ? ` · 🎯 ${sinkCount} จุดรวมน้ำ (วงสีทอง)` : "")
+        waterlogged > 0
+          ? `🌊 ตรวจแล้ว พบจุดเสี่ยงน้ำขัง/แล้งจัด ${waterlogged} จุด` +
+            (sinkCount ? ` — 🎯 ${sinkCount} จุดควรขุดร่องน้ำก่อน` : "") +
+            ` · ดูสีบนแผนที่ได้เลย`
+          : `✅ ตรวจแล้ว ไม่พบจุดเสี่ยงในแปลงนี้ · ดูสีบนแผนที่ได้เลย`
       );
     } catch (e) {
       showToast(`❌ ${e.message || "วิเคราะห์จุดน้ำขังไม่สำเร็จ"}`);
