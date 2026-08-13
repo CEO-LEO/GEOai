@@ -405,7 +405,7 @@
         <span>🟢 ปกติ</span>
         <span>🔵 น้ำขังวิกฤต</span>
       </div>
-      <span class="legend-item legend-note">💧 หยดชี้ทิศ = ทิศทางน้ำไหล · สียิ่งเข้ม = ยิ่งรุนแรง · แตะจุดดูค่าจริง</span>
+      <span class="legend-item legend-note">💧 หยดชี้ทิศ = ทิศทางน้ำไหล · เส้น = เส้นทางน้ำจริง · 🎯วงทอง = จุดรวมน้ำ · แตะจุดดูค่าจริง</span>
     </div>
   </div>
 </div>
@@ -444,8 +444,9 @@
   let drawDots       = [];
   let drawLine       = null;
   let plotOverlays   = [];
-  let gridMarkers    = [];   // sphere.Dot[]/sphere.Polygon[] — จุด/หยดชี้ทิศความชื้น-น้ำขัง
+  let gridMarkers    = [];   // sphere.Dot[]/sphere.Polygon[]/sphere.Polyline[] — จุด/หยด/เส้นทางน้ำ
   let gridPointsData = [];   // ข้อมูลดิบของแต่ละจุด (lat/lng/status/...) ไว้จับคู่ตอนแตะแผนที่
+  let gridSinkPoints = new Set();   // จุดที่มีน้ำจากรอบข้างไหลมารวม ≥2 ทิศทาง (ดู computeFlowGraph)
   let persistentMarkers   = [];  // sphere.Dot[] — จุดชื้นสะสม (ชื้นซ้ำๆ หลายวัน)
   let persistentPointsData = []; // ข้อมูลดิบของแต่ละจุดชื้นสะสม ไว้จับคู่ตอนแตะแผนที่
   let __onModalClose = null; // callback ที่ต้องรอให้ modal ปิดก่อนถึงจะทำงาน (ดู closeDetailModal)
@@ -878,10 +879,43 @@
     });
   }
 
+  // ─── เชื่อมจุดเป็น "เส้นทางน้ำไหล" + หาจุดรวมน้ำ (sink) ──────────────
+  // แต่ละจุดมีแค่ "ทิศทาง" ของตัวเอง (flow_to เป็นแค่จุดสมมติห่างออกไปคงที่ ไม่ใช่
+  // จุดตารางจริง) ฟังก์ชันนี้หาจุดตาราง "จริง" ที่อยู่ในทิศทางนั้นและใกล้ที่สุด มาต่อ
+  // เป็นเส้นทางน้ำไหลจริง แล้วนับว่าจุดไหนมีจุดอื่นไหลมารวม ≥2 ทิศทาง (จุดรวมน้ำ/sink) —
+  // จุดพวกนี้คือตำแหน่งที่เหมาะขุดร่องระบายน้ำที่สุดในแปลง
+  function computeFlowGraph(points, spacingM) {
+    const maxDist = (spacingM / 111320) * 1.8;   // ~1.8 เท่าของระยะห่างจุดตาราง
+    const neighborOf = new Map();
+    const inDegree = new Map();
+    points.forEach(p => inDegree.set(p, 0));
+
+    points.forEach(p => {
+      if (!p.flow_to) return;
+      const bearing = bearingBetween(p.lat, p.lng, p.flow_to.lat, p.flow_to.lng);
+      let best = null, bestDist = Infinity;
+      points.forEach(q => {
+        if (q === p) return;
+        const dist = Math.hypot(q.lat - p.lat, q.lng - p.lng);
+        if (dist > maxDist) return;
+        const qBearing = bearingBetween(p.lat, p.lng, q.lat, q.lng);
+        let diff = Math.abs(qBearing - bearing);
+        if (diff > 180) diff = 360 - diff;
+        if (diff <= 50 && dist < bestDist) { bestDist = dist; best = q; }
+      });
+      if (best) {
+        neighborOf.set(p, best);
+        inDegree.set(best, (inDegree.get(best) || 0) + 1);
+      }
+    });
+    return { neighborOf, inDegree };
+  }
+
   function clearGridOverlay() {
     gridMarkers.forEach(d => { try { map.Overlays.remove(d); } catch {} });
     gridMarkers = [];
     gridPointsData = [];
+    gridSinkPoints = new Set();
     document.getElementById("grid-legend").classList.remove("show");
     clearPersistentOverlay();   // จุดชื้นสะสมของแปลงก่อนหน้าไม่ควรค้างเวลาดูแปลงอื่น
   }
@@ -904,9 +938,10 @@
   function showGridPointDetail(lat, lng) {
     const p = findNearestGridPoint(lat, lng);
     if (!p) return false;
+    const sinkNote = gridSinkPoints.has(p) ? "  🎯 จุดรวมน้ำจากรอบข้าง — เหมาะขุดร่องระบายน้ำเริ่มจากตรงนี้" : "";
     showToast(
       `${p.status_th || p.status}  💧${p.soil_water_pct ?? '-'}%  ` +
-      `📍${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`
+      `📍${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${sinkNote}`
     );
     return true;
   }
@@ -932,6 +967,37 @@
       runAfterModalClosed(() => {
         gridPointsData = json.points;
         const sizeM = Math.max(4, (json.spacing_m || 10) * 0.55);
+        const { neighborOf, inDegree } = computeFlowGraph(json.points, json.spacing_m || 10);
+        // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีวงทอง
+        // กระจายเกลื่อนแทบทุกจุด (สัญญาณเสียความหมาย) ≥3 คัดเหลือแค่จุดที่รวมน้ำจาก
+        // รอบข้างชัดเจนจริงๆ ไม่กี่จุดต่อแปลง
+        gridSinkPoints = new Set(json.points.filter(p => (inDegree.get(p) || 0) >= 3));
+
+        // ── รอบที่ 1: เส้นทางน้ำไหล + วงไฮไลต์จุดรวมน้ำ (วาดก่อน ให้อยู่ "ใต้" จุด/หยด) ──
+        // เส้นเชื่อมจุดจริงที่อยู่ในทิศทางน้ำไหลของกันและกัน (ไม่ใช่แค่จุดสมมติ 12ม.
+        // แบบเดิม) ต่อกันหลายจุดจะเห็นเป็นสายน้ำพาดผ่านแปลงจริง สีตามความเข้มของ
+        // จุดต้นทาง บางและจางกว่าตัวจุด ไม่แย่งความสนใจ
+        json.points.forEach(p => {
+          const next = neighborOf.get(p);
+          if (!next) return;
+          const line = new sphere.Polyline(
+            [{ lon: p.lng, lat: p.lat }, { lon: next.lng, lat: next.lat }],
+            { lineColor: swabColor(p.swab_index), lineWidth: 1.5 }
+          );
+          map.Overlays.add(line);
+          gridMarkers.push(line);
+        });
+        gridSinkPoints.forEach(p => {
+          // วงกลมสีทองใต้จุดรวมน้ำ — ทิศทางน้ำจากรอบข้าง ≥2 ทางไหลมาบรรจบตรงนี้
+          const halo = new sphere.Dot(
+            { lon: p.lng, lat: p.lat },
+            { lineWidth: sizeM * 2.6, lineColor: "#ffc107" }
+          );
+          map.Overlays.add(halo);
+          gridMarkers.push(halo);
+        });
+
+        // ── รอบที่ 2: จุด/หยดชี้ทิศ (วาดทับบนเส้น+วงไฮไลต์) ──
         json.points.forEach(p => {
           const color = swabColor(p.swab_index);
           if (p.flow_to) {
@@ -960,9 +1026,11 @@
 
       const waterlogged = json.points.filter(p => p.status === "waterlogged" || p.status === "drought").length;
       const flowCount = json.points.filter(p => p.flow_to).length;
+      const sinkCount = gridSinkPoints.size;
       showToast(
         `🌊 พบ ${json.count} จุด — ${waterlogged} จุดเสี่ยง (น้ำขัง/แล้งวิกฤต)` +
-        (flowCount ? ` · 💧 ${flowCount} จุดมีทิศทางน้ำไหล` : "")
+        (flowCount ? ` · 💧 ${flowCount} จุดมีทิศทางน้ำไหล` : "") +
+        (sinkCount ? ` · 🎯 ${sinkCount} จุดรวมน้ำ (วงสีทอง)` : "")
       );
     } catch (e) {
       showToast(`❌ ${e.message || "วิเคราะห์จุดน้ำขังไม่สำเร็จ"}`);
@@ -1024,9 +1092,12 @@
 
       persistentPointsData = json.points;
       json.points.forEach(p => {
+        // ใช้สเกลไล่เฉดเดียวกับตาราง grid วันเดียว (swabColor) แทนสีม่วงคงที่เดิม —
+        // เกษตรกรอ่านสีทั้ง 2 ฟีเจอร์ด้วยตรรกะเดียวกัน (เข้ม=รุนแรง) ไม่ต้องจำ 2 ระบบสี
+        // ขนาดใหญ่กว่าจุด grid ปกติ (lineWidth 14 vs 10) ไว้แยกว่าเป็น "สะสมยืนยันแล้ว"
         const dot = new sphere.Dot(
           { lon: p.lng, lat: p.lat },
-          { lineWidth: 14, lineColor: "#6a1b9a" }   // สีม่วง — แยกจากจุด grid วันเดียว (แดง/ส้ม/เขียว)
+          { lineWidth: 14, lineColor: swabColor(p.avg_swab_index) }
         );
         map.Overlays.add(dot);
         persistentMarkers.push(dot);
