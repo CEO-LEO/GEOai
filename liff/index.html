@@ -164,16 +164,22 @@
     }
     button.btn-grid:active{ transform: scale(.96); }
     #grid-legend {
-      display: none; flex-wrap: wrap; gap: 6px 12px;
+      display: none; flex-direction: column; gap: 6px;
       margin-top: 10px; padding: 9px 11px; background: #f3f8fb;
       border-radius: 10px; font-size: 11.5px; color: #33473b;
     }
     #grid-legend.show { display: flex; }
-    #grid-legend .legend-item { display: flex; align-items: center; gap: 4px; }
-    #grid-legend .legend-item i {
-      width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+    /* ไล่สีต่อเนื่อง (diverging) ตรงกับ SWAB_GRADIENT_STOPS ใน JS เป๊ะ — ตำแหน่ง % คือ
+       ตำแหน่งจริงของแต่ละ anchor ใน domain [-0.45, 0.45] ไม่ใช่แบ่งเท่าๆ กัน */
+    .legend-gradient-bar {
+      height: 10px; border-radius: 5px;
+      background: linear-gradient(to right,
+        #b71c1c 0%, #e53935 16.7%, #fb8c00 33.3%,
+        #43a047 50%, #29b6f6 61.1%, #1565c0 83.3%, #0d47a1 100%);
       box-shadow: 0 0 0 1px rgba(0,0,0,.1);
     }
+    .legend-gradient-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: #556 }
+    #grid-legend .legend-item { display: flex; align-items: center; gap: 4px; }
 
     #detail-modal {
     display: none; position: fixed; inset: 0; z-index: 9990;
@@ -393,12 +399,13 @@
       <button class="btn-grid" id="grid-btn" disabled>🌊 จุดน้ำขังในแปลง</button>
     </div>
     <div id="grid-legend">
-      <span class="legend-item"><i style="background:#b71c1c"></i>แล้งวิกฤต</span>
-      <span class="legend-item"><i style="background:#fdd835"></i>แห้งเกิน</span>
-      <span class="legend-item"><i style="background:#06C755"></i>สมดุลดี</span>
-      <span class="legend-item"><i style="background:#fb8c00"></i>ชื้นเกิน</span>
-      <span class="legend-item"><i style="background:#e53935"></i>น้ำขังวิกฤต</span>
-      <span class="legend-item legend-note">💧 หยดชี้ทิศ = ทิศทางน้ำไหล (สีตามสถานะจุดนั้น)</span>
+      <div class="legend-gradient-bar"></div>
+      <div class="legend-gradient-labels">
+        <span>🔴 แล้งจัด</span>
+        <span>🟢 ปกติ</span>
+        <span>🔵 น้ำขังวิกฤต</span>
+      </div>
+      <span class="legend-item legend-note">💧 หยดชี้ทิศ = ทิศทางน้ำไหล · สียิ่งเข้ม = ยิ่งรุนแรง · แตะจุดดูค่าจริง</span>
     </div>
   </div>
 </div>
@@ -811,13 +818,34 @@
   }
 
   // ─── Moisture/waterlog grid overlay ────────────────
-  const SWAB_COLORS = {
-    waterlogged: "#e53935",
-    wet:         "#fb8c00",
-    optimal:     "#06C755",
-    dry:         "#fdd835",
-    drought:     "#b71c1c",
-  };
+  // สเกลสีไล่ต่อเนื่อง (diverging) ตาม swab_index จริง แทนสีแยกหมวด 5 สีแบบเดิม —
+  // แดง=แล้งจัด → เขียว=สมดุลดี → น้ำเงิน=น้ำขังวิกฤต (ยิ่งเข้ม=ยิ่งรุนแรง)
+  // จุด anchor ตรงกับ threshold จริงของ _calc_swab() ฝั่ง backend เป๊ะ (ดู
+  // rule_engine.py/gee_analysis.py) เพื่อให้สีที่ผู้ใช้เห็นตรงกับสถานะที่ระบบตัดสินจริง
+  const SWAB_GRADIENT_STOPS = [
+    [-0.45, [183, 28, 28]],   // #b71c1c แดงเข้ม — แล้งจัดสุด
+    [-0.30, [229, 57, 53]],   // #e53935 แดง — เกณฑ์แล้งวิกฤต
+    [-0.15, [251, 140, 0]],   // #fb8c00 ส้ม — เกณฑ์แห้งเกิน
+    [ 0.00, [67, 160, 71]],   // #43a047 เขียว — สมดุลดี
+    [ 0.10, [41, 182, 246]],  // #29b6f6 ฟ้า — เกณฑ์ชื้นเกิน
+    [ 0.30, [21, 101, 192]],  // #1565c0 น้ำเงิน — เกณฑ์น้ำขังวิกฤต
+    [ 0.45, [13, 71, 161]],   // #0d47a1 น้ำเงินเข้ม — น้ำขังวิกฤตสุด
+  ];
+  function swabColor(swabIndex) {
+    const v = Math.max(-0.45, Math.min(0.45, swabIndex ?? 0));
+    for (let i = 0; i < SWAB_GRADIENT_STOPS.length - 1; i++) {
+      const [v0, c0] = SWAB_GRADIENT_STOPS[i];
+      const [v1, c1] = SWAB_GRADIENT_STOPS[i + 1];
+      if (v <= v1) {
+        const t = (v - v0) / (v1 - v0);
+        const r = Math.round(c0[0] + (c1[0] - c0[0]) * t);
+        const g = Math.round(c0[1] + (c1[1] - c0[1]) * t);
+        const b = Math.round(c0[2] + (c1[2] - c0[2]) * t);
+        return `rgb(${r},${g},${b})`;
+      }
+    }
+    return "#999";
+  }
 
   // ─── รูปทรง "หยดน้ำชี้ทิศ" สำหรับจุดที่มีทิศทางน้ำไหล (flow_to) ──────
   // แทนที่แบบเดิม (จุดกลม + เส้นตรงสีน้ำเงินแยกกัน) ด้วยรูปเดียว คล้ายหมุดปักแผนที่
@@ -905,7 +933,7 @@
         gridPointsData = json.points;
         const sizeM = Math.max(4, (json.spacing_m || 10) * 0.55);
         json.points.forEach(p => {
-          const color = SWAB_COLORS[p.status] || "#999";
+          const color = swabColor(p.swab_index);
           if (p.flow_to) {
             // จุดที่มีทิศทางน้ำไหลน่าเชื่อถือ (backend ประเมินความชันพอ) — วาดเป็น
             // รูปหยดน้ำสีเดียวกับสถานะความชื้น หมุนปลายแหลมชี้ไปทาง "ทิศลาดลง" จริง
