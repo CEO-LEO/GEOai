@@ -6,6 +6,8 @@ import logging
 import tempfile
 import io
 import secrets
+import time
+import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -30,6 +32,7 @@ except Exception:
 from rule_engine import format_message, compute_risk_level
 from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
+from map_image import render_plot_grid_image
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
@@ -260,6 +263,65 @@ async def liff_config():
     return Response(content=js, media_type="application/javascript")
 
 
+# ─────────────────────────────────────────────────────────
+# Plot grid image — สำหรับส่งภาพแผนที่ความชื้นเข้า LINE OA คู่กับผลวิเคราะห์
+# ─────────────────────────────────────────────────────────
+# LINE ต้องการ URL https สาธารณะที่ server ของ LINE ดึงเองได้โดยไม่ auth — เก็บภาพ
+# ที่ compose แล้วไว้ใน memory ชั่วคราว (ไม่ต้องถาวร เพราะ LINE จะดึงภายในไม่กี่วินาที
+# ถึงนาทีหลัง push ไปแล้ว) ผ่าน token สุ่ม แล้วเสิร์ฟผ่าน endpoint ด้านล่าง
+PUBLIC_BASE_URL       = os.environ.get("PUBLIC_BASE_URL", "https://iamroot.onrender.com")
+PLOT_IMAGE_TTL_S      = 3600   # 1 ชม. — เกินพอสำหรับ LINE ดึงภาพไปแสดง
+PLOT_IMAGE_CACHE_MAX  = 200    # กัน memory โตไม่จำกัดถ้ามีการวิเคราะห์รัวๆ
+_plot_image_cache: dict[str, tuple[bytes, float]] = {}
+
+
+def _cache_plot_image(png_bytes: bytes) -> str:
+    now = time.time()
+    expired = [k for k, (_, exp) in _plot_image_cache.items() if exp < now]
+    for k in expired:
+        del _plot_image_cache[k]
+    if len(_plot_image_cache) >= PLOT_IMAGE_CACHE_MAX:
+        oldest = min(_plot_image_cache, key=lambda k: _plot_image_cache[k][1])
+        del _plot_image_cache[oldest]
+    token = uuid.uuid4().hex
+    _plot_image_cache[token] = (png_bytes, now + PLOT_IMAGE_TTL_S)
+    return token
+
+
+@app.get("/plot-image/{token}.png")
+async def plot_image(token: str):
+    """เสิร์ฟภาพแผนที่ความชื้นที่ compose ไว้ชั่วคราว — LINE server ดึง URL นี้เอง"""
+    entry = _plot_image_cache.get(token)
+    if not entry or entry[1] < time.time():
+        raise HTTPException(status_code=404, detail="ไม่พบภาพ หรือหมดอายุแล้ว")
+    png_bytes, _ = entry
+    return Response(content=png_bytes, media_type="image/png")
+
+
+async def _build_plot_grid_image_url(polygon: list[list[float]]) -> str | None:
+    """
+    สร้างภาพแผนที่ความชื้นสำหรับส่งเข้า LINE คู่กับผลวิเคราะห์หลัก — คืน URL รูปภาพ
+    หรือ None ถ้าล้มเหลว (แค่ "ของแถม" ไม่ควรทำให้ /analyze ทั้งคำขอพังตาม)
+    ยิง GEE 2 ครั้งพร้อมกัน (grid + ภาพถ่ายดาวเทียม) ผ่าน threadpool ลด wall-time
+    """
+    try:
+        grid_points, thumbnail = await asyncio.gather(
+            run_in_threadpool(gee_analysis.get_moisture_grid, polygon, 10),
+            run_in_threadpool(gee_analysis.get_plot_satellite_thumbnail, polygon),
+        )
+        png_bytes, bounds = thumbnail
+        composed = await run_in_threadpool(
+            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, 10
+        )
+        token = _cache_plot_image(composed)
+        url = f"{PUBLIC_BASE_URL}/plot-image/{token}.png"
+        logger.info(f"Plot grid image ready: {url}")
+        return url
+    except Exception as e:
+        logger.warning(f"Plot grid image generation failed (non-fatal, skipping): {e}")
+        return None
+
+
 @app.post("/analyze")
 async def analyze(req: AnalysisRequest):
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
@@ -268,12 +330,18 @@ async def analyze(req: AnalysisRequest):
         message  = format_message(data, req.lat, req.lng)
         flex     = build_result_flex(data, req.lat, req.lng, message)
 
+        # แปลงที่วาดขอบเขตไว้ (polygon) เท่านั้นถึงจะมีตารางความชื้นให้ทำภาพ —
+        # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
+        image_url = None
+        if req.polygon and len(req.polygon) >= 3:
+            image_url = await _build_plot_grid_image_url(req.polygon)
+
         # บันทึก user (upsert) + แปลง + ผลวิเคราะห์
         await upsert_user(req.user_id, req.display_name)
         plot_id = await save_plot(req.user_id, req.lat, req.lng,
                                   req.plot_name, req.area_rai,
                                   polygon=req.polygon)
-        await send_line_message(req.user_id, message, flex=flex)
+        await send_line_message(req.user_id, message, flex=flex, image_url=image_url)
         await save_analysis(req.user_id, data, message, plot_id=plot_id)
         return {"status": "ok", "plot_id": plot_id, "data": data}
     except (asyncio.TimeoutError, ee.EEException, NoSatelliteDataError) as e:

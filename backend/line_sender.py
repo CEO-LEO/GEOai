@@ -24,22 +24,35 @@ FAILED_QUEUE_MAX  = 200         # เก็บ failed messages ไว้ตร�
 _failed_queue: deque[dict] = deque(maxlen=FAILED_QUEUE_MAX)
 
 
-async def send_line_message(user_id: str, message: str, flex: dict | None = None) -> bool:
+async def send_line_message(
+    user_id: str, message: str, flex: dict | None = None, image_url: str | None = None
+) -> bool:
     """
     ส่งข้อความ push ไปหา user_id ทาง LINE Messaging API
     ถ้าส่งไม่สำเร็จ → retry สูงสุด 3 ครั้ง (exponential backoff)
     คืน True ถ้าสำเร็จ, False ถ้าล้มเหลวหลัง retry หมด
+
+    image_url (ถ้ามี) จะถูกส่งเป็นข้อความรูปภาพ "เพิ่มเติม" ต่อจากการ์ด/ข้อความหลัก
+    ในการ push ครั้งเดียวกัน (LINE รับ messages หลายชิ้นต่อ 1 การเรียก API ได้ ขึ้น
+    เป็นบับเบิลแยกกันในแชทตามลำดับ) ต้องเป็น URL https ที่ LINE server เข้าถึงได้เอง
+    โดยไม่ต้องใช้ auth (ดู /plot-image/{token}.png ใน main.py)
     """
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
         logger.warning("LINE_CHANNEL_ACCESS_TOKEN not set — skipping push")
         return False
 
-    msg_payload = flex if flex else {"type": "text", "text": message}
+    messages = [flex if flex else {"type": "text", "text": message}]
+    if image_url:
+        messages.append({
+            "type": "image",
+            "originalContentUrl": image_url,
+            "previewImageUrl": image_url,
+        })
 
     payload = {
         "to": user_id,
-        "messages": [msg_payload],
+        "messages": messages,
     }
 
     headers = {
@@ -86,6 +99,7 @@ async def send_line_message(user_id: str, message: str, flex: dict | None = None
         "status":    last_status,
         "message":   message[:100],
         "has_flex":  flex is not None,
+        "has_image": image_url is not None,
         "failed_at": datetime.now(timezone.utc).isoformat(),
         "attempts":  MAX_RETRIES,
     })

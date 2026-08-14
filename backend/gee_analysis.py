@@ -11,6 +11,7 @@ import math
 import logging
 from datetime import datetime, timedelta, timezone
 import ee
+import httpx
 from cache import get_cached, set_cached
 from rule_engine import predict_yield, calculate_root_rot_risk, compute_risk_level
 try:
@@ -779,6 +780,64 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
         raise RuntimeError("Grid sample returned no points — polygon may be too small for the grid spacing")
 
     return points
+
+
+THUMBNAIL_BUFFER_M    = 25    # ขอบเผื่อรอบแปลงในภาพ (เมตร) กันขอบแปลงชิดขอบภาพเกินไป
+THUMBNAIL_DIMENSIONS  = 640   # ความกว้าง/สูงภาพ (พิกเซล) — LINE preview ไม่ต้องใหญ่มาก
+
+
+def get_plot_satellite_thumbnail(
+    polygon: list[list[float]],
+    buffer_m: float = THUMBNAIL_BUFFER_M,
+    dimensions: int = THUMBNAIL_DIMENSIONS,
+) -> tuple[bytes, tuple[float, float, float, float]]:
+    """
+    ดึงภาพถ่ายดาวเทียมจริง (Sentinel-2 true color) ของแปลงเป็น PNG bytes — ใช้เป็น
+    พื้นหลังสำหรับซ้อนจุดความชื้น แล้วส่งเป็นรูปเข้า LINE OA คู่กับข้อความผลวิเคราะห์
+
+    คืน (png_bytes, bounds) — bounds คือ (min_lng, min_lat, max_lng, max_lat) ของ
+    ขอบเขตจริงที่ภาพครอบคลุม ใช้แปลงพิกัด lat/lng ของแต่ละจุด → ตำแหน่งพิกเซลในภาพ
+    ทีหลัง (ดู map_image.py) ต้องคืนค่านี้ด้วยเพราะ region ถูกขยายจาก polygon ตาม
+    buffer_m ไม่ใช่ bounding box ของ polygon ตรงๆ
+    """
+    if not _gee_ready:
+        raise RuntimeError("GEE not initialized — thumbnail unavailable")
+
+    ee_polygon = ee.Geometry.Polygon([polygon])
+    region = ee_polygon.buffer(buffer_m).bounds()
+    ring = _retry_gee(region.coordinates().getInfo)[0]
+    lngs = [c[0] for c in ring]
+    lats = [c[1] for c in ring]
+    bounds = (min(lngs), min(lats), max(lngs), max(lats))
+
+    # หน้าฝนอาจไม่มีภาพเดี่ยวปลอดเมฆสนิทเลยในช่วงสั้นๆ — เดิมใช้ .first() (เลือกภาพ
+    # ที่เมฆน้อยสุด 1 ภาพ) พังจริงตอนทดสอบ: ถ้า collection ว่าง .first() คืน null
+    # แล้ว getThumbURL ต่อ null image throw "Parameter 'input' is required"
+    # ใช้ .median() แทน (composite รวมหลายภาพ ทนทานกว่า — pattern เดียวกับ
+    # _get_ndvi/_get_bsi ในไฟล์นี้) และขยายช่วงเป็น 180 วัน เพราะภาพนี้เป็นแค่
+    # "รูปอ้างอิงหน้าตาแปลงคร่าวๆ" ไม่ต้องสดเท่าข้อมูล NDVI/ความชื้นที่วัดค่าจริง
+    today = datetime.now(timezone.utc)
+    start_date = (today - timedelta(days=180)).strftime("%Y-%m-%d")
+    end_date   = today.strftime("%Y-%m-%d")
+
+    s2 = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(region)
+        .filterDate(start_date, end_date)
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+    )
+    img = s2.median()
+
+    vis_params = {
+        "bands": ["B4", "B3", "B2"],   # true color RGB
+        "min": 300, "max": 2800, "gamma": 1.3,
+        "region": region, "dimensions": dimensions, "format": "png",
+    }
+    url = _retry_gee(img.getThumbURL, vis_params)
+
+    resp = httpx.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.content, bounds
 
 
 def _get_land_displacement(area, start_now, end_now, start_prev, end_prev) -> dict:
