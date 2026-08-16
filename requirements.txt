@@ -10,3 +10,4 @@ scikit-learn==1.4.2
 joblib==1.4.0
 numpy==1.26.4
 earthengine-api==0.1.396
+Pillow>=10.0,<12
