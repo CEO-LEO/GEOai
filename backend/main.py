@@ -8,11 +8,23 @@ import io
 import secrets
 import time
 import uuid
+import traceback
 from pathlib import Path
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 load_dotenv()
+
+# ── ตั้ง logging + log_buffer ก่อน import module อื่นทุกตัวที่มีโอกาสพัง ──
+# เดิมตั้งไว้ท้ายบล็อก import (หลัง map_image/ml_model) ทำให้ warning ตอน import
+# พัง (เช่น "map_image unavailable") หลุดไปก่อน log_buffer จะพร้อมจับ — เจอเข้าจริง
+# ตอนสืบสาเหตุฟีเจอร์ส่งรูป LINE ไม่ทำงาน: ยิง /admin/logs ดูแล้วไม่เจอ warning นั้น
+# เลยสักครั้ง ทั้งที่ควรมี — ย้ายมาไว้บนสุดกันเหตุการณ์แบบนี้ซ้ำกับ dependency ตัวอื่น
+# ในอนาคตด้วย
+import log_buffer
+logging.basicConfig(level=logging.INFO)
+log_buffer.install()
+logger = logging.getLogger(__name__)
 
 import ee
 from fastapi import FastAPI, HTTPException, Depends, Security, Query, BackgroundTasks
@@ -27,7 +39,8 @@ import gee_analysis
 from fastapi.concurrency import run_in_threadpool
 try:
     from ml_model import get_model_meta as _get_model_meta
-except Exception:
+except Exception as _ml_model_err:
+    logger.warning(f"ml_model unavailable — ML yield model disabled: {_ml_model_err}")
     _get_model_meta = None
 from rule_engine import format_message, compute_risk_level
 from flex_messages import build_result_flex
@@ -39,7 +52,7 @@ try:
     from map_image import render_plot_grid_image
     _MAP_IMAGE_AVAILABLE = True
 except Exception as _map_image_err:
-    logging.getLogger(__name__).warning(f"map_image unavailable — image feature disabled: {_map_image_err}")
+    logger.warning(f"map_image unavailable — image feature disabled: {_map_image_err}")
     render_plot_grid_image = None
     _MAP_IMAGE_AVAILABLE = False
 from database import (save_analysis, get_all_reports, save_plot,
@@ -52,11 +65,6 @@ from scheduler import create_scheduler, daily_scan_job, rain_alert_job
 from middleware import RateLimitMiddleware
 from cache import cache_stats
 from i18n import t, Lang
-import log_buffer
-
-logging.basicConfig(level=logging.INFO)
-log_buffer.install()
-logger = logging.getLogger(__name__)
 
 # ── Admin API Key Auth ─────────────────────────────────
 _admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
@@ -329,7 +337,7 @@ async def _build_plot_grid_image_url(polygon: list[list[float]]) -> str | None:
         logger.info(f"Plot grid image ready: {url}")
         return url
     except Exception as e:
-        logger.warning(f"Plot grid image generation failed (non-fatal, skipping): {e}")
+        logger.warning(f"Plot grid image generation failed ({type(e).__name__}, non-fatal, skipping): {e}")
         return None
 
 
@@ -360,7 +368,11 @@ async def analyze(req: AnalysisRequest):
         status_code, detail = _gee_failure_detail(e)
         raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        # เดิม f"{e}" อย่างเดียว — เจอเข้าจริงว่าบาง exception (เช่น
+        # asyncio/httpx timeout ที่ throw เปล่าไม่มีข้อความ) จะ log ออกมาเป็น
+        # "Unexpected error: " ว่างเปล่า ไม่รู้เลยว่าพังจากอะไร ใส่ประเภท exception
+        # + traceback เข้าไปด้วยเพื่อวินิจฉัยได้จริงตอนเกิดซ้ำ
+        logger.error(f"Unexpected error ({type(e).__name__}): {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง")
 
 
