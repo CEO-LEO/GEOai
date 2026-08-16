@@ -11,4 +11,4 @@ pytest-asyncio==0.23.7
 scikit-learn==1.4.2
 joblib==1.4.0
 numpy==1.26.4
-Pillow==10.4.0
+Pillow>=10.0,<12
