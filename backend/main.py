@@ -383,7 +383,7 @@ class GridRequest(BaseModel):
     spacing_m: int = Field(10, ge=10, le=50, description="ระยะห่างระหว่างจุดตาราง (เมตร)")
 
 
-GRID_TIMEOUT_S = 45
+GRID_TIMEOUT_S = 70   # เผื่อเวลาให้แปลงใหญ่ (เพดานจุดขยับ 400→1600 ใน gee_analysis.py)
 
 
 @app.post("/analyze/grid")

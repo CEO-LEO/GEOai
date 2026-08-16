@@ -407,6 +407,7 @@
         <span>🔵 จุดแฉะสุด</span>
       </div>
       <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟡 วงทอง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
+      <span class="legend-item legend-note" id="grid-spacing-note" style="display:none"></span>
     </div>
   </div>
 </div>
@@ -1002,6 +1003,7 @@
     gridPointsData = [];
     gridSinkPoints = new Set();
     document.getElementById("grid-legend").classList.remove("show");
+    document.getElementById("grid-spacing-note").style.display = "none";
     clearPersistentOverlay();   // จุดชื้นสะสมของแปลงก่อนหน้าไม่ควรค้างเวลาดูแปลงอื่น
   }
 
@@ -1106,16 +1108,29 @@
         });
 
         document.getElementById("grid-legend").classList.add("show");
+
+        // แปลงใหญ่มาก backend จะขยายระยะห่างจุดขึ้นจาก 10ม. อัตโนมัติกันยิง GEE
+        // หนักเกิน (ดู GRID_MAX_POINTS ใน gee_analysis.py) — เดิมทำเงียบๆ ผู้ใช้ไม่รู้
+        // ว่าระยะห่างจริงเปลี่ยนไปแล้ว จนเอาไปวัดระยะจริงไม่ได้ — ปักไว้ใน legend
+        // ให้เห็นตลอดตอนดูแผนที่ (ไม่ใช่แค่ toast ที่หายไปไม่กี่วินาที)
+        const spacingNoteEl = document.getElementById("grid-spacing-note");
+        if (spacingM > 10) {
+          spacingNoteEl.textContent = `📏 แปลงใหญ่ — ปรับระยะห่างจริงเป็น ${spacingM}ม./ช่อง (ไม่ใช่ 10ม.)`;
+          spacingNoteEl.style.display = "";
+        } else {
+          spacingNoteEl.style.display = "none";
+        }
       });
 
       const waterlogged = json.points.filter(p => p.status === "waterlogged" || p.status === "drought").length;
       const sinkCount = gridSinkPoints.size;
+      const spacingNote = spacingM > 10 ? ` (แปลงใหญ่ ปรับระยะห่างจริงเป็น ${spacingM}ม./ช่อง)` : "";
       showToast(
-        waterlogged > 0
+        (waterlogged > 0
           ? `🌊 ตรวจแล้ว พบจุดเสี่ยงน้ำขัง/แล้งจัด ${waterlogged} จุด` +
             (sinkCount ? ` — 🎯 ${sinkCount} จุดควรขุดร่องน้ำก่อน` : "") +
             ` · ดูสีบนแผนที่ได้เลย`
-          : `✅ ตรวจแล้ว ไม่พบจุดเสี่ยงในแปลงนี้ · ดูสีบนแผนที่ได้เลย`
+          : `✅ ตรวจแล้ว ไม่พบจุดเสี่ยงในแปลงนี้ · ดูสีบนแผนที่ได้เลย`) + spacingNote
       );
     } catch (e) {
       showToast(`❌ ${e.message || "วิเคราะห์จุดน้ำขังไม่สำเร็จ"}`);
@@ -1701,7 +1716,10 @@
         const swabIdx  = swab.swab_index;
         const waterPct = swab.soil_water_pct != null ? swab.soil_water_pct : 45;
         const airPct   = swab.soil_air_pct   != null ? swab.soil_air_pct   : 30;
-        const solidPct = Math.max(0, 100 - waterPct - airPct);
+        // ใช้ soil_solid_pct จาก backend ตรงๆ (คงที่ตามเนื้อดินจริง ไม่ผันตามฝน)
+        // เดิมคำนวณ 100-น้ำ-อากาศ เอง ซึ่งพอ air ติด 0% บ่อยๆ (บั๊กฝั่ง backend ที่
+        // เพิ่งแก้) ทำให้ "วัสดุดิน" ที่โชว์ผันไปมาตามความชื้นอย่างไม่สมเหตุสมผล
+        const solidPct = swab.soil_solid_pct != null ? swab.soil_solid_pct : Math.max(0, 100 - waterPct - airPct);
         const ndwi     = swab.ndwi != null ? swab.ndwi : 0;
         const stTh     = swab.status_th || '—';
         const swabAdv  = swab.advice || '';

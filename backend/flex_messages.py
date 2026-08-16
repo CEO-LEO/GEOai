@@ -547,8 +547,10 @@ def _build_swab_section(swab: dict) -> list[dict]:
         "drought":     "🟥 แล้ง",
     }.get(status, "🟩")
 
-    # ปริมาณวัสดุดิน (คงที่)
-    solid_pct = max(0.0, 100.0 - water_pct - air_pct)
+    # ปริมาณวัสดุดิน — อ่านจาก backend ตรงๆ (คงที่ตามเนื้อดินจริง ไม่ผันตามฝน)
+    # เดิมคำนวณ 100-น้ำ-อากาศ เอง ซึ่งพอ air ติด 0% บ่อยๆ (บั๊กที่เพิ่งแก้ฝั่ง
+    # gee_analysis._calc_swab) ทำให้ตัวเลขนี้ผันไปมาอย่างไม่สมเหตุสมผลตามไปด้วย
+    solid_pct = swab.get("soil_solid_pct", max(0.0, 100.0 - water_pct - air_pct))
 
     return [
         {"type": "text",
