@@ -32,7 +32,16 @@ except Exception:
 from rule_engine import format_message, compute_risk_level
 from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
-from map_image import render_plot_grid_image
+# Pillow เป็น dependency ใหม่ (เพิ่งเพิ่มเข้ามาสำหรับฟีเจอร์ส่งรูปแผนที่เข้า LINE) —
+# กัน import พังแล้วดึงทั้งแอปตายไปด้วย (เหมือน ml_model ด้านบน) ถ้าพัง ฟีเจอร์นี้
+# แค่ปิดตัวเอง (_build_plot_grid_image_url คืน None) ส่วนอื่นของระบบทำงานต่อได้ปกติ
+try:
+    from map_image import render_plot_grid_image
+    _MAP_IMAGE_AVAILABLE = True
+except Exception as _map_image_err:
+    logging.getLogger(__name__).warning(f"map_image unavailable — image feature disabled: {_map_image_err}")
+    render_plot_grid_image = None
+    _MAP_IMAGE_AVAILABLE = False
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
@@ -304,6 +313,8 @@ async def _build_plot_grid_image_url(polygon: list[list[float]]) -> str | None:
     หรือ None ถ้าล้มเหลว (แค่ "ของแถม" ไม่ควรทำให้ /analyze ทั้งคำขอพังตาม)
     ยิง GEE 2 ครั้งพร้อมกัน (grid + ภาพถ่ายดาวเทียม) ผ่าน threadpool ลด wall-time
     """
+    if not _MAP_IMAGE_AVAILABLE:
+        return None
     try:
         grid_points, thumbnail = await asyncio.gather(
             run_in_threadpool(gee_analysis.get_moisture_grid, polygon, 10),
