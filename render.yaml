@@ -5,7 +5,15 @@ services:
     plan: free
     branch: master
     repo: https://github.com/CEO-LEO/GEOai.git
-    buildCommand: pip install -r backend/requirements.txt
+    # ⚠️ Render's actual live build command is set in the Dashboard
+    # (Settings → Build & Deploy), NOT synced from this file for this
+    # service — confirmed 2026-08-17 when this line was changed to
+    # "backend/requirements.txt" and the build still ran the dashboard's
+    # stale "pip install -r requirements.txt", failing because the root
+    # requirements.txt had been deleted. Keep this file's root
+    # requirements.txt in sync with backend/requirements.txt until the
+    # dashboard setting is manually updated to match.
+    buildCommand: pip install -r requirements.txt
     startCommand: bash -c "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: ADMIN_API_KEY
