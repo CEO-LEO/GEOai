@@ -12,10 +12,12 @@ from fastapi.concurrency import run_in_threadpool
 
 from database import (get_all_reports, save_analysis, get_user_plots,
                       get_notifiable_users, get_recent_analyses,
-                      get_latest_plot_analysis, save_grid_snapshot)
+                      get_latest_plot_analysis, save_grid_snapshot,
+                      get_digest_users)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
-from flex_messages import build_weekly_alert_flex, build_escalation_flex
+from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
+                           build_daily_digest_flex, build_daily_digest_message)
 from line_sender import send_line_message
 from weather_alert import (
     get_7day_rain,
@@ -75,16 +77,22 @@ async def daily_scan_job():
     for r in all_reports:
         seen_users.add(r["user_id"])
 
-    notifiable = await get_notifiable_users()
-    total_plots = 0
-    alerted = 0
-    escalated = 0
+    notifiable   = await get_notifiable_users()
+    digest_users = await get_digest_users()
+    total_plots  = 0
+    alerted      = 0
+    escalated    = 0
+    digested     = 0
 
     for user_id in seen_users:
         try:
             plots = await get_user_plots(user_id)
             if not plots:
                 continue
+
+            # เก็บผลทุกแปลงของ user นี้ไว้ ถ้าเปิด "สรุปแปลงประจำวัน" จะส่งรวม
+            # เป็นข้อความเดียวหลังวนครบทุกแปลง — ไม่ว่าแปลงไหนจะเสี่ยงหรือไม่
+            plot_summaries: list[dict] = []
 
             for plot in plots:
                 total_plots += 1
@@ -99,6 +107,10 @@ async def daily_scan_job():
                 message = format_message(data, lat, lng)
                 await save_analysis(user_id, data, message,
                                     plot_id=plot_id)
+                plot_summaries.append({
+                    "name": plot.get("name") or "แปลงของคุณ",
+                    "data": data,
+                })
 
                 # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ──
                 # เฉพาะแปลงที่วาดขอบเขตไว้ (polygon) เท่านั้น ถึงจะมีตาราง grid ให้เก็บ
@@ -136,13 +148,20 @@ async def daily_scan_job():
                     await send_line_message(user_id, message, flex=flex)
                     alerted += 1
 
+            # ── สรุปแปลงประจำวัน — ส่งทีเดียวหลังวนครบทุกแปลงของ user นี้ ──
+            if user_id in digest_users and plot_summaries:
+                digest_message = build_daily_digest_message(plot_summaries)
+                digest_flex    = build_daily_digest_flex(plot_summaries)
+                await send_line_message(user_id, digest_message, flex=digest_flex)
+                digested += 1
+
         except Exception as e:
             logger.error(f"Daily scan failed for {user_id}: {e}")
 
     logger.info(
         f"✅ Daily scan done — {len(seen_users)} users, "
         f"{total_plots} plots scanned, {alerted} alerts sent, "
-        f"{escalated} escalations"
+        f"{escalated} escalations, {digested} daily digests"
     )
 
 

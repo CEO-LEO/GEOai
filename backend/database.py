@@ -515,6 +515,50 @@ async def get_notifiable_users() -> set[str]:
     return {row["user_id"] for row in resp.json()}
 
 
+async def set_notify_digest(user_id: str, enabled: bool) -> bool:
+    """
+    เปิด/ปิด "สรุปแปลงประจำวัน" — คนละอย่างกับ set_notify (notify_weekly) ซึ่งแจ้ง
+    เฉพาะตอนเสี่ยงสูงเท่านั้น อันนี้ส่งสรุปทุกแปลงทุกเช้าไม่ว่าผลจะเป็นอย่างไร
+    (ผู้ใช้ขอเพิ่มมาแยกต่างหาก ไม่อยากให้ทุกคนที่เปิด notify_weekly โดนสรุปทุกวันไปด้วย)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/users",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            params={"user_id": f"eq.{user_id}"},
+            json={"notify_daily_digest": enabled},
+        )
+
+    ok = resp.status_code in (200, 204)
+    if not ok:
+        logger.error(f"Supabase set_notify_digest failed: {resp.status_code}")
+    return ok
+
+
+async def get_digest_users() -> set[str]:
+    """ดึง user_id ทั้งหมดที่เปิดรับสรุปแปลงประจำวัน (notify_daily_digest = true)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return set()
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/users",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "notify_daily_digest": "eq.true",
+                "select":              "user_id",
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.error(f"Supabase get_digest_users failed: {resp.status_code}")
+        return set()
+    return {row["user_id"] for row in resp.json()}
+
+
 async def get_recent_analyses(plot_id: int, days: int = 10) -> list[dict]:
     """ดึงผลวิเคราะห์ล่าสุด n วัน สำหรับตรวจ escalation (scan รายวัน)"""
     if not SUPABASE_URL or not SUPABASE_KEY:

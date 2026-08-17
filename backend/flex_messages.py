@@ -6,9 +6,12 @@ flex_messages.py — LINE Flex Message templates
 v2: เพิ่ม land displacement, fertilizer, yield estimation
 """
 
+from datetime import datetime, timezone, timedelta
 from typing import Literal
 
 from rule_engine import compute_risk_level
+
+_BANGKOK_TZ = timezone(timedelta(hours=7))
 
 
 RiskLevel = Literal["high", "medium", "ok"]
@@ -683,3 +686,86 @@ def build_escalation_flex(data: dict, lat: float, lng: float,
     # Override header color to red
     base["contents"]["header"]["backgroundColor"] = "#B71C1C"
     return base
+
+
+# ─────────────────────────────────────────────────
+# Daily digest — สรุปทุกแปลงทุกเช้า ไม่ว่าจะเสี่ยงหรือไม่ (ผู้ใช้เลือกเปิดเอง
+# แยกจาก "แจ้งเตือนเฉพาะเสี่ยง" — ดู action=digest_on ใน webhook.py)
+# ─────────────────────────────────────────────────
+def build_daily_digest_message(plots: list[dict]) -> str:
+    """plots = [{'name': str, 'data': dict}, ...] — ข้อความ plain text สำรอง"""
+    date_str = datetime.now(_BANGKOK_TZ).strftime("%d/%m/%Y")
+    lines = [f"📋 สรุปแปลงประจำวัน — {date_str}", "━━━━━━━━━━━━━━━━━━━━"]
+    for p in plots:
+        level = _risk_level(p["data"])
+        icon = _COLORS[level]["icon"]
+        status_th = p["data"].get("swab", {}).get("status_th", _COLORS[level]["label"])
+        lines.append(f"{icon} {p['name']}: {status_th}")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("เปิดแอปเพื่อดูรายละเอียดแต่ละแปลง")
+    return "\n".join(lines)
+
+
+def build_daily_digest_flex(plots: list[dict]) -> dict:
+    """
+    สรุปทุกแปลงของ user เป็น bubble เดียว — คนละกับ build_weekly_alert_flex ที่ส่ง
+    เฉพาะตอนเสี่ยง (1 ข้อความ/1 แปลงที่เสี่ยง) อันนี้ตั้งใจให้ "สั้น สแกนตาเดียวจบ"
+    เพราะส่งทุกวันไม่ว่าผลจะเป็นอย่างไร ไม่อยากให้ยาวจนเบื่อ
+    """
+    date_str = datetime.now(_BANGKOK_TZ).strftime("%d/%m/%Y")
+    rows = []
+    for p in plots:
+        level = _risk_level(p["data"])
+        colors = _COLORS[level]
+        status_th = p["data"].get("swab", {}).get("status_th", colors["label"])
+        rows.append({
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "md",
+            "contents": [
+                {"type": "text", "text": colors["icon"], "size": "md", "flex": 0},
+                {"type": "text", "text": p["name"], "size": "sm", "weight": "bold",
+                 "color": "#333333", "margin": "md", "flex": 3, "wrap": True},
+                {"type": "text", "text": status_th, "size": "xs", "color": colors["header"],
+                 "align": "end", "flex": 4, "wrap": True},
+            ]
+        })
+
+    return {
+        "type": "flex",
+        "altText": f"📋 สรุปแปลงประจำวัน {date_str} ({len(plots)} แปลง)",
+        "contents": {
+            "type": "bubble",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#1a7a3c",
+                "paddingAll": "14px",
+                "contents": [
+                    {"type": "text", "text": "📋 สรุปแปลงประจำวัน", "color": "#FFFFFF",
+                     "weight": "bold", "size": "md"},
+                    {"type": "text", "text": date_str, "color": "#C8E6C9", "size": "xs"},
+                ]
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "paddingAll": "14px",
+                "contents": rows if rows else [
+                    {"type": "text", "text": "ยังไม่มีแปลงที่ปักหมุดไว้", "size": "sm", "color": "#888888"}
+                ]
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [{
+                    "type": "text",
+                    "text": "ปิดสรุปนี้ได้ที่เมนู ⚙️ ตั้งค่าการแจ้งเตือน",
+                    "size": "xxs",
+                    "color": "#AAAAAA",
+                    "wrap": True,
+                    "align": "center",
+                }]
+            }
+        }
+    }

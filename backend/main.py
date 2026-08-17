@@ -59,7 +59,8 @@ from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
                       upsert_user, save_iot_reading, get_plot_by_id,
-                      save_field_observation, get_persistent_wet_points)
+                      save_field_observation, get_persistent_wet_points,
+                      set_notify_digest)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job
 from middleware import RateLimitMiddleware
@@ -535,11 +536,20 @@ async def admin_stats(lang: Lang = "th"):
 
 @app.patch("/user/{user_id}/notify")
 async def user_notify(user_id: str, enabled: bool):
-    """เปิด/ปิดการแจ้งเตือนประจำวัน"""
+    """เปิด/ปิดการแจ้งเตือนเฉพาะตอนเสี่ยง"""
     ok = await set_notify(user_id, enabled)
     if not ok:
         raise HTTPException(status_code=500, detail="อัพเดตการตั้งค่าไม่สำเร็จ")
     return {"user_id": user_id, "notify_weekly": enabled}
+
+
+@app.patch("/user/{user_id}/notify-digest")
+async def user_notify_digest(user_id: str, enabled: bool):
+    """เปิด/ปิดสรุปแปลงประจำวัน (ทุกแปลง ทุกเช้า 07:00 ไม่ว่าจะเสี่ยงหรือไม่) — คนละอันกับ /notify"""
+    ok = await set_notify_digest(user_id, enabled)
+    if not ok:
+        raise HTTPException(status_code=500, detail="อัพเดตการตั้งค่าไม่สำเร็จ")
+    return {"user_id": user_id, "notify_daily_digest": enabled}
 
 
 @app.get("/admin/logs", dependencies=[Depends(verify_admin)])

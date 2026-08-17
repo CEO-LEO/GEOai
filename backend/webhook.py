@@ -16,7 +16,7 @@ import base64
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from database import get_latest_report, upsert_user, set_notify
+from database import get_latest_report, upsert_user, set_notify, set_notify_digest
 from flex_messages import build_result_flex
 
 logger = logging.getLogger(__name__)
@@ -173,6 +173,22 @@ async def _handle_postback(event: dict):
         await _reply(reply_token, [{
             "type": "text",
             "text": "🔕 ปิดการแจ้งเตือนประจำวันแล้ว\nคุณยังสามารถตรวจสอบแปลงเองตลอดเวลา ✅"
+                    if ok else _DB_DOWN
+        }])
+
+    elif data == "action=digest_on":
+        ok = await _safe(set_notify_digest, user_id, True)
+        await _reply(reply_token, [{
+            "type": "text",
+            "text": "📋 เปิดสรุปแปลงประจำวันแล้ว\nทุกเช้า 07:00 น. คุณจะได้รับสรุปสถานะทุกแปลงที่ปักหมุดไว้ ไม่ว่าจะเสี่ยงหรือไม่ 🌿"
+                    if ok else _DB_DOWN
+        }])
+
+    elif data == "action=digest_off":
+        ok = await _safe(set_notify_digest, user_id, False)
+        await _reply(reply_token, [{
+            "type": "text",
+            "text": "🔕 ปิดสรุปแปลงประจำวันแล้ว\nยังสามารถตรวจสอบแปลงเองตลอดเวลาได้ตามปกติ ✅"
                     if ok else _DB_DOWN
         }])
 
@@ -390,14 +406,31 @@ def _settings_menu() -> dict:
                 "contents": [
                     {
                         "type": "text",
-                        "text": "🔔 แจ้งเตือนประจำวัน",
+                        "text": "🔔 แจ้งเตือนเฉพาะตอนเสี่ยง",
                         "weight": "bold",
                         "size": "sm",
                         "color": "#333333"
                     },
                     {
                         "type": "text",
-                        "text": "ระบบจะสแกนแปลงของคุณทุกวัน 07:00 น.\nและแจ้งเตือนหากพบความเสี่ยงหรือฝนหนักกำลังจะมา",
+                        "text": "ระบบสแกนแปลงของคุณทุกวัน 07:00 น. — ส่งข้อความ\nเฉพาะเมื่อพบความเสี่ยงหรือฝนหนักกำลังจะมา",
+                        "wrap": True,
+                        "size": "sm",
+                        "color": "#666666",
+                        "margin": "sm"
+                    },
+                    {"type": "separator", "margin": "lg"},
+                    {
+                        "type": "text",
+                        "text": "📋 สรุปแปลงประจำวัน",
+                        "weight": "bold",
+                        "size": "sm",
+                        "color": "#333333",
+                        "margin": "lg"
+                    },
+                    {
+                        "type": "text",
+                        "text": "สรุปสถานะทุกแปลงของคุณทุกเช้า 07:00 น.\nไม่ว่าจะเสี่ยงหรือไม่ก็ได้รับทุกวัน",
                         "wrap": True,
                         "size": "sm",
                         "color": "#666666",
@@ -412,23 +445,56 @@ def _settings_menu() -> dict:
                 "paddingAll": "12px",
                 "contents": [
                     {
-                        "type": "button",
-                        "action": {
-                            "type": "postback",
-                            "label": "🔔 เปิดรับการแจ้งเตือน",
-                            "data": "action=notify_on"
-                        },
-                        "style": "primary",
-                        "color": "#1a7a3c"
+                        "type": "box",
+                        "layout": "horizontal",
+                        "spacing": "sm",
+                        "contents": [
+                            {
+                                "type": "button",
+                                "action": {
+                                    "type": "postback",
+                                    "label": "🔔 เปิด",
+                                    "data": "action=notify_on"
+                                },
+                                "style": "primary",
+                                "color": "#1a7a3c"
+                            },
+                            {
+                                "type": "button",
+                                "action": {
+                                    "type": "postback",
+                                    "label": "🔕 ปิด",
+                                    "data": "action=notify_off"
+                                },
+                                "style": "secondary"
+                            }
+                        ]
                     },
                     {
-                        "type": "button",
-                        "action": {
-                            "type": "postback",
-                            "label": "🔕 ปิดการแจ้งเตือน",
-                            "data": "action=notify_off"
-                        },
-                        "style": "secondary"
+                        "type": "box",
+                        "layout": "horizontal",
+                        "spacing": "sm",
+                        "contents": [
+                            {
+                                "type": "button",
+                                "action": {
+                                    "type": "postback",
+                                    "label": "📋 เปิดสรุปรายวัน",
+                                    "data": "action=digest_on"
+                                },
+                                "style": "primary",
+                                "color": "#1a7a3c"
+                            },
+                            {
+                                "type": "button",
+                                "action": {
+                                    "type": "postback",
+                                    "label": "🔕 ปิดสรุปรายวัน",
+                                    "data": "action=digest_off"
+                                },
+                                "style": "secondary"
+                            }
+                        ]
                     }
                 ]
             }
