@@ -315,7 +315,7 @@ async def plot_image(token: str):
     return Response(content=png_bytes, media_type="image/png")
 
 
-async def _build_plot_grid_image_url(polygon: list[list[float]]) -> str | None:
+async def _build_plot_grid_image_url(polygon: list[list[float]], plot_name: str = "") -> str | None:
     """
     สร้างภาพแผนที่ความชื้นสำหรับส่งเข้า LINE คู่กับผลวิเคราะห์หลัก — คืน URL รูปภาพ
     หรือ None ถ้าล้มเหลว (แค่ "ของแถม" ไม่ควรทำให้ /analyze ทั้งคำขอพังตาม)
@@ -330,7 +330,7 @@ async def _build_plot_grid_image_url(polygon: list[list[float]]) -> str | None:
         )
         png_bytes, bounds = thumbnail
         composed = await run_in_threadpool(
-            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, 10
+            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, 10, plot_name
         )
         token = _cache_plot_image(composed)
         url = f"{PUBLIC_BASE_URL}/plot-image/{token}.png"
@@ -353,7 +353,7 @@ async def analyze(req: AnalysisRequest):
         # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
         image_url = None
         if req.polygon and len(req.polygon) >= 3:
-            image_url = await _build_plot_grid_image_url(req.polygon)
+            image_url = await _build_plot_grid_image_url(req.polygon, req.plot_name)
 
         # บันทึก user (upsert) + แปลง + ผลวิเคราะห์
         await upsert_user(req.user_id, req.display_name)
