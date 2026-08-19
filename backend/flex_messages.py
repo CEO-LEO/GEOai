@@ -52,12 +52,10 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
 
     # v2 data (backward-compatible)
     displacement = data.get("displacement", {})
-    fertilizer   = data.get("fertilizer", {})
     yield_est    = data.get("yield_estimate", {})
     land_impact  = data.get("land_impact", {})
     bsi                   = data.get("bsi", None)
     topsoil_risk          = data.get("topsoil_risk_level", "low")
-    predicted_yield_kg    = data.get("predicted_yield_kg_per_rai")
 
     # NDVI bar width (0.0–0.9 → 0%–100%)
     ndvi_pct   = max(0, min(100, int(ndvi_now / 0.9 * 100)))
@@ -71,34 +69,6 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
     disp_level = displacement.get("change_level", "low")
     disp_str = {"high": "⚠️ ไม่เสถียร", "medium": "🔶 ปานกลาง", "low": "✅ เสถียร"}.get(disp_level, "✅ เสถียร")
     disp_color = {"high": "#C62828", "medium": "#E65100", "low": "#2E7D32"}.get(disp_level, "#2E7D32")
-
-    # แยก plain_text เป็นบรรทัดคำแนะนำ
-    advice_lines = []
-    in_advice = False
-    for line in plain_text.split("\n"):
-        if "คำแนะนำ" in line:
-            in_advice = True
-            continue
-        if in_advice and line.strip().startswith("•"):
-            advice_lines.append(line.strip().lstrip("•").strip())
-        if in_advice and line.startswith("🛰️"):
-            break
-    if not advice_lines:
-        advice_lines = ["รักษาระดับน้ำและปุ๋ยตามปกติ"]
-
-    advice_components = [
-        {
-            "type": "box",
-            "layout": "horizontal",
-            "contents": [
-                {"type": "text", "text": "•", "size": "sm", "color": colors["badge"], "flex": 0},
-                {"type": "text", "text": a, "size": "sm", "wrap": True, "color": "#333333",
-                 "margin": "sm"}
-            ],
-            "margin": "sm"
-        }
-        for a in advice_lines[:3]  # จำกัด 3 ข้อ
-    ]
 
     return {
         "type": "flex",
@@ -254,27 +224,16 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
                     # v3: Soil Water-Air Balance
                     *(_build_swab_section(data.get("swab", {}))),
 
-                    # v2: Fertilizer recommendation
-                    *(_build_fertilizer_section(fertilizer, colors) if fertilizer else []),
-
                     # v2: Land impact summary
                     *(_build_impact_section(land_impact) if land_impact and land_impact.get("severity") != "low" else []),
 
                     # v2: Topsoil section
                     *(_build_topsoil_section(bsi, topsoil_risk)),
 
-                    # AI yield prediction row
-                    *(_build_ai_yield_section(predicted_yield_kg, yield_est.get("quality"))),
-
-                    # Advice
-                    {
-                        "type": "text",
-                        "text": "📋 คำแนะนำ",
-                        "size": "sm",
-                        "weight": "bold",
-                        "color": "#333333"
-                    },
-                    *advice_components,
+                    # เอาออกตามที่ผู้ใช้ขอ (2026-08-19): คำแนะนำปุ๋ย (_build_fertilizer_section),
+                    # แถว AI คาดการณ์ผลผลิต (_build_ai_yield_section), และบล็อกคำแนะนำท้ายการ์ด
+                    # (advice_components) — ฟังก์ชันยังอยู่ในไฟล์เผื่อต้องเอากลับมาใช้ ไม่ได้ลบทิ้ง
+                    # แค่ไม่เรียกใช้ในการ์ดนี้แล้ว
 
                     # Bottom warning block (topsoil high risk)
                     *(_build_topsoil_high_warning() if topsoil_risk == "high" else []),
