@@ -1,0 +1,27 @@
+name: Keep Render service awake for scheduled jobs
+
+# Render free tier ปิดตัวเองอัตโนมัติถ้าไม่มีคนเรียกเข้ามาเกิน ~15 นาที ทำให้ cron
+# ในตัวแอป (APScheduler ใน backend/scheduler.py — ตั้งไว้ 06:00 แจ้งเตือนฝน/รากเน่า
+# และ 07:00 สแกนความเสี่ยงทุกแปลง + สรุปแปลงประจำวัน) มีโอกาส "ไม่ทำงานเงียบๆ" ถ้า
+# เซิร์ฟเวอร์หลับอยู่พอดีตอนถึงเวลานั้น — ไม่มี error ให้เห็นเพราะโค้ดเองก็ไม่ได้รัน
+#
+# workflow นี้ยิง GET /health (public, ไม่ต้องใช้ key) ทุก 5 นาที คร่อมสองช่วงเวลา
+# ดังกล่าว (05:45–07:20 น. เวลาไทย = 22:45–00:20 UTC) เพื่อให้เซิร์ฟเวอร์ตื่นและวิ่ง
+# ต่อเนื่องตลอดช่วงที่ cron ในแอปต้องทำงานจริง — cron ด้านล่างเป็นเวลา UTC ทั้งหมด
+# (ไทย = UTC+7)
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '45-59/5 22 * * *'  # 05:45–05:59 น. ไทย — บัฟเฟอร์ก่อน rain_alert_job (06:00)
+    - cron: '*/5 23 * * *'       # 06:00–06:55 น. ไทย — ครอบ rain_alert_job (06:00) ถึงก่อน daily_scan_job
+    - cron: '0-20/5 0 * * *'     # 07:00–07:20 น. ไทย — ครอบ daily_scan_job (07:00)
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health to keep the service awake
+        run: |
+          curl -sf --max-time 30 https://iamroot.onrender.com/health \
+            && echo "OK — service awake" \
+            || echo "ping failed (non-fatal — next run in ~5 min will retry)"
