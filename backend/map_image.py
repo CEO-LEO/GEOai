@@ -126,6 +126,11 @@ def render_plot_grid_image(
     px_per_m = (w / lng_span_m) if lng_span_m > 1e-6 else 1.0
     tile_half_px = max(2.0, (spacing_m * 1.15 / 2) * px_per_m)
 
+    # เส้นตารางบางๆ คั่นระหว่างกระเบื้อง — ผู้ใช้ฟีดแบ็กว่าตอนกระเบื้องสีติดกัน
+    # (โดยเฉพาะโซนสีเดียวกันเป็นแพ) มันเบลอเป็นก้อนสีเดียว มองไม่ออกว่าจริงๆ คือ
+    # ตาราง 10×10 ม. แยกจุด แยกกัน — เติมเส้นขอบสีขาวโปร่งแสงรอบทุกกระเบื้อง
+    # ให้เห็นเป็น "ตาราง" ชัดเจนแทนก้อนสีเรียบ (เหมือน grid line ใน spreadsheet)
+    grid_line_w = max(1, min(4, round(px_per_m * spacing_m * 0.02)))
     for p in grid_points:
         x, y = to_px(p["lat"], p["lng"])
         color = status_color(p.get("status"))
@@ -133,6 +138,8 @@ def render_plot_grid_image(
         draw.rectangle(
             [x - tile_half_px, y - tile_half_px, x + tile_half_px, y + tile_half_px],
             fill=color + (235,),
+            outline=(255, 255, 255, 150),
+            width=grid_line_w,
         )
 
     # เส้นขอบเขตแปลงสีขาว ให้เห็นชัดว่าตรงไหนคือแปลงจริง
