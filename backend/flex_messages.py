@@ -484,23 +484,45 @@ def _build_ai_yield_section(predicted_yield, quality: str | None = None) -> list
     ]
 
 
+# สีโซนเกจ — ต้องตรงกับ STATUS_COLORS ใน map_image.py เป๊ะ (คนละไฟล์ คนละภาษา
+# แต่ต้องให้สีที่เห็นในการ์ด LINE กับสีที่เห็นในรูปแผนที่ตรงกัน เกษตรกรจะได้ไม่งง)
+_SWAB_ZONE_COLORS = ["#B71C1C", "#FB8C00", "#43A047", "#29B6F6", "#0D47A1"]
+
+# ขอบเขตแต่ละโซนบนสเกลเกจ 0-100% แปลงมาจาก threshold จริงของ swab_index ใน
+# gee_analysis._calc_swab() (>0.30 waterlogged | 0.10-0.30 wet | -0.15-0.10 optimal |
+# -0.30-(-0.15) dry | <-0.30 drought) ผ่านสูตร pos=(swab_index+1)/2*100 — ใช้ flex
+# weight ตามสัดส่วนจริงแทนแบ่งเท่าๆ กัน 5 ส่วน เพื่อให้ตำแหน่งหมุด "ตรง" กับสีโซน
+# จริงเป๊ะ ไม่ใช่แค่ประมาณ
+_SWAB_ZONE_FLEX = [70, 15, 25, 20, 70]  # 35% | 7.5% | 12.5% | 10% | 35% (x2 ให้เป็นจำนวนเต็ม)
+
+
+def _swab_gauge_marker_pct(swab_index: float) -> float:
+    """แปลง swab_index (-1..+1) → ตำแหน่ง % บนแถบเกจ (0=แห้งสุด, 100=ชื้นสุด)"""
+    pct = (max(-1.0, min(1.0, swab_index)) + 1.0) / 2.0 * 100.0
+    return max(3.0, min(97.0, pct))  # กันหมุดหลุดขอบแถบตอนค่าสุดขั้ว
+
+
 def _build_swab_section(swab: dict) -> list[dict]:
-    """สร้าง Flex components แสดงความสมดุลน้ำ-อากาศในดิน (SWAB v3)"""
+    """
+    สร้าง Flex components แสดงความชื้นในดิน (SWAB v3)
+
+    v2 (ฟีดแบ็กผู้ใช้ "คนทั่วไปดูไม่เข้าใจ"): เดิมโชว์ตัวเลขดิบ (NDWI ±0.xxx,
+    น้ำ/อากาศ/วัสดุดิน %) ซึ่งต้องมีความรู้พื้นฐานถึงจะตีความได้ว่าตัวเลขนั้น "ดีหรือ
+    แย่" — เปลี่ยนเป็นแถบเกจแห้ง↔ชื้นแบบภาพ (เหมือนเทอร์โมมิเตอร์) พร้อมหมุดบอก
+    ตำแหน่งปัจจุบันแทน ไม่ต้องตีความตัวเลขเอง แค่ดูว่าหมุดอยู่โซนสีไหนก็เข้าใจทันที
+    """
     if not swab:
         return []
 
-    status    = swab.get("status", "optimal")
-    status_th = swab.get("status_th", "—")
-    severity  = swab.get("severity", "low")
-    water_pct = swab.get("soil_water_pct", 45.0)
-    air_pct   = swab.get("soil_air_pct", 30.0)
-    ndwi      = swab.get("ndwi", 0.0)
-    advice    = swab.get("advice", "")
+    status      = swab.get("status", "optimal")
+    status_th   = swab.get("status_th", "—")
+    severity    = swab.get("severity", "low")
+    swab_index  = swab.get("swab_index", 0.0)
+    advice      = swab.get("advice", "")
 
     bg_color   = {"high": "#FFEBEE", "medium": "#FFF3E0"}.get(severity, "#E3F2FD")
     txt_color  = {"high": "#C62828", "medium": "#E65100"}.get(severity, "#1565C0")
 
-    # gauge — needle position (ไปยัง Flex ไม่รองรับ absolute pos) — ใช้ text icon แทน
     status_icon = {
         "waterlogged": "🟦 น้ำมากเกิน",
         "wet":         "🟦 ชื้นเกิน",
@@ -509,37 +531,55 @@ def _build_swab_section(swab: dict) -> list[dict]:
         "drought":     "🟥 แล้ง",
     }.get(status, "🟩")
 
-    # ปริมาณวัสดุดิน — อ่านจาก backend ตรงๆ (คงที่ตามเนื้อดินจริง ไม่ผันตามฝน)
-    # เดิมคำนวณ 100-น้ำ-อากาศ เอง ซึ่งพอ air ติด 0% บ่อยๆ (บั๊กที่เพิ่งแก้ฝั่ง
-    # gee_analysis._calc_swab) ทำให้ตัวเลขนี้ผันไปมาอย่างไม่สมเหตุสมผลตามไปด้วย
-    solid_pct = swab.get("soil_solid_pct", max(0.0, 100.0 - water_pct - air_pct))
+    marker_pct = _swab_gauge_marker_pct(swab_index)
+
+    gauge = {
+        "type": "box", "layout": "vertical",
+        "height": "18px", "margin": "sm",
+        "contents": [
+            {
+                "type": "box", "layout": "horizontal",
+                "height": "6px", "cornerRadius": "3px", "margin": "sm",
+                "contents": [
+                    {"type": "box", "layout": "vertical", "flex": w,
+                     "backgroundColor": c, "contents": []}
+                    for w, c in zip(_SWAB_ZONE_FLEX, _SWAB_ZONE_COLORS)
+                ]
+            },
+            {
+                "type": "box", "layout": "vertical",
+                "position": "absolute",
+                "width": "12px", "height": "12px", "cornerRadius": "6px",
+                "backgroundColor": "#FFFFFF", "borderWidth": "2px", "borderColor": "#333333",
+                "offsetTop": "2px", "offsetStart": f"{marker_pct:.1f}%",
+                "contents": [],
+            },
+        ],
+    }
 
     return [
         {"type": "text",
-         "text": "💧 ความสมดุลน้ำ-อากาศในดิน",
+         "text": "💧 ความชื้นในดิน",
          "size": "sm", "weight": "bold", "color": "#333333"},
         {
             "type": "box", "layout": "vertical",
             "backgroundColor": bg_color, "cornerRadius": "8px",
             "paddingAll": "10px", "margin": "sm",
             "contents": [
-                # Status row
+                {"type": "text", "text": status_icon,
+                 "size": "sm", "color": txt_color, "weight": "bold"},
+                gauge,
                 {
                     "type": "box", "layout": "horizontal",
                     "contents": [
-                        {"type": "text", "text": status_icon,
-                         "size": "sm", "color": txt_color, "weight": "bold", "flex": 1},
-                        {"type": "text", "text": f"NDWI {ndwi:+.3f}",
-                         "size": "xs", "color": "#888888", "align": "end"},
+                        {"type": "text", "text": "แห้ง", "size": "xxs",
+                         "color": "#999999", "flex": 1},
+                        {"type": "text", "text": "ชื้นเกิน", "size": "xxs",
+                         "color": "#999999", "align": "end"},
                     ]
                 },
                 {"type": "text", "text": status_th,
                  "size": "xs", "color": txt_color, "wrap": True, "margin": "sm"},
-                # Soil composition bar (3 segments: water | air | solid)
-                {"type": "text",
-                 "text": f"🔵น้ำ {water_pct:.0f}%   ⚪️อากาศ {air_pct:.0f}%   🟤วัสดุดิน {solid_pct:.0f}%",
-                 "size": "xs", "color": "#666666", "margin": "sm"},
-                # Advice
                 {"type": "text", "text": advice,
                  "size": "xs", "color": "#555555", "wrap": True, "margin": "sm"},
             ]
