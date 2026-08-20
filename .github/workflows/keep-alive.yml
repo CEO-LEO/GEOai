@@ -1,27 +1,53 @@
-name: Keep Render service awake for scheduled jobs
+name: Trigger daily scan and rain alert jobs
 
-# Render free tier ปิดตัวเองอัตโนมัติถ้าไม่มีคนเรียกเข้ามาเกิน ~15 นาที ทำให้ cron
-# ในตัวแอป (APScheduler ใน backend/scheduler.py — ตั้งไว้ 06:00 แจ้งเตือนฝน/รากเน่า
-# และ 07:00 สแกนความเสี่ยงทุกแปลง + สรุปแปลงประจำวัน) มีโอกาส "ไม่ทำงานเงียบๆ" ถ้า
-# เซิร์ฟเวอร์หลับอยู่พอดีตอนถึงเวลานั้น — ไม่มี error ให้เห็นเพราะโค้ดเองก็ไม่ได้รัน
+# v2 (แก้จากรุ่นแรกที่ล้มเหลว): รุ่นแรกยิง GET /health ทุก 5 นาทีคร่อมช่วง
+# 05:45–07:20 น. ไทย หวังให้เซิร์ฟเวอร์ตื่นอยู่พอดีตอน APScheduler ในโปรเซสยิง
+# cron เอง — ตรวจสอบย้อนหลังพบว่า GitHub Actions "ทิ้ง" ตารางเวลาความถี่สูง
+# (ทุก 5 นาที) ไปเกือบหมด (ยิงจริงแค่ 6 จาก ~20 ครั้งที่ตั้งไว้ ในคืนแรกที่ใช้งาน)
+# ทำให้มีช่องว่างคร่อมเวลา 07:00 น. พอดี — เซิร์ฟเวอร์หลับอยู่ตอน cron ยิง แล้ว
+# ไม่มีทาง "ตามทำงานย้อนหลัง" ได้เลย เพราะ APScheduler ใช้ MemoryJobStore สร้าง
+# ใหม่ทุกครั้งที่โปรเซสเริ่ม (ตื่นจาก sleep = โปรเซสใหม่ = คำนวณรอบถัดไปเป็น
+# "พรุ่งนี้" ทันที ไม่ misfire ย้อนหลัง) — digest/แจ้งเตือนเลยไม่เคยทำงานจริงเลย
+# แม้จะมี keep-alive แล้วก็ตาม
 #
-# workflow นี้ยิง GET /health (public, ไม่ต้องใช้ key) ทุก 5 นาที คร่อมสองช่วงเวลา
-# ดังกล่าว (05:45–07:20 น. เวลาไทย = 22:45–00:20 UTC) เพื่อให้เซิร์ฟเวอร์ตื่นและวิ่ง
-# ต่อเนื่องตลอดช่วงที่ cron ในแอปต้องทำงานจริง — cron ด้านล่างเป็นเวลา UTC ทั้งหมด
-# (ไทย = UTC+7)
+# รุ่นนี้: เลิกพึ่ง "ปลุกเซิร์ฟเวอร์ให้ทันเวลาพอดี" เปลี่ยนมายิง POST ตรงไปยัง
+# /admin/trigger/rain-alert (06:00 น.) และ /admin/trigger/daily-scan (07:00 น.)
+# ที่มีอยู่แล้วในระบบ (ออกแบบมาสำหรับ external cron แบบนี้โดยเฉพาะ) — request
+# นี้เองจะปลุกเซิร์ฟเวอร์ขึ้นมาก่อน (Render ตื่นเมื่อมี HTTP request เข้า) แล้วค่อย
+# สั่งรันงานจริงทันทีที่ตื่น ไม่ต้องพึ่งความแม่นยำของเวลาปลุกอีกต่อไป — ต่อให้
+# GitHub Actions หน่วง/เลื่อนไปสักกี่นาที งานก็ยังรันจริง แค่ช้าลงเล็กน้อย ไม่ใช่
+# ไม่รันเลยแบบเดิม
+#
+# หมายเหตุ: ปิด cron ในโปรเซส (backend/scheduler.py) สำหรับ 2 งานนี้ไปแล้ว กัน
+# รันซ้ำสองครั้ง (ถ้าบังเอิญเซิร์ฟเวอร์ตื่นอยู่พอดีตอน 06:00/07:00 จาก traffic
+# อื่นด้วย) — endpoint เหล่านี้คือแหล่งความจริงหนึ่งเดียวของ 2 งานนี้แล้ว
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '45-59/5 22 * * *'  # 05:45–05:59 น. ไทย — บัฟเฟอร์ก่อน rain_alert_job (06:00)
-    - cron: '*/5 23 * * *'       # 06:00–06:55 น. ไทย — ครอบ rain_alert_job (06:00) ถึงก่อน daily_scan_job
-    - cron: '0-20/5 0 * * *'     # 07:00–07:20 น. ไทย — ครอบ daily_scan_job (07:00)
+    - cron: '0 23 * * *'  # 06:00 น. ไทย — rain_alert_job (ฝน/รากเน่า)
+    - cron: '0 0 * * *'   # 07:00 น. ไทย — daily_scan_job (ความเสี่ยง + สรุปประจำวัน)
 
 jobs:
-  ping:
+  rain-alert:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 23 * * *'
     runs-on: ubuntu-latest
     steps:
-      - name: Ping /health to keep the service awake
+      - name: Trigger rain-alert job
         run: |
-          curl -sf --max-time 30 https://iamroot.onrender.com/health \
-            && echo "OK — service awake" \
-            || echo "ping failed (non-fatal — next run in ~5 min will retry)"
+          curl -sf -X POST --max-time 60 \
+            -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
+            https://iamroot.onrender.com/admin/trigger/rain-alert \
+            && echo "OK — rain-alert job started" \
+            || echo "trigger failed (server may still be waking up — check /admin/logs)"
+
+  daily-scan:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 0 * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger daily-scan job (includes daily digest)
+        run: |
+          curl -sf -X POST --max-time 60 \
+            -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
+            https://iamroot.onrender.com/admin/trigger/daily-scan \
+            && echo "OK — daily-scan job started" \
+            || echo "trigger failed (server may still be waking up — check /admin/logs)"

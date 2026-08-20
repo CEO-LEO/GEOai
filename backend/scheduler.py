@@ -1,13 +1,15 @@
 """
 scheduler.py — ระบบแจ้งเตือนอัตโนมัติ
-  Job 1 (ทุกวัน 07:00): สแกนแปลงทุกราย — แจ้งเตือนเมื่อเสี่ยงสูง
-  Job 2 (ทุกวัน 06:00): ตรวจพยากรณ์ฝน 7 วัน + ผนวกดิน — แจ้งเตือนก่อนฝนหนัก/รากเน่า
+  Job 1: สแกนแปลงทุกราย — แจ้งเตือนเมื่อเสี่ยงสูง + สรุปประจำวัน
+  Job 2: ตรวจพยากรณ์ฝน 7 วัน + ผนวกดิน — แจ้งเตือนก่อนฝนหนัก/รากเน่า
+
+ทั้งสองงานถูกทริกเกอร์จากภายนอก (GitHub Actions → /admin/trigger/daily-scan,
+/admin/trigger/rain-alert) ไม่ใช่ cron ในโปรเซสนี้ — ดูเหตุผลเต็มที่ create_scheduler()
 """
 
 import asyncio
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi.concurrency import run_in_threadpool
 
 from database import (get_all_reports, save_analysis, get_user_plots,
@@ -169,27 +171,23 @@ async def daily_scan_job():
 # Scheduler factory
 # ─────────────────────────────────────────────────
 def create_scheduler() -> AsyncIOScheduler:
-    """สร้าง scheduler พร้อม jobs — เรียกจาก lifespan ใน main.py"""
+    """
+    สร้าง scheduler — เรียกจาก lifespan ใน main.py
+
+    เดิม (v1) ผูก daily_scan_job/rain_alert_job ไว้ตรงนี้ด้วย CronTrigger 07:00/06:00
+    — ใช้งานไม่ได้จริงบน Render free tier: เซิร์ฟเวอร์หลับหลัง idle ~15 นาที และ
+    AsyncIOScheduler ใช้ MemoryJobStore สร้างใหม่ทุกครั้งที่โปรเซสเริ่ม (ตื่นจาก
+    sleep = โปรเซสใหม่) ทำให้ misfire_grace_time ช่วยอะไรไม่ได้เลย ถ้าเซิร์ฟเวอร์
+    หลับอยู่พอดีตอนถึงเวลา งานนั้นก็หายไปเงียบๆ ทั้งวัน (ยืนยันจริงจาก log:
+    ไม่มี analyses row ใกล้ 07:00 น. เลยแม้แต่วันเดียว ทั้งที่มี keep-alive ping
+    ช่วยแล้วก็ตาม — ดู .github/workflows/keep-alive.yml สำหรับรายละเอียดเต็ม)
+    —
+    ย้าย 2 งานนี้ไปให้ GitHub Actions ยิง POST ตรงมาที่ /admin/trigger/daily-scan
+    และ /admin/trigger/rain-alert แทน (request เข้ามาเองจะปลุกเซิร์ฟเวอร์ก่อน
+    รันงานทันที ไม่ต้องพึ่งเวลาปลุกที่แม่นยำ) — ห้ามเพิ่ม add_job ของ 2 งานนี้
+    กลับมาที่นี่อีก ไม่งั้นจะรันซ้ำสองครั้งวันที่เซิร์ฟเวอร์บังเอิญตื่นอยู่พอดี
+    """
     scheduler = AsyncIOScheduler(timezone="Asia/Bangkok")
-
-    # Job 1: ทุกวัน 07:00 — สแกนความเสี่ยงดาวเทียม
-    scheduler.add_job(
-        daily_scan_job,
-        trigger=CronTrigger(hour=7, minute=0),
-        id="daily_scan",
-        replace_existing=True,
-        max_instances=1,
-    )
-
-    # Job 2: ทุกวัน 06:00 — แจ้งเตือนพยากรณ์ฝน + รากเน่า (รากเน่าใช้เวลา 2-5 วัน)
-    scheduler.add_job(
-        rain_alert_job,
-        trigger=CronTrigger(hour=6, minute=0),
-        id="rain_alert",
-        replace_existing=True,
-        max_instances=1,
-    )
-
     return scheduler
 
 
