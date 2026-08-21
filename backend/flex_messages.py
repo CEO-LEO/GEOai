@@ -486,10 +486,7 @@ def _build_ai_yield_section(predicted_yield, quality: str | None = None) -> list
 
 # สีโซนเกจ — ต้องตรงกับ STATUS_COLORS ใน map_image.py เป๊ะ (คนละไฟล์ คนละภาษา
 # แต่ต้องให้สีที่เห็นในการ์ด LINE กับสีที่เห็นในรูปแผนที่ตรงกัน เกษตรกรจะได้ไม่งง)
-#
-# v4 (ผู้ใช้ขอปรับสีให้ผู้สูงอายุมองเห็นชัด): ตัดฟ้า/น้ำเงินออก (2 ตัวท้าย) เหลือแค่
-# โทนแดง/ส้ม/เหลือง/เขียว — ต้องตรงกับ STATUS_COLORS ใน map_image.py เป๊ะเหมือนเดิม
-_SWAB_ZONE_COLORS = ["#B71C1C", "#FB8C00", "#43A047", "#FFCA28", "#D84315"]
+_SWAB_ZONE_COLORS = ["#B71C1C", "#FB8C00", "#43A047", "#29B6F6", "#0D47A1"]
 
 # ขอบเขตแต่ละโซนบนสเกลเกจ 0-100% แปลงมาจาก threshold จริงของ swab_index ใน
 # gee_analysis._calc_swab() (>0.30 waterlogged | 0.10-0.30 wet | -0.15-0.10 optimal |
@@ -523,15 +520,12 @@ def _build_swab_section(swab: dict) -> list[dict]:
     swab_index  = swab.get("swab_index", 0.0)
     advice      = swab.get("advice", "")
 
-    # v4 (ผู้ใช้ขอปรับสีให้ผู้สูงอายุมองเห็นชัด): fallback (severity ปกติ/low)
-    # เดิมฟ้าอ่อน/น้ำเงิน (#E3F2FD/#1565C0) — เปลี่ยนเป็นเขียวอ่อน/เขียว ให้สื่อ
-    # "ปกติดี" ตรงไปตรงมาแทน (ไม่ใช้ฟ้า/น้ำเงินเลยทั้งระบบตามที่ผู้ใช้ขอ)
-    bg_color   = {"high": "#FFEBEE", "medium": "#FFF3E0"}.get(severity, "#E8F5E9")
-    txt_color  = {"high": "#C62828", "medium": "#E65100"}.get(severity, "#2E7D32")
+    bg_color   = {"high": "#FFEBEE", "medium": "#FFF3E0"}.get(severity, "#E3F2FD")
+    txt_color  = {"high": "#C62828", "medium": "#E65100"}.get(severity, "#1565C0")
 
     status_icon = {
-        "waterlogged": "🟫 น้ำมากเกิน",
-        "wet":         "🟨 ชื้นเกิน",
+        "waterlogged": "🟦 น้ำมากเกิน",
+        "wet":         "🟦 ชื้นเกิน",
         "optimal":     "🟩 สมดุล",
         "dry":         "🟧 แห้งเกิน",
         "drought":     "🟥 แล้ง",
