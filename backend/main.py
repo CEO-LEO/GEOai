@@ -252,8 +252,18 @@ async def root():
 
 @app.get("/liff/config.js")
 async def liff_config():
-    """Inject API_URL and LIFF_ID from env vars into frontend JS"""
-    liff_url = os.environ.get("LIFF_URL", "")
+    """
+    Inject API_URL and LIFF_ID from env vars into frontend JS
+
+    บั๊กที่เจอ (2026-08-21): env var LIFF_URL ไม่ได้ตั้งไว้บน Render จริง — endpoint
+    นี้เลยส่ง LIFF_ID: "" (ว่าง) ให้หน้าเว็บเสมอ ฝั่ง JS (liff/index.html) เจอค่าว่าง
+    ก็ fallback ไปใช้ placeholder "YOUR_LIFF_ID" ทำให้ liff.init() พังทุกครั้งที่เปิด
+    นอกแอป LINE (บน mobile ยังพอใช้ได้เพราะ native bridge ของแอป LINE เอง "ปิดบัง"
+    ปัญหานี้ไว้ได้บางส่วน แต่บน desktop browser พังชัดเจน 100%) — ใช้ fallback ID
+    เดียวกับที่ webhook.py::_liff_button() ใช้อยู่แล้ว (ต้องตรงกันเป๊ะ ไม่งั้นปุ่มใน
+    LINE OA กับหน้าเว็บที่เปิดตรงๆ จะใช้ LIFF app คนละตัวกัน)
+    """
+    liff_url = os.environ.get("LIFF_URL") or "https://liff.line.me/2010580115-di08GvXS"
     # Extract LIFF ID from URL: https://liff.line.me/LIFF_ID → LIFF_ID
     liff_id = liff_url.rsplit("/", 1)[-1] if "/" in liff_url else liff_url
     # API base: same origin (empty) in production, override via env
