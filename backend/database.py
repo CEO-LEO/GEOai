@@ -559,6 +559,71 @@ async def get_digest_users() -> set[str]:
     return {row["user_id"] for row in resp.json()}
 
 
+PRESET_NOTIFY_HOURS = (5, 6, 7, 8, 9, 10)  # ต้องตรงกับ CHECK constraint ใน migrate_v8.sql
+
+
+async def set_notify_hour(user_id: str, hour: int) -> bool:
+    """
+    ตั้งเวลาแจ้งเตือนที่ผู้ใช้เลือกเอง — ใช้ร่วมกันทั้ง "แจ้งเตือนเฉพาะตอนเสี่ยง"
+    และ "สรุปแปลงประจำวัน" (ผู้ใช้ขอให้ทั้งสองแบบใช้เวลาเดียวกัน ไม่ต้องตั้งแยก)
+    """
+    if hour not in PRESET_NOTIFY_HOURS:
+        logger.error(f"set_notify_hour rejected out-of-range hour={hour} for {user_id}")
+        return False
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/users",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            params={"user_id": f"eq.{user_id}"},
+            json={"notify_hour": hour},
+        )
+
+    ok = resp.status_code in (200, 204)
+    if not ok:
+        logger.error(f"Supabase set_notify_hour failed: {resp.status_code}")
+    return ok
+
+
+async def get_users_by_hour(hour: int) -> set[str] | None:
+    """
+    ดึง user_id ทั้งหมดที่ตั้งเวลาแจ้งเตือนไว้ตรงกับ hour นี้ (0-23, เวลาไทย) — ใช้กรอง
+    ก่อนสแกน/ส่งใน daily_scan_job และ rain_alert_job ตอนถูกทริกเกอร์จากภายนอกเป็น
+    รายชั่วโมง (ดู .github/workflows/keep-alive.yml) กันสแกน/ส่งซ้ำให้คนที่ไม่ได้ตั้ง
+    เวลานี้ไว้
+
+    คืน None (แทน set() ว่าง) เฉพาะกรณีคอลัมน์ notify_hour ยังไม่มีในฐานข้อมูลจริง
+    (ยังไม่ได้รัน migrate_v8.sql) — เพื่อให้ตัวเรียกรู้ว่า "ยังกรองตามชั่วโมงไม่ได้"
+    แล้ว fallback ไปแบบเดิม (ไม่กรอง สแกนทุกคน) แทนที่จะกรองแล้วเจอ error ตลอดจน
+    ไม่มีใครถูกสแกนเลยสักคนเงียบๆ (อันตรายกว่า "ยังไม่กรอง" มาก)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return set()
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/users",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "notify_hour": f"eq.{hour}",
+                "select":      "user_id",
+            },
+        )
+
+    if resp.status_code != 200:
+        if resp.status_code == 400 and "42703" in resp.text:
+            logger.warning(
+                "get_users_by_hour: notify_hour column missing (migrate_v8.sql not "
+                "run yet?) — falling back to unfiltered (everyone scanned this run)"
+            )
+            return None
+        logger.error(f"Supabase get_users_by_hour failed: {resp.status_code}")
+        return set()
+    return {row["user_id"] for row in resp.json()}
+
+
 async def get_recent_analyses(plot_id: int, days: int = 10) -> list[dict]:
     """ดึงผลวิเคราะห์ล่าสุด n วัน สำหรับตรวจ escalation (scan รายวัน)"""
     if not SUPABASE_URL or not SUPABASE_KEY:

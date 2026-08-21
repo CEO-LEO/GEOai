@@ -15,7 +15,7 @@ from fastapi.concurrency import run_in_threadpool
 from database import (get_all_reports, save_analysis, get_user_plots,
                       get_notifiable_users, get_recent_analyses,
                       get_latest_plot_analysis, save_grid_snapshot,
-                      get_digest_users)
+                      get_digest_users, get_users_by_hour)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
@@ -70,15 +70,27 @@ def _count_consecutive_high_risk(analyses: list[dict]) -> int:
 # ─────────────────────────────────────────────────
 # Main job
 # ─────────────────────────────────────────────────
-async def daily_scan_job():
-    """วิเคราะห์ทุกแปลงของทุกราย — ส่งเตือนเฉพาะกรณีเสี่ยง"""
-    logger.info("🕐 Daily scan started")
+async def daily_scan_job(hour: int | None = None):
+    """
+    วิเคราะห์ทุกแปลงของทุกราย — ส่งเตือนเฉพาะกรณีเสี่ยง + สรุปประจำวัน
+
+    hour: ชั่วโมง (เวลาไทย) ที่ถูกทริกเกอร์มา — ถ้าระบุ จะประมวลผลเฉพาะผู้ใช้ที่ตั้ง
+    notify_hour ตรงกับค่านี้เท่านั้น (ผู้ใช้เลือกเวลาแจ้งเตือนเองได้ ดู migrate_v8.sql)
+    ถ้าไม่ระบุ (None) — เดิม/legacy behavior คือประมวลผลทุกคนไม่กรอง (ใช้ตอนสั่งรัน
+    ผ่าน /admin/trigger/daily-scan โดยไม่ใส่ ?hour= เช่นตอนทดสอบด้วยมือ)
+    """
+    logger.info(f"🕐 Daily scan started (hour={hour})")
 
     # ดึง unique users จาก reports
     all_reports = await get_all_reports(limit=1000)
     seen_users: set[str] = set()
     for r in all_reports:
         seen_users.add(r["user_id"])
+
+    if hour is not None:
+        hour_users = await get_users_by_hour(hour)
+        if hour_users is not None:  # None = คอลัมน์ยังไม่มี (ยัง migrate ไม่เสร็จ) → ไม่กรอง
+            seen_users &= hour_users
 
     notifiable   = await get_notifiable_users()
     digest_users = await get_digest_users()
@@ -210,15 +222,24 @@ def create_scheduler() -> AsyncIOScheduler:
 # ─────────────────────────────────────────────────
 # Rain alert job (Job 2)
 # ─────────────────────────────────────────────────
-async def rain_alert_job():
-    """ตรวจพยากรณ์ฝน 7 วัน + ผนวกข้อมูลดิน → แจ้งเตือนรวม"""
-    logger.info("🌧️ Combined weather+soil alert scan started")
+async def rain_alert_job(hour: int | None = None):
+    """
+    ตรวจพยากรณ์ฝน 7 วัน + ผนวกข้อมูลดิน → แจ้งเตือนรวม
+
+    hour: เหมือน daily_scan_job() — กรองเฉพาะผู้ใช้ที่ตั้ง notify_hour ตรงกับค่านี้
+    """
+    logger.info(f"🌧️ Combined weather+soil alert scan started (hour={hour})")
 
     all_reports = await get_all_reports(limit=1000)
 
     seen_users: set[str] = set()
     for r in all_reports:
         seen_users.add(r["user_id"])
+
+    if hour is not None:
+        hour_users = await get_users_by_hour(hour)
+        if hour_users is not None:
+            seen_users &= hour_users
 
     alerted = 0
     combined_alerts = 0

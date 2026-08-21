@@ -16,7 +16,8 @@ import base64
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from database import get_latest_report, upsert_user, set_notify, set_notify_digest
+from database import (get_latest_report, upsert_user, set_notify, set_notify_digest,
+                      set_notify_hour, PRESET_NOTIFY_HOURS)
 from flex_messages import build_result_flex
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,25 @@ async def _handle_postback(event: dict):
         await _reply(reply_token, [{
             "type": "text",
             "text": "🔕 ปิดสรุปแปลงประจำวันแล้ว\nยังสามารถตรวจสอบแปลงเองตลอดเวลาได้ตามปกติ ✅"
+                    if ok else _DB_DOWN
+        }])
+
+    elif data == "action=time_menu":
+        await _reply(reply_token, [_time_picker_menu()])
+
+    elif data.startswith("action=set_hour_"):
+        try:
+            hour = int(data.rsplit("_", 1)[-1])
+        except ValueError:
+            hour = -1
+        if hour not in PRESET_NOTIFY_HOURS:
+            await _reply(reply_token, [{"type": "text", "text": "เวลาที่เลือกไม่ถูกต้อง กรุณาลองใหม่"}])
+            return
+        ok = await _safe(set_notify_hour, user_id, hour)
+        await _reply(reply_token, [{
+            "type": "text",
+            "text": f"⏰ ตั้งเวลาแจ้งเตือนเป็น {hour:02d}:00 น. แล้ว\n"
+                    f"ใช้กับทั้งการแจ้งเตือนเฉพาะตอนเสี่ยง และสรุปแปลงประจำวัน 🌿"
                     if ok else _DB_DOWN
         }])
 
@@ -413,7 +433,7 @@ def _settings_menu() -> dict:
                     },
                     {
                         "type": "text",
-                        "text": "ระบบสแกนแปลงของคุณทุกวัน 07:00 น. — ส่งข้อความ\nเฉพาะเมื่อพบความเสี่ยงหรือฝนหนักกำลังจะมา",
+                        "text": "ระบบสแกนแปลงของคุณตามเวลาที่ตั้งไว้ (ค่าเริ่มต้น 07:00 น.)\n— ส่งข้อความเฉพาะเมื่อพบความเสี่ยงหรือฝนหนักกำลังจะมา",
                         "wrap": True,
                         "size": "sm",
                         "color": "#666666",
@@ -430,7 +450,24 @@ def _settings_menu() -> dict:
                     },
                     {
                         "type": "text",
-                        "text": "สรุปสถานะทุกแปลงของคุณทุกเช้า 07:00 น.\nไม่ว่าจะเสี่ยงหรือไม่ก็ได้รับทุกวัน",
+                        "text": "สรุปสถานะทุกแปลงของคุณตามเวลาที่ตั้งไว้\nไม่ว่าจะเสี่ยงหรือไม่ก็ได้รับทุกวัน",
+                        "wrap": True,
+                        "size": "sm",
+                        "color": "#666666",
+                        "margin": "sm"
+                    },
+                    {"type": "separator", "margin": "lg"},
+                    {
+                        "type": "text",
+                        "text": "⏰ เวลาแจ้งเตือน",
+                        "weight": "bold",
+                        "size": "sm",
+                        "color": "#333333",
+                        "margin": "lg"
+                    },
+                    {
+                        "type": "text",
+                        "text": "ใช้เวลาเดียวกันทั้งสองแบบด้านบน — เลือกได้ที่ปุ่ม\n\"⏰ ตั้งเวลาแจ้งเตือน\" ด้านล่าง",
                         "wrap": True,
                         "size": "sm",
                         "color": "#666666",
@@ -495,8 +532,82 @@ def _settings_menu() -> dict:
                                 "style": "secondary"
                             }
                         ]
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "postback",
+                            "label": "⏰ ตั้งเวลาแจ้งเตือน",
+                            "data": "action=time_menu"
+                        },
+                        "style": "secondary"
                     }
                 ]
+            }
+        }
+    }
+
+
+def _time_picker_menu() -> dict:
+    """เลือกเวลาแจ้งเตือน — ตัวเลือกที่ตั้งไว้ล่วงหน้าเท่านั้น (05:00-10:00) กันพิมพ์
+    เวลาเองแล้วรูปแบบผิด ใช้ค่าเดียวกันทั้ง "แจ้งเตือนเฉพาะตอนเสี่ยง" และ "สรุปประจำวัน"
+    """
+    buttons = [
+        {
+            "type": "button",
+            "action": {
+                "type": "postback",
+                "label": f"{h:02d}:00 น.",
+                "data": f"action=set_hour_{h}"
+            },
+            "style": "secondary",
+        }
+        for h in PRESET_NOTIFY_HOURS
+    ]
+    # เรียงปุ่ม 2 คอลัมน์ต่อแถว
+    rows = [
+        {"type": "box", "layout": "horizontal", "spacing": "sm",
+         "contents": buttons[i:i + 2]}
+        for i in range(0, len(buttons), 2)
+    ]
+    return {
+        "type": "flex",
+        "altText": "⏰ ตั้งเวลาแจ้งเตือน GEOai",
+        "contents": {
+            "type": "bubble",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#1a7a3c",
+                "paddingAll": "14px",
+                "contents": [{
+                    "type": "text",
+                    "text": "⏰ เลือกเวลาแจ้งเตือน",
+                    "color": "#FFFFFF",
+                    "weight": "bold",
+                    "size": "md"
+                }]
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "paddingAll": "14px",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "ใช้กับทั้งการแจ้งเตือนเฉพาะตอนเสี่ยง และสรุปแปลงประจำวัน",
+                        "wrap": True,
+                        "size": "sm",
+                        "color": "#666666",
+                    },
+                ]
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "paddingAll": "12px",
+                "contents": rows,
             }
         }
     }

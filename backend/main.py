@@ -736,28 +736,32 @@ class FieldObservation(BaseModel):
 
 
 @app.post("/admin/trigger/daily-scan", dependencies=[Depends(verify_admin)])
-async def trigger_daily_scan(background_tasks: BackgroundTasks):
+async def trigger_daily_scan(background_tasks: BackgroundTasks, hour: int | None = None):
     """
     เรียกงานสแกนความเสี่ยงรายวัน (daily_scan_job) ด้วยตนเอง — สำหรับผูกกับ cron
-    ภายนอก (เช่น cron-job.org) ให้ยิงมาทุกวัน 07:00 น.
+    ภายนอก (GitHub Actions — ดู .github/workflows/keep-alive.yml) ให้ยิงมาทุกชั่วโมง
+    ตามช่วงเวลาที่เปิดให้ผู้ใช้เลือกได้ (05:00-10:00 น.)
 
     เหตุผลที่ต้องมี endpoint นี้: Render free tier ให้บริการ sleep service ทิ้งหลังไม่มี
     traffic 15 นาที — ตัวจับเวลาในโปรเซส (APScheduler) จะไม่ทำงานเลยถ้าแอปกำลังหลับ
-    อยู่พอดีตอน 07:00 (ไม่ catch-up ทีหลังด้วย) request ที่ยิงมาที่ endpoint นี้เองจะ
+    อยู่พอดีตอนถึงเวลา (ไม่ catch-up ทีหลังด้วย) request ที่ยิงมาที่ endpoint นี้เองจะ
     ปลุกแอปให้ตื่นก่อน (Render wake ตอนมี HTTP request เข้า) แล้วค่อยสั่งรันงานจริง
+
+    hour: ชั่วโมง (เวลาไทย) ที่ถูกทริกเกอร์มา — daily_scan_job จะประมวลผลเฉพาะผู้ใช้
+    ที่ตั้ง notify_hour ตรงกับค่านี้ ไม่ใส่ (None) = ประมวลผลทุกคน (ใช้ตอนทดสอบด้วยมือ)
 
     รันเป็น background task แล้วตอบกลับทันที (ไม่รอผลลัพธ์) เพราะสแกนทุกแปลงของ
     ทุกคนอาจใช้เวลาหลายนาที ยิงยาวเกิน timeout ปกติของ cron ภายนอกได้
     """
-    background_tasks.add_task(daily_scan_job)
-    return {"status": "started", "job": "daily_scan"}
+    background_tasks.add_task(daily_scan_job, hour)
+    return {"status": "started", "job": "daily_scan", "hour": hour}
 
 
 @app.post("/admin/trigger/rain-alert", dependencies=[Depends(verify_admin)])
-async def trigger_rain_alert(background_tasks: BackgroundTasks):
-    """เหมือน trigger_daily_scan แต่สำหรับงานแจ้งเตือนฝน (rain_alert_job) — ผูก cron ไว้ 06:00 น."""
-    background_tasks.add_task(rain_alert_job)
-    return {"status": "started", "job": "rain_alert"}
+async def trigger_rain_alert(background_tasks: BackgroundTasks, hour: int | None = None):
+    """เหมือน trigger_daily_scan แต่สำหรับงานแจ้งเตือนฝน (rain_alert_job)"""
+    background_tasks.add_task(rain_alert_job, hour)
+    return {"status": "started", "job": "rain_alert", "hour": hour}
 
 
 @app.post("/admin/seed-nayaiam", dependencies=[Depends(verify_admin)])
