@@ -244,12 +244,14 @@ def format_message(data: dict, lat: float, lng: float) -> str:
     water_pct = swab.get("soil_water_pct", 45.0)
     air_pct   = swab.get("soil_air_pct", 30.0)
 
+    # v4 (ผู้ใช้ขอ "ปรับคำให้เกษตรทั่วไปเข้าใจ"): "รากฝอย" → "รากเล็กๆ" และบอกจุดประสงค์
+    # ของยาก่อนชื่อสารเคมี ให้ตรงกับ gee_analysis._calc_swab() ที่แก้ไปแล้ว
     if swab_idx >= SWAB_WATERLOG_THRESHOLD:
         risks.append(
             f"🔴 น้ำขังในโซนราก: สัดส่วนน้ำในดิน {water_pct:.0f}% "
-            f"อากาศในช่องดิน {air_pct:.0f}% — รากฝอยขาดออกซิเจน เสี่ยงรากเน่า!")
+            f"อากาศในช่องดิน {air_pct:.0f}% — รากเล็กๆ ขาดอากาศหายใจ เสี่ยงรากเน่า!")
         advices.append("ด่วน! ขุดร่องระบายน้ำให้ลึก ≥ 50 ซม. รอบโคนต้น")
-        advices.append("หยุดให้น้ำทันที ฉีด Metalaxyl/Phosphonate ป้องกันรากเน่า")
+        advices.append("หยุดให้น้ำทันที ฉีดยาป้องกันรากเน่า (เช่น Metalaxyl หรือ Phosphonate หาซื้อได้ที่ร้านขายยาเกษตร)")
         if ndwi >= NDWI_SURFACE_WATER:
             advices.append(f"พบน้ำบนผิวดิน (MNDWI={ndwi:+.2f}) สูบน้ำออกก่อนฝนรอบใหม่")
         if status_icon != "🔴":
@@ -265,8 +267,8 @@ def format_message(data: dict, lat: float, lng: float) -> str:
     elif swab_idx <= SWAB_DROUGHT_THRESHOLD:
         risks.append(
             f"🔴 แล้งวิกฤต: น้ำในดิน {water_pct:.0f}% ต่ำมาก "
-            f"— รากฝอยแห้งตาย สูญเสียความสามารถดูดสารอาหาร")
-        advices.append("ให้น้ำทันที! แนะนำ micro-irrigation หรือน้ำหยดทางใบ")
+            f"— รากเล็กๆ แห้งตาย ดูดสารอาหารไม่ได้")
+        advices.append("ให้น้ำทันที! แนะนำระบบน้ำหยดหรือรดน้ำทางใบ")
         advices.append("คลุมโคนต้นด้วยฟาง/ใบไม้ ลดการระเหยน้ำ")
         if status_icon != "🔴":
             status_icon = "🔴"

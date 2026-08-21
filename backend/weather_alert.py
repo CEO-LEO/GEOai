@@ -333,9 +333,11 @@ def assess_soil_waterlog_risk(analysis: dict) -> SoilRiskProfile:
     if swab_idx >= SWAB_WARN_THRESHOLD:
         swab_bonus = min(20, int(swab_idx * 40))
         score += swab_bonus
+        # v4 (ผู้ใช้ขอ "ปรับคำให้เกษตรทั่วไปเข้าใจ"): "รากฝอย" → "รากเล็กๆ" — ต้องแก้
+        # substring ที่ match ไว้ด้านล่าง (swab_already_wet) พร้อมกัน ไม่งั้นตรวจจับพลาด
         factors.append(
             f"น้ำในดินสูง {water_pct:.0f}% / อากาศ {air_pct:.0f}% — "
-            f"รากฝอยเสี่ยงขาดออกซีเจน")
+            f"รากเล็กๆ เสี่ยงขาดอากาศหายใจ")
 
     score = min(100, score)
 
@@ -383,7 +385,7 @@ def evaluate_combined_risk(
     soil_critical = soil["soil_risk_score"] >= 50
     # SWAB pre-condition: รากตื้น อ.นายายอาม — ถ้าดินชื้นสูงอยู่แล้ว → เร่งระดับเตือน
     swab_already_wet = any(
-        "รากฝอยเสี่ยง" in f or "ดินชื้นเกิน" in f
+        "รากเล็กๆ เสี่ยง" in f or "ดินชื้นเกิน" in f
         for f in soil.get("risk_factors", [])
     )
 
@@ -392,10 +394,12 @@ def evaluate_combined_risk(
         score = min(100, 60 + soil["soil_risk_score"] // 2)
         waterlog = True
         stop_fert = True
-        advisories.append("🚨 ดินชื้นสูงอยู่แล้ว + ฝนจะตกเพิ่ม — รากฝอย 30-50 ซม. เสี่ยงขาดออกซีเจน")
+        # v4 (ผู้ใช้ขอ "ปรับคำให้เกษตรทั่วไปเข้าใจ"): "รากฝอย" → "รากเล็กๆ" ตรงกับ
+        # gee_analysis._calc_swab()/rule_engine.py ที่แก้ไปแล้ว
+        advisories.append("🚨 ดินชื้นสูงอยู่แล้ว + ฝนจะตกเพิ่ม — รากเล็กๆ ที่ลึก 30-50 ซม. เสี่ยงขาดอากาศหายใจ")
         advisories.append("⛔ งดให้น้ำและใส่ปุ๋ยทันที")
         advisories.append("💧 ขุดร่องระบายน้ำลึก ≥ 50 ซม. รอบโคนต้น")
-        advisories.append("🔍 ตรวจสอบรากฝอย หากน้ำตาลเข้ม/เน่า → ฉีด Metalaxyl ทันที")
+        advisories.append("🔍 ตรวจดูรากเล็กๆ ถ้าสีน้ำตาลเข้ม/เน่า → ฉีดยาป้องกันรากเน่า (เช่น Metalaxyl) ทันที")
         return CombinedAlert(
             alert_level="critical",
             alert_title="🔴 วิกฤต: SWAB ชื้นสูง + ฝนมา — รากตื้นเสี่ยงรากเน่า",

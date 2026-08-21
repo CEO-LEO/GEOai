@@ -143,7 +143,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
                                 "contents": [
                                     {
                                         "type": "text",
-                                        "text": "🌿 ความสมบูรณ์พืช (NDVI)",
+                                        "text": "🌿 ความสมบูรณ์ต้นทุเรียน",
                                         "size": "sm",
                                         "color": "#555555",
                                         "weight": "bold",
@@ -178,7 +178,18 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
                                         "contents": []
                                     }
                                 ]
-                            }
+                            },
+                            # v4 (ผู้ใช้ขอ "อธิบายค่าต่างๆ"): ดูจากความเขียวของใบผ่านดาวเทียม
+                            # ไม่ใช้คำว่า NDVI เลย (ศัพท์เทคนิคที่เกษตรกรทั่วไปไม่คุ้น)
+                            {
+                                "type": "text",
+                                "text": "ดูจากความเขียวของใบผ่านภาพดาวเทียม ค่ายิ่งสูงยิ่งสมบูรณ์ "
+                                        "(▲/▼ = เทียบกับปีก่อน)",
+                                "size": "xxs",
+                                "color": "#999999",
+                                "wrap": True,
+                                "margin": "sm",
+                            },
                         ]
                     },
 
@@ -192,9 +203,11 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
                         "spacing": "md",
                         "contents": [
                             _stat_box("💧 ความชื้นดิน", moist_str,
-                                      "#E53935" if moisture > -10 else "#2E7D32"),
+                                      "#E53935" if moisture > -10 else "#2E7D32",
+                                      caption="น้ำในดินตอนนี้มากไปหรือพอดี"),
                             _stat_box("⛰️ ระดับพื้นที่", elev_str,
-                                      "#E53935" if elev_diff < -1.5 else "#555555"),
+                                      "#E53935" if elev_diff < -1.5 else "#555555",
+                                      caption="เทียบพื้นที่รอบข้าง ยิ่งต่ำยิ่งเสี่ยงน้ำขัง"),
                         ]
                     },
 
@@ -207,14 +220,16 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
                         "layout": "horizontal",
                         "spacing": "md",
                         "contents": [
-                            _stat_box("🌍 สภาพพื้นดิน", f"{disp_str} ({stability_pct}%)", disp_color),
+                            _stat_box("🌍 สภาพพื้นดิน", f"{disp_str} ({stability_pct}%)", disp_color,
+                                      caption="ดินทรุด/เคลื่อนตัวหรือไม่ % ยิ่งสูงยิ่งมั่นคง"),
                             _stat_box("📊 ผลผลิตประเมิน",
                                       f"{yield_est.get('estimated_kg_per_rai', '-')} กก./ไร่"
                                       if yield_est else "—",
                                       {"high": "#2E7D32", "medium": "#FB8C00",
                                        "low": "#E65100", "very_low": "#C62828"
                                        }.get(yield_est.get("quality", "medium"), "#555555")
-                                      if yield_est else "#555555"),
+                                      if yield_est else "#555555",
+                                      caption="คาดคะเนจากภาพดาวเทียมล่าสุด"),
                         ]
                     },
 
@@ -272,7 +287,21 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
     }
 
 
-def _stat_box(label: str, value: str, color: str) -> dict:
+def _stat_box(label: str, value: str, color: str, caption: str = "") -> dict:
+    """
+    caption (ใหม่ — ผู้ใช้ขอ "อธิบายค่าต่างๆ ให้เกษตรกรทั่วไปเข้าใจ"): บรรทัดเล็กๆ
+    ใต้ตัวเลข อธิบายเป็นภาษาพูดว่าค่านี้คืออะไร/อ่านยังไง ไม่ต้องเดาความหมายเอง
+    """
+    contents = [
+        {"type": "text", "text": label,  "size": "xxs", "color": "#888888"},
+        {"type": "text", "text": value,  "size": "sm",  "color": color,
+         "weight": "bold", "wrap": True, "margin": "sm"}
+    ]
+    if caption:
+        contents.append(
+            {"type": "text", "text": caption, "size": "xxs", "color": "#999999",
+             "wrap": True, "margin": "xs"}
+        )
     return {
         "type": "box",
         "layout": "vertical",
@@ -280,11 +309,7 @@ def _stat_box(label: str, value: str, color: str) -> dict:
         "backgroundColor": "#F5F5F5",
         "cornerRadius": "8px",
         "paddingAll": "10px",
-        "contents": [
-            {"type": "text", "text": label,  "size": "xxs", "color": "#888888"},
-            {"type": "text", "text": value,  "size": "sm",  "color": color,
-             "weight": "bold", "wrap": True, "margin": "sm"}
-        ]
+        "contents": contents,
     }
 
 
@@ -392,19 +417,26 @@ def _build_topsoil_section(bsi, topsoil_risk: str) -> list[dict]:
         "low":    "✅ หน้าดินสมบูรณ์ มีพืชคลุมดิน",
     }.get(topsoil_risk, "✅ หน้าดินสมบูรณ์ มีพืชคลุมดิน")
 
+    # v4 (ผู้ใช้ขอ "อธิบายค่าต่างๆ ให้เกษตรกรทั่วไปเข้าใจ"): เดิมโชว์ "(Topsoil)" +
+    # เลข BSI ดิบเป็นหัวข้อหลัก ซึ่งเป็นศัพท์เทคนิคล้วนไม่มีความหมายกับเกษตรกร —
+    # risk_label (ข้อความภาษาไทยธรรมดา) สื่อความหมายจริงครบอยู่แล้ว ให้เด่นแทน
+    # เลขดิบยังโชว์ได้แต่เป็นแค่ตัวเล็กๆ ท้ายคำอธิบาย ไม่ใช่หัวข้อหลักอีกต่อไป
     contents = [
         {
             "type": "box", "layout": "horizontal",
             "contents": [
-                {"type": "text", "text": "🌱 สภาพหน้าดิน (Topsoil)",
+                {"type": "text", "text": "🌱 สภาพหน้าดิน",
                  "size": "sm", "color": "#555555", "weight": "bold", "flex": 1},
-                {"type": "text", "text": f"BSI {bsi_text}",
-                 "size": "sm", "color": risk_color, "weight": "bold", "align": "end"},
             ]
         },
         {
             "type": "text", "text": risk_label,
-            "size": "xs", "color": risk_color, "wrap": True, "margin": "sm"
+            "size": "xs", "color": risk_color, "wrap": True, "margin": "sm", "weight": "bold"
+        },
+        {
+            "type": "text",
+            "text": f"ดูจากพื้นที่ดินโล่งในภาพดาวเทียม (ค่าอ้างอิง {bsi_text})",
+            "size": "xxs", "color": "#999999", "wrap": True, "margin": "xs"
         },
     ]
 
