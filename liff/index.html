@@ -175,7 +175,7 @@
       height: 10px; border-radius: 5px;
       background: linear-gradient(to right,
         #b71c1c 0%, #e53935 16.7%, #fb8c00 33.3%,
-        #43a047 50%, #29b6f6 61.1%, #1565c0 83.3%, #0d47a1 100%);
+        #43a047 50%, #ffca28 61.1%, #ff8f00 83.3%, #d84315 100%);
       box-shadow: 0 0 0 1px rgba(0,0,0,.1);
     }
     .legend-gradient-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: #556 }
@@ -283,11 +283,14 @@
     .sphere-marker-html { background: none !important; border: none !important; }
 
     /* ── SWAB — Soil Water-Air Balance visualisation ── */
+    /* v4 (ผู้ใช้ขอปรับสีให้ผู้สูงอายุมองเห็นชัด): ตัดฟ้า/น้ำเงินออก — 0% (น้ำขังวิกฤต)
+       เดิม #1565c0/#42a5f5 (น้ำเงิน/ฟ้า) เปลี่ยนเป็นส้มเข้ม/ส้ม ให้อยู่ในโทน
+       แดง-ส้ม-เหลือง-เขียวล้วนเหมือนสเกลอื่นทั้งหมดในระบบ */
     .swab-gauge-wrap { margin: 10px 0 4px; }
     .swab-gauge {
       position: relative; height: 14px; border-radius: 7px;
       background: linear-gradient(to right,
-        #1565c0 0%, #42a5f5 30%, #43a047 50%, #fb8c00 70%, #e53935 100%);
+        #d84315 0%, #ff8f00 30%, #43a047 50%, #fb8c00 70%, #e53935 100%);
     }
     .swab-optimal {
       position: absolute; top: -2px; height: 18px;
@@ -310,8 +313,10 @@
       border-radius: 5px; overflow: hidden;
       margin: 8px 0 2px;
     }
-    .swab-pore-water { background: #1565c0; }
-    .swab-pore-air   { background: #b3e5fc; }
+    /* น้ำ=อำพัน (เดิมน้ำเงิน #1565c0), อากาศ=ขาวขอบเทา (เดิมฟ้าอ่อน/พาสเทล #b3e5fc —
+       ผู้สูงอายุแยกสีพาสเทลได้ยากเช่นกัน) วัสดุดิน=น้ำตาลเดิม (ไม่ได้อยู่ในกลุ่มสีต้องห้าม) */
+    .swab-pore-water { background: #ffb300; }
+    .swab-pore-air   { background: #ffffff; border-right: 1px solid #ccc; box-sizing: border-box; }
     .swab-pore-solid { background: #a1887f; }
     .swab-pore-labels {
       display: flex; gap: 10px;
@@ -409,9 +414,9 @@
       <div class="legend-gradient-labels">
         <span>🔴 จุดแห้งสุด</span>
         <span>🟢 ปานกลาง</span>
-        <span>🔵 จุดแฉะสุด</span>
+        <span>🟠 จุดแฉะสุด</span>
       </div>
-      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
+      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; ⚪ วงขาวขอบเข้ม = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
       <span class="legend-item legend-note" id="grid-spacing-note" style="display:none"></span>
     </div>
   </div>
@@ -876,17 +881,22 @@
 
   // ─── Moisture/waterlog grid overlay ────────────────
   // สเกลสีไล่ต่อเนื่อง (diverging) ตาม swab_index จริง แทนสีแยกหมวด 5 สีแบบเดิม —
-  // แดง=แล้งจัด → เขียว=สมดุลดี → น้ำเงิน=น้ำขังวิกฤต (ยิ่งเข้ม=ยิ่งรุนแรง)
+  // แดง=แล้งจัด → เขียว=สมดุลดี → ส้มเข้ม=น้ำขังวิกฤต (ยิ่งเข้ม=ยิ่งรุนแรง)
   // จุด anchor ตรงกับ threshold จริงของ _calc_swab() ฝั่ง backend เป๊ะ (ดู
   // rule_engine.py/gee_analysis.py) เพื่อให้สีที่ผู้ใช้เห็นตรงกับสถานะที่ระบบตัดสินจริง
+  //
+  // v4 (ผู้ใช้ขอปรับสีให้ผู้สูงอายุมองเห็นชัด): ตัดฟ้า/น้ำเงินออกทั้งหมด (เลนส์ตา
+  // ผู้สูงอายุกรองแสงสีฟ้า ทำให้ดูหม่น/เพี้ยนเป็นเขียว) เปลี่ยนฝั่งชื้นเกินเป็น
+  // เหลือง/อำพัน→ส้มเข้ม แทน ต้องตรงกับ backend/map_image.py เป๊ะ (คนละภาษาเดียวกัน
+  // นี้ทั้งสองที่ต้องอัปเดตพร้อมกันเสมอ)
   const SWAB_GRADIENT_STOPS = [
     [-0.45, [183, 28, 28]],   // #b71c1c แดงเข้ม — แล้งจัดสุด
     [-0.30, [229, 57, 53]],   // #e53935 แดง — เกณฑ์แล้งวิกฤต
     [-0.15, [251, 140, 0]],   // #fb8c00 ส้ม — เกณฑ์แห้งเกิน
     [ 0.00, [67, 160, 71]],   // #43a047 เขียว — สมดุลดี
-    [ 0.10, [41, 182, 246]],  // #29b6f6 ฟ้า — เกณฑ์ชื้นเกิน
-    [ 0.30, [21, 101, 192]],  // #1565c0 น้ำเงิน — เกณฑ์น้ำขังวิกฤต
-    [ 0.45, [13, 71, 161]],   // #0d47a1 น้ำเงินเข้ม — น้ำขังวิกฤตสุด
+    [ 0.10, [255, 202, 40]],  // #ffca28 เหลือง/อำพัน — เกณฑ์ชื้นเกิน (เดิมฟ้า #29b6f6)
+    [ 0.30, [255, 143, 0]],   // #ff8f00 ส้มเข้ม — เกณฑ์น้ำขังวิกฤต (เดิมน้ำเงิน #1565c0)
+    [ 0.45, [216, 67, 21]],   // #d84315 ส้มแดงเข้ม — น้ำขังวิกฤตสุด (เดิมน้ำเงินเข้ม #0d47a1)
   ];
   function swabColor(swabIndex) {
     const v = Math.max(-0.45, Math.min(0.45, swabIndex ?? 0));
@@ -1122,14 +1132,23 @@
           gridMarkers.push(chevron);
         });
 
-        // ── รอบที่ 3: จุดรวมน้ำ (บนสุด) — วงม่วง ตัดกับทุกอย่างด้านล่างชัดเจน ──────
-        // เดิม #ffc107 (ทอง) ใกล้เคียงสี "แห้งเกิน" ในกลุ่มสถานะ (#FB8C00) มากไป
-        // ผู้ใช้จริงแยกแยะไม่ออกในรูปที่ส่งเข้า LINE (map_image.py ก็เปลี่ยนพร้อมกัน
-        // เป็นสีเดียวกันนี้ ต้องตรงกันข้ามแพลตฟอร์ม)
+        // ── รอบที่ 3: จุดรวมน้ำ (บนสุด) — วงขาวขอบเข้ม ตัดกับทุกอย่างด้านล่างชัดเจน ──
+        // เดิม #ffc107 (ทอง) ชนสี "แห้งเกิน" แก้เป็นม่วง #ab47bc แล้วก็ยังไม่ผ่านอีก
+        // รอบ — ม่วงเป็นสีที่ผู้สูงอายุมักมองเพี้ยนไปทางดำ/น้ำเงินเข้ม เปลี่ยนเป็นขาว
+        // แทน (ไม่ซ้ำกับ 5 สีสถานะที่เป็นโทนแดง/ส้ม/เหลือง/เขียวล้วนแล้ว และขาวคือสี
+        // ที่แนะนำสำหรับจุดสังเกต/ป้ายเตือนโดยเฉพาะ) sphere.Dot รองรับสีเดียว (ไม่มี
+        // fill+outline แยก) เลยวาง Dot สีเข้มขนาดใหญ่กว่าไว้ข้างล่าง แล้ววาง Dot สีขาว
+        // ขนาดเล็กกว่าทับ จำลองเป็น "วงขาวขอบเข้ม" — ต้องตรงกับ map_image.py เป๊ะ
         gridSinkPoints.forEach(p => {
+          const outline = new sphere.Dot(
+            { lon: p.lng, lat: p.lat },
+            { lineWidth: tileSizeM * 1.7, lineColor: "#212121" }
+          );
+          map.Overlays.add(outline);
+          gridMarkers.push(outline);
           const ring = new sphere.Dot(
             { lon: p.lng, lat: p.lat },
-            { lineWidth: tileSizeM * 1.4, lineColor: "#ab47bc" }
+            { lineWidth: tileSizeM * 1.3, lineColor: "#ffffff" }
           );
           map.Overlays.add(ring);
           gridMarkers.push(ring);
@@ -1785,7 +1804,7 @@
         const swabAdv  = swab.advice || '';
         const swabSev  = swab.severity || 'low';
         const swCls    = swabSev === 'high' ? 'danger' : swabSev === 'medium' ? 'warn' : '';
-        const swCol    = swabSev === 'high' ? '#c62828' : swabSev === 'medium' ? '#e65100' : '#1565c0';
+        const swCol    = swabSev === 'high' ? '#c62828' : swabSev === 'medium' ? '#e65100' : '#2e7d32';
         const needleL  = ((swabIdx + 1) / 2 * 100).toFixed(1);
         const ndwiLbl  = ndwi >= 0.05 ? '💧 มีน้ำ' : ndwi >= -0.1 ? '🟰 ปกติ' : '🏜️ แห้ง';
         return `
@@ -1814,8 +1833,8 @@
             <div class="swab-pore-solid" style="flex:1"></div>
           </div>
           <div class="swab-pore-labels">
-            <span>🔵 น้ำ ${waterPct.toFixed(0)}%</span>
-            <span>🩵 อากาศ ${airPct.toFixed(0)}%</span>
+            <span>🟠 น้ำ ${waterPct.toFixed(0)}%</span>
+            <span>⚪ อากาศ ${airPct.toFixed(0)}%</span>
             <span>🟫 วัสดุดิน ~${solidPct.toFixed(0)}%</span>
           </div>
           <div class="result-advice">${escHtml(swabAdv)}</div>

@@ -43,12 +43,18 @@ def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
 # ไฟล์ซ้ำสองที่แล้วหลุดซิงก์กัน — logic การจำแนกก็เสี่ยงแบบเดียวกันถ้าซ้ำ)
 STATUS_ORDER = ["drought", "dry", "optimal", "wet", "waterlogged"]
 
+# v4 (ผู้ใช้ขอปรับสีให้ผู้สูงอายุมองเห็นชัด): เลนส์ตาที่เปลี่ยนเป็นสีเหลืองตามวัย
+# กรองแสงสีฟ้าออก ทำให้ฟ้า/น้ำเงินดูหม่น/เพี้ยนเป็นเขียว และแยกสีม่วง/พาสเทลได้ยาก
+# (ความไวต่อความต่างของสีลดลง) — เปลี่ยนทั้ง 5 สีให้อยู่ในโทนแดง/ส้ม/เหลือง/เขียว
+# ล้วน (ตัดฟ้า-น้ำเงิน-ม่วง-พาสเทลออกทั้งหมด) ต้องเปลี่ยนพร้อมกันทั้ง 3 จุดที่มีชุดสี
+# นี้: ที่นี่, SWAB_GRADIENT_STOPS ด้านล่าง, liff/index.html (ตารางกริด+เกจ+แถบ
+# สัดส่วนดิน), backend/flex_messages.py (เกจในการ์ด LINE) — ต้องตรงกันหมดทุกที่
 STATUS_COLORS: dict[str, tuple[int, int, int]] = {
     "drought":     (183, 28, 28),   # แดงเข้ม
     "dry":         (251, 140, 0),   # ส้ม
     "optimal":     (67, 160, 71),   # เขียว
-    "wet":         (41, 182, 246),  # ฟ้า
-    "waterlogged": (13, 71, 161),   # น้ำเงินเข้ม
+    "wet":         (255, 202, 40),  # เหลือง/อำพัน (เดิมฟ้า #29B6F6)
+    "waterlogged": (216, 67, 21),   # ส้มแดงเข้ม (เดิมน้ำเงินเข้ม #0D47A1)
 }
 
 STATUS_LABELS_TH: dict[str, str] = {
@@ -73,9 +79,9 @@ SWAB_GRADIENT_STOPS: list[tuple[float, tuple[int, int, int]]] = [
     (-0.30, (229, 57, 53)),    # #e53935 แดง — เกณฑ์แล้งวิกฤต
     (-0.15, (251, 140, 0)),    # #fb8c00 ส้ม — เกณฑ์แห้งเกิน
     (0.00,  (67, 160, 71)),    # #43a047 เขียว — สมดุลดี
-    (0.10,  (41, 182, 246)),   # #29b6f6 ฟ้า — เกณฑ์ชื้นเกิน
-    (0.30,  (21, 101, 192)),   # #1565c0 น้ำเงิน — เกณฑ์น้ำขังวิกฤต
-    (0.45,  (13, 71, 161)),    # #0d47a1 น้ำเงินเข้ม — น้ำขังวิกฤตสุด
+    (0.10,  (255, 202, 40)),   # #ffca28 เหลือง/อำพัน — เกณฑ์ชื้นเกิน (เดิมฟ้า #29b6f6)
+    (0.30,  (255, 143, 0)),    # #ff8f00 ส้มเข้ม — เกณฑ์น้ำขังวิกฤต (เดิมน้ำเงิน #1565c0)
+    (0.45,  (216, 67, 21)),    # #d84315 ส้มแดงเข้ม — น้ำขังวิกฤตสุด (เดิมน้ำเงินเข้ม #0d47a1)
 ]
 
 
@@ -281,17 +287,19 @@ def render_plot_grid_image(
         chevron_px = [to_px(*tip), to_px(*back_l), to_px(*back_r)]
         draw.polygon(chevron_px, fill=(38, 50, 56, 217), outline=(255, 255, 255, 255), width=2)
 
-    # ── จุดรวมน้ำ (บนสุด) — วงกลมทึบสีม่วง ตัดกับทุกอย่างด้านล่างชัดเจน ──────────
+    # ── จุดรวมน้ำ (บนสุด) — วงกลมทึบสีขาวขอบเข้ม ตัดกับทุกอย่างด้านล่างชัดเจน ────
     # พอร์ตจาก showMoistureGrid() ฝั่ง LIFF (รอบที่ 3) — ≥3 ทิศทางไหลมารวม (ไม่ใช่ ≥2
     # เหมือนกัน — เกณฑ์เดียวกับเว็บ กันจุดเด่นกระจายเกลื่อนจนเสียความหมาย)
     #
-    # สีเดิม #ffc107 (ทอง) ใกล้เคียงกับสี "แห้งเกิน" ในกลุ่มสถานะ (#FB8C00) มากไป
-    # ผู้ใช้ทดสอบจริงแยกแยะไม่ออกในรูปที่ส่งเข้า LINE — เปลี่ยนเป็นม่วง (ไม่ซ้ำกับ
-    # 5 สีสถานะเลยสักสี กัน confuse) ต้องเปลี่ยนพร้อมกันทั้งที่นี่และ
-    # liff/index.html (sphere.Dot lineColor + legend text) ให้สีตรงกันข้ามแพลตฟอร์ม
+    # สีที่ 2 (ม่วง #AB47BC — แก้จากทองเดิมที่ชนสี "แห้งเกิน") ยังไม่ผ่านอีกรอบ:
+    # ม่วงเป็นสีที่ผู้สูงอายุมักมองเพี้ยนไปทางดำ/น้ำเงินเข้ม (ความสามารถรับแสงลดลง)
+    # เปลี่ยนเป็นขาว+ขอบเข้ม แทน — ไม่ซ้ำกับ 5 สีสถานะเลยสักสี (ทั้งหมดเป็นโทน
+    # แดง/ส้ม/เหลือง/เขียว) และสีขาวคือสีที่แนะนำสำหรับป้ายเตือน/จุดสังเกตโดยเฉพาะ
+    # ต้องเปลี่ยนพร้อมกันทั้งที่นี่และ liff/index.html (sphere.Dot + legend text)
     in_degree = _compute_flow_graph(grid_points, spacing_m)
     ring_radius_px = max(4.0, (tile_size_m * 1.4 / 2) * px_per_m)
-    sink_color = (171, 71, 188)   # #AB47BC ม่วง — ต้องตรงกับ liff/index.html เป๊ะ
+    sink_color = (255, 255, 255)   # ขาว — ต้องตรงกับ liff/index.html เป๊ะ
+    sink_outline = (33, 33, 33)    # เทาเข้มเกือบดำ กันวงขาวจมกับพื้นหลังสว่าง
     sink_count = 0
     for p in grid_points:
         if in_degree.get(id(p), 0) < 3:
@@ -300,7 +308,7 @@ def render_plot_grid_image(
         x, y = to_px(p["lat"], p["lng"])
         draw.ellipse(
             [x - ring_radius_px, y - ring_radius_px, x + ring_radius_px, y + ring_radius_px],
-            fill=sink_color + (217,), outline=sink_color + (255,), width=2,
+            fill=sink_color + (235,), outline=sink_outline + (255,), width=3,
         )
     has_flow_arrows = len(used_buckets) > 0
 
@@ -384,9 +392,10 @@ def render_plot_grid_image(
         if sink_count > 0:
             dot_r = 5
             dot_cy = note_y + 8
-            cdraw.ellipse([x_cursor, dot_cy - dot_r, x_cursor + dot_r * 2, dot_cy + dot_r], fill=sink_color)
+            cdraw.ellipse([x_cursor, dot_cy - dot_r, x_cursor + dot_r * 2, dot_cy + dot_r],
+                          fill=sink_color, outline=sink_outline, width=1)
             x_cursor += dot_r * 2 + 6
-            text = f"วงม่วง = จุดน้ำรวมมาก ({sink_count} จุด)"
+            text = f"วงขาวขอบเข้ม = จุดน้ำรวมมาก ({sink_count} จุด)"
             cdraw.text((x_cursor, note_y), text, font=f_note, fill=(102, 102, 102))
 
     buf = io.BytesIO()
