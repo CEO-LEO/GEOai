@@ -481,9 +481,29 @@
   }
 
   // ─── Init ─────────────────────────────────────────
+  // บั๊กที่เจอ (ผู้ใช้รายงาน "หาแปลงตัวเองไม่เจอทั้งที่เคยวาดแล้ว"): เดิมถ้า
+  // liff.getContext().userId ไม่มีค่า (เช่น เปิด URL นี้ตรงๆ ใน browser ปกติ
+  // แทนที่จะเปิดผ่านปุ่มในแอป LINE) โค้ดจะ fallback ไปใช้ userId = "test-user"
+  // ตัวเดียวที่ทุกคนที่หลุดมาทางนี้ใช้ร่วมกันหมด — ไม่ใช่แค่มองไม่เห็นแปลงตัวเอง
+  // (ซึ่งยังอยู่ในฐานข้อมูลปกติ ผูกกับ LINE user id จริง) แต่เสี่ยงเห็น/บันทึกทับ
+  // ข้อมูลของคนอื่นที่หลุดมาทางเดียวกันด้วย
+  //
+  // แก้ด้วยการเช็ค liff.isInClient() (true = เปิดผ่าน LIFF browser ในแอป LINE จริง
+  // ซึ่ง login ให้อัตโนมัติอยู่แล้ว) — ถ้าไม่ใช่ และยังไม่ login (isLoggedIn()===false)
+  // ให้สั่ง liff.login() บังคับ login ผ่าน LINE จริงก่อน (redirect กลับมาหน้านี้เอง
+  // หลัง login เสร็จ) แทนที่จะเงียบๆ ใช้บัญชีทดสอบร่วม — "test-user" เหลือไว้เป็น
+  // fallback สุดท้ายจริงๆ เฉพาะตอน liff.init() ล้มเหลว (เช่น local dev ไม่ได้ตั้ง
+  // LIFF_ID จริง) ซึ่งไม่มีทาง login ผ่าน LINE ได้อยู่แล้ว
+  let liffInitOk = false;
   liff.init({ liffId: LIFF_ID })
-    .catch(() => {})   // ทำงานใน browser ปกติได้
+    .then(() => { liffInitOk = true; })
+    .catch(() => {})   // liff.init() ล้มเหลว (เช่น local dev) — ทำงานเป็น browser ปกติได้
     .finally(async () => {
+      if (liffInitOk && !liff.isInClient() && !liff.isLoggedIn()) {
+        liff.login({ redirectUri: window.location.href });
+        return;   // liff.login() จะ redirect ออกจากหน้านี้ทันที ไม่ต้องทำอะไรต่อ
+      }
+
       try { userId = liff.getContext()?.userId; } catch {}
       userId = userId || "test-user";
 
