@@ -6,6 +6,7 @@ LINE Webhook Handler
   - ผู้ใช้กด "ประวัติการตรวจ" → ดึงผลล่าสุดจาก DB
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -190,6 +191,30 @@ async def _handle_postback(event: dict):
                 "altText": f"📋 ผลวิเคราะห์ {len(bubbles)} แปลงของคุณ — ปัดดูทีละแปลง",
                 "contents": {"type": "carousel", "contents": bubbles},
             }])
+
+        # ── รูปแผนที่ความชื้นตามมาทีละแปลง (ที่วาดขอบเขตไว้เท่านั้น) ─────────────
+        # ผู้ใช้ขอเพิ่ม "อย่าลืมรูป map ด้วย" — ส่งเป็น push ตามหลัง ไม่ใช่มัดรวมใน
+        # reply() เดียวกัน เพราะ reply token ใช้ได้ครั้งเดียว+มีเวลาจำกัด ส่วนสร้างรูป
+        # ต้องรอ GEE 2 ครั้ง/แปลง (grid + ภาพถ่ายดาวเทียม) หลายแปลงรวมกันอาจไม่ทันเวลา
+        # reply — push ไม่มีข้อจำกัดนี้ สร้างรูปทุกแปลงพร้อมกัน (asyncio.gather) ลด
+        # เวลารอ แล้วค่อยส่งเรียงตามลำดับแปลงให้อ่านง่าย
+        plots_with_polygon = [p for p in plots if p.get("polygon") and len(p["polygon"]) >= 3]
+        if plots_with_polygon:
+            from plot_image_service import build_plot_grid_image_url
+            from line_sender import send_line_message
+
+            image_urls = await asyncio.gather(*[
+                build_plot_grid_image_url(p["polygon"], p.get("name") or "แปลงของคุณ")
+                for p in plots_with_polygon
+            ], return_exceptions=True)
+
+            for plot, result in zip(plots_with_polygon, image_urls):
+                if isinstance(result, Exception) or not result:
+                    if isinstance(result, Exception):
+                        logger.warning(f"map image failed for plot {plot.get('id')}: {result}")
+                    continue
+                plot_name = plot.get("name") or "แปลงของคุณ"
+                await send_line_message(user_id, f"🗺️ แผนที่ความชื้น — {plot_name}", image_url=result)
 
     elif data == "action=settings":
         await _reply(reply_token, [_settings_menu()])
