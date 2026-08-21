@@ -60,6 +60,66 @@ def status_color(status: str | None) -> tuple[int, int, int]:
     return STATUS_COLORS.get(status or "", _DEFAULT_COLOR)
 
 
+def _offset_latlng(lat: float, lng: float, bearing_deg: float, distance_m: float) -> tuple[float, float]:
+    """
+    หาพิกัดปลายทางเมื่อเดินจาก (lat,lng) ไปทาง bearing_deg (0=เหนือ ตามเข็มนาฬิกา)
+    เป็นระยะ distance_m เมตร — พอร์ตตรงจาก offsetLatLng() ใน liff/index.html
+
+    ไม่ import gee_analysis._offset_latlng() (ตัวเดียวกันเป๊ะ) มาใช้ซ้ำ เพราะ
+    map_image.py ต้อง import ได้อิสระแม้ ee/gee_analysis พัง (ดู try/except รอบ
+    import Pillow ใน plot_image_service.py — จุดประสงค์คือแยก failure domain ของ
+    ฟีเจอร์รูปภาพออกจาก GEE) เป็นแค่สูตรเรขาคณิตล้วนๆ ไม่ใช่ threshold ทางธุรกิจที่
+    เสี่ยง "หลุดซิงก์" ทางความหมายถ้าซ้ำ เลยพอรับความเสี่ยง duplicate ได้ตรงนี้
+    """
+    R = 6371000.0
+    brng = math.radians(bearing_deg)
+    lat_rad = math.radians(lat)
+    d_lat = (distance_m * math.cos(brng)) / R * (180 / math.pi)
+    d_lng = (distance_m * math.sin(brng)) / (R * math.cos(lat_rad)) * (180 / math.pi)
+    return lat + d_lat, lng + d_lng
+
+
+def _bearing_between(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """มุมทิศทาง (0=เหนือ ตามเข็มนาฬิกา) จากจุด 1 ไปจุด 2 — พอร์ตจาก bearingBetween() ฝั่ง JS"""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_lambda = math.radians(lng2 - lng1)
+    y = math.sin(d_lambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(d_lambda)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def _compute_flow_graph(points: list[dict], spacing_m: float) -> dict[int, int]:
+    """
+    คืน dict id(point) → in_degree (จำนวนจุดอื่นที่มีทิศทางน้ำไหลมารวมที่จุดนี้)
+    พอร์ตตรงจาก computeFlowGraph() ใน liff/index.html — ใช้หา "จุดรวมน้ำ" (sink)
+    สำหรับวงกลมสีทองบนแผนที่ (จุดที่ ≥3 ทิศทางไหลมารวม เหมาะขุดร่องระบายน้ำที่สุด)
+    """
+    max_dist_deg = (spacing_m / 111320.0) * 1.8
+    in_degree: dict[int, int] = {id(p): 0 for p in points}
+    for p in points:
+        flow_to = p.get("flow_to")
+        if not flow_to:
+            continue
+        bearing = _bearing_between(p["lat"], p["lng"], flow_to["lat"], flow_to["lng"])
+        best, best_dist = None, float("inf")
+        for q in points:
+            if q is p:
+                continue
+            dist = math.hypot(q["lat"] - p["lat"], q["lng"] - p["lng"])
+            if dist > max_dist_deg:
+                continue
+            q_bearing = _bearing_between(p["lat"], p["lng"], q["lat"], q["lng"])
+            diff = abs(q_bearing - bearing)
+            if diff > 180:
+                diff = 360 - diff
+            if diff <= 50 and dist < best_dist:
+                best_dist = dist
+                best = q
+        if best is not None:
+            in_degree[id(best)] = in_degree.get(id(best), 0) + 1
+    return in_degree
+
+
 def summarize_grid_status(grid_points: list[dict]) -> tuple[str, tuple[int, int, int]]:
     """
     สรุปภาพรวมทั้งแปลงเป็นประโยคเดียว + สี สำหรับแถบหัวเรื่อง — เลือกสถานะที่
@@ -142,6 +202,46 @@ def render_plot_grid_image(
             width=grid_line_w,
         )
 
+    # ── ลูกศรทิศทางน้ำไหล (แบบห่างๆ ไม่ใช่ทุกจุด กันรกทับกระเบื้อง) ──────────
+    # พอร์ตจาก showMoistureGrid() ฝั่ง LIFF (รอบที่ 2) — ผู้ใช้ขอให้รูปที่ส่งเข้า
+    # LINE มีข้อมูลชุดเดียวกับที่เห็นในเว็บ ไม่ใช่แค่สีกระเบื้องเฉยๆ
+    tile_size_m = spacing_m * 1.12
+    chevron_bucket_deg = (spacing_m * 2.5) / 111320.0
+    used_buckets: set[tuple[int, int]] = set()
+    for p in grid_points:
+        flow_to = p.get("flow_to")
+        if not flow_to:
+            continue
+        key = (round(p["lat"] / chevron_bucket_deg), round(p["lng"] / chevron_bucket_deg))
+        if key in used_buckets:
+            continue
+        used_buckets.add(key)
+        bearing = _bearing_between(p["lat"], p["lng"], flow_to["lat"], flow_to["lng"])
+        size_m = tile_size_m * 0.8
+        tip = _offset_latlng(p["lat"], p["lng"], bearing, size_m)
+        back_l = _offset_latlng(p["lat"], p["lng"], (bearing + 150) % 360, size_m * 0.7)
+        back_r = _offset_latlng(p["lat"], p["lng"], (bearing + 210) % 360, size_m * 0.7)
+        chevron_px = [to_px(*tip), to_px(*back_l), to_px(*back_r)]
+        draw.polygon(chevron_px, fill=(38, 50, 56, 217), outline=(255, 255, 255, 255), width=2)
+
+    # ── จุดรวมน้ำ (บนสุด) — วงกลมทึบสีทอง ตัดกับทุกอย่างด้านล่างชัดเจน ──────────
+    # พอร์ตจาก showMoistureGrid() ฝั่ง LIFF (รอบที่ 3) — ≥3 ทิศทางไหลมารวม (ไม่ใช่ ≥2
+    # เหมือนกัน — เกณฑ์เดียวกับเว็บ กันจุดเด่นกระจายเกลื่อนจนเสียความหมาย)
+    in_degree = _compute_flow_graph(grid_points, spacing_m)
+    ring_radius_px = max(4.0, (tile_size_m * 1.4 / 2) * px_per_m)
+    gold = (255, 193, 7)
+    sink_count = 0
+    for p in grid_points:
+        if in_degree.get(id(p), 0) < 3:
+            continue
+        sink_count += 1
+        x, y = to_px(p["lat"], p["lng"])
+        draw.ellipse(
+            [x - ring_radius_px, y - ring_radius_px, x + ring_radius_px, y + ring_radius_px],
+            fill=gold + (217,), outline=gold + (255,), width=2,
+        )
+    has_flow_arrows = len(used_buckets) > 0
+
     # เส้นขอบเขตแปลงสีขาว ให้เห็นชัดว่าตรงไหนคือแปลงจริง
     if polygon and len(polygon) >= 3:
         poly_px = [to_px(lat, lng) for lng, lat in polygon]
@@ -151,7 +251,10 @@ def render_plot_grid_image(
 
     # ── ประกอบภาพสุดท้าย: แถบหัวเรื่อง (บน) + แผนที่ + แถบ legend (ล่าง) ──
     top_h = 92 if plot_name else 66
-    bottom_h = 78
+    # เพิ่มความสูง legend อีกบรรทัดเมื่อมีลูกศร/จุดรวมน้ำให้อธิบาย (ตรงกับเว็บ) —
+    # แปลงพื้นที่ราบ/ไม่มีสัญญาณทิศทางน้ำไหลชัดเจนจะไม่มีลูกศรเลย ไม่ต้องเปลืองที่
+    show_flow_note = has_flow_arrows or sink_count > 0
+    bottom_h = 100 if show_flow_note else 78
     canvas = Image.new("RGB", (w, top_h + h + bottom_h), (255, 255, 255))
     cdraw = ImageDraw.Draw(canvas)
 
@@ -200,6 +303,26 @@ def render_plot_grid_image(
             cdraw.text((sw_x0 + swatch + 6, sw_y0 + 16), label[mid:], font=f_legend, fill=(51, 51, 51))
         else:
             cdraw.text((sw_x0 + swatch + 6, sw_y0 + 1), label, font=f_legend, fill=(51, 51, 51))
+
+    # บรรทัดอธิบายลูกศร/จุดรวมน้ำ — ให้ครบตามที่เห็นในเว็บ (ผู้ใช้ขอ)
+    # หมายเหตุ: ฟอนต์ Kanit ไม่มี glyph อีโมจิ (ทดสอบแล้วขึ้นเป็นกล่องว่าง) — ▲ เป็น
+    # สัญลักษณ์เรขาคณิตธรรมดา (U+25B2) เรนเดอร์ได้ปกติ แต่ 🟡 ต้องวาดเป็นวงกลมจริง
+    # ด้วย PIL แทน ไม่ใช้ตัวอักษรอีโมจิ
+    if show_flow_note:
+        f_note = _font("Kanit-Regular.ttf", 13)
+        note_y = legend_y0 + 42
+        x_cursor = pad
+        if has_flow_arrows:
+            text = "▲ ลูกศร = ทิศทางน้ำไหล"
+            cdraw.text((x_cursor, note_y), text, font=f_note, fill=(102, 102, 102))
+            x_cursor = cdraw.textbbox((x_cursor, note_y), text, font=f_note)[2] + 14
+        if sink_count > 0:
+            dot_r = 5
+            dot_cy = note_y + 8
+            cdraw.ellipse([x_cursor, dot_cy - dot_r, x_cursor + dot_r * 2, dot_cy + dot_r], fill=gold)
+            x_cursor += dot_r * 2 + 6
+            text = f"วงทอง = จุดน้ำรวมมาก ({sink_count} จุด)"
+            cdraw.text((x_cursor, note_y), text, font=f_note, fill=(102, 102, 102))
 
     buf = io.BytesIO()
     canvas.save(buf, format="PNG", optimize=True)
