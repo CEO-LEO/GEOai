@@ -411,7 +411,7 @@
         <span>🟢 ปานกลาง</span>
         <span>🔵 จุดแฉะสุด</span>
       </div>
-      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟡 วงทอง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
+      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
       <span class="legend-item legend-note" id="grid-spacing-note" style="display:none"></span>
     </div>
   </div>
@@ -1122,11 +1122,14 @@
           gridMarkers.push(chevron);
         });
 
-        // ── รอบที่ 3: จุดรวมน้ำ (บนสุด) — วงขาวขอบทอง ตัดกับทุกอย่างด้านล่างชัดเจน ──
+        // ── รอบที่ 3: จุดรวมน้ำ (บนสุด) — วงม่วง ตัดกับทุกอย่างด้านล่างชัดเจน ──────
+        // เดิม #ffc107 (ทอง) ใกล้เคียงสี "แห้งเกิน" ในกลุ่มสถานะ (#FB8C00) มากไป
+        // ผู้ใช้จริงแยกแยะไม่ออกในรูปที่ส่งเข้า LINE (map_image.py ก็เปลี่ยนพร้อมกัน
+        // เป็นสีเดียวกันนี้ ต้องตรงกันข้ามแพลตฟอร์ม)
         gridSinkPoints.forEach(p => {
           const ring = new sphere.Dot(
             { lon: p.lng, lat: p.lat },
-            { lineWidth: tileSizeM * 1.4, lineColor: "#ffc107" }
+            { lineWidth: tileSizeM * 1.4, lineColor: "#ab47bc" }
           );
           map.Overlays.add(ring);
           gridMarkers.push(ring);

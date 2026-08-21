@@ -224,12 +224,17 @@ def render_plot_grid_image(
         chevron_px = [to_px(*tip), to_px(*back_l), to_px(*back_r)]
         draw.polygon(chevron_px, fill=(38, 50, 56, 217), outline=(255, 255, 255, 255), width=2)
 
-    # ── จุดรวมน้ำ (บนสุด) — วงกลมทึบสีทอง ตัดกับทุกอย่างด้านล่างชัดเจน ──────────
+    # ── จุดรวมน้ำ (บนสุด) — วงกลมทึบสีม่วง ตัดกับทุกอย่างด้านล่างชัดเจน ──────────
     # พอร์ตจาก showMoistureGrid() ฝั่ง LIFF (รอบที่ 3) — ≥3 ทิศทางไหลมารวม (ไม่ใช่ ≥2
     # เหมือนกัน — เกณฑ์เดียวกับเว็บ กันจุดเด่นกระจายเกลื่อนจนเสียความหมาย)
+    #
+    # สีเดิม #ffc107 (ทอง) ใกล้เคียงกับสี "แห้งเกิน" ในกลุ่มสถานะ (#FB8C00) มากไป
+    # ผู้ใช้ทดสอบจริงแยกแยะไม่ออกในรูปที่ส่งเข้า LINE — เปลี่ยนเป็นม่วง (ไม่ซ้ำกับ
+    # 5 สีสถานะเลยสักสี กัน confuse) ต้องเปลี่ยนพร้อมกันทั้งที่นี่และ
+    # liff/index.html (sphere.Dot lineColor + legend text) ให้สีตรงกันข้ามแพลตฟอร์ม
     in_degree = _compute_flow_graph(grid_points, spacing_m)
     ring_radius_px = max(4.0, (tile_size_m * 1.4 / 2) * px_per_m)
-    gold = (255, 193, 7)
+    sink_color = (171, 71, 188)   # #AB47BC ม่วง — ต้องตรงกับ liff/index.html เป๊ะ
     sink_count = 0
     for p in grid_points:
         if in_degree.get(id(p), 0) < 3:
@@ -238,7 +243,7 @@ def render_plot_grid_image(
         x, y = to_px(p["lat"], p["lng"])
         draw.ellipse(
             [x - ring_radius_px, y - ring_radius_px, x + ring_radius_px, y + ring_radius_px],
-            fill=gold + (217,), outline=gold + (255,), width=2,
+            fill=sink_color + (217,), outline=sink_color + (255,), width=2,
         )
     has_flow_arrows = len(used_buckets) > 0
 
@@ -319,9 +324,9 @@ def render_plot_grid_image(
         if sink_count > 0:
             dot_r = 5
             dot_cy = note_y + 8
-            cdraw.ellipse([x_cursor, dot_cy - dot_r, x_cursor + dot_r * 2, dot_cy + dot_r], fill=gold)
+            cdraw.ellipse([x_cursor, dot_cy - dot_r, x_cursor + dot_r * 2, dot_cy + dot_r], fill=sink_color)
             x_cursor += dot_r * 2 + 6
-            text = f"วงทอง = จุดน้ำรวมมาก ({sink_count} จุด)"
+            text = f"วงม่วง = จุดน้ำรวมมาก ({sink_count} จุด)"
             cdraw.text((x_cursor, note_y), text, font=f_note, fill=(102, 102, 102))
 
     buf = io.BytesIO()
