@@ -6,8 +6,6 @@ import logging
 import tempfile
 import io
 import secrets
-import time
-import uuid
 import traceback
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -45,16 +43,7 @@ except Exception as _ml_model_err:
 from rule_engine import format_message, compute_risk_level
 from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
-# Pillow เป็น dependency ใหม่ (เพิ่งเพิ่มเข้ามาสำหรับฟีเจอร์ส่งรูปแผนที่เข้า LINE) —
-# กัน import พังแล้วดึงทั้งแอปตายไปด้วย (เหมือน ml_model ด้านบน) ถ้าพัง ฟีเจอร์นี้
-# แค่ปิดตัวเอง (_build_plot_grid_image_url คืน None) ส่วนอื่นของระบบทำงานต่อได้ปกติ
-try:
-    from map_image import render_plot_grid_image
-    _MAP_IMAGE_AVAILABLE = True
-except Exception as _map_image_err:
-    logger.warning(f"map_image unavailable — image feature disabled: {_map_image_err}")
-    render_plot_grid_image = None
-    _MAP_IMAGE_AVAILABLE = False
+from plot_image_service import build_plot_grid_image_url, get_cached_plot_image
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
@@ -283,63 +272,17 @@ async def liff_config():
 
 # ─────────────────────────────────────────────────────────
 # Plot grid image — สำหรับส่งภาพแผนที่ความชื้นเข้า LINE OA คู่กับผลวิเคราะห์
+# (ตัวสร้าง+แคชย้ายไป plot_image_service.py แล้ว — daily_scan_job ใน scheduler.py
+# ต้องเรียกใช้ด้วย ดูเหตุผลเต็มที่ไฟล์นั้น) — เหลือแค่ endpoint เสิร์ฟภาพไว้ที่นี่
+# เพราะต้องเป็น FastAPI route
 # ─────────────────────────────────────────────────────────
-# LINE ต้องการ URL https สาธารณะที่ server ของ LINE ดึงเองได้โดยไม่ auth — เก็บภาพ
-# ที่ compose แล้วไว้ใน memory ชั่วคราว (ไม่ต้องถาวร เพราะ LINE จะดึงภายในไม่กี่วินาที
-# ถึงนาทีหลัง push ไปแล้ว) ผ่าน token สุ่ม แล้วเสิร์ฟผ่าน endpoint ด้านล่าง
-PUBLIC_BASE_URL       = os.environ.get("PUBLIC_BASE_URL", "https://iamroot.onrender.com")
-PLOT_IMAGE_TTL_S      = 3600   # 1 ชม. — เกินพอสำหรับ LINE ดึงภาพไปแสดง
-PLOT_IMAGE_CACHE_MAX  = 200    # กัน memory โตไม่จำกัดถ้ามีการวิเคราะห์รัวๆ
-_plot_image_cache: dict[str, tuple[bytes, float]] = {}
-
-
-def _cache_plot_image(png_bytes: bytes) -> str:
-    now = time.time()
-    expired = [k for k, (_, exp) in _plot_image_cache.items() if exp < now]
-    for k in expired:
-        del _plot_image_cache[k]
-    if len(_plot_image_cache) >= PLOT_IMAGE_CACHE_MAX:
-        oldest = min(_plot_image_cache, key=lambda k: _plot_image_cache[k][1])
-        del _plot_image_cache[oldest]
-    token = uuid.uuid4().hex
-    _plot_image_cache[token] = (png_bytes, now + PLOT_IMAGE_TTL_S)
-    return token
-
-
 @app.get("/plot-image/{token}.png")
 async def plot_image(token: str):
     """เสิร์ฟภาพแผนที่ความชื้นที่ compose ไว้ชั่วคราว — LINE server ดึง URL นี้เอง"""
-    entry = _plot_image_cache.get(token)
-    if not entry or entry[1] < time.time():
+    png_bytes = get_cached_plot_image(token)
+    if png_bytes is None:
         raise HTTPException(status_code=404, detail="ไม่พบภาพ หรือหมดอายุแล้ว")
-    png_bytes, _ = entry
     return Response(content=png_bytes, media_type="image/png")
-
-
-async def _build_plot_grid_image_url(polygon: list[list[float]], plot_name: str = "") -> str | None:
-    """
-    สร้างภาพแผนที่ความชื้นสำหรับส่งเข้า LINE คู่กับผลวิเคราะห์หลัก — คืน URL รูปภาพ
-    หรือ None ถ้าล้มเหลว (แค่ "ของแถม" ไม่ควรทำให้ /analyze ทั้งคำขอพังตาม)
-    ยิง GEE 2 ครั้งพร้อมกัน (grid + ภาพถ่ายดาวเทียม) ผ่าน threadpool ลด wall-time
-    """
-    if not _MAP_IMAGE_AVAILABLE:
-        return None
-    try:
-        grid_points, thumbnail = await asyncio.gather(
-            run_in_threadpool(gee_analysis.get_moisture_grid, polygon, 10),
-            run_in_threadpool(gee_analysis.get_plot_satellite_thumbnail, polygon),
-        )
-        png_bytes, bounds = thumbnail
-        composed = await run_in_threadpool(
-            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, 10, plot_name
-        )
-        token = _cache_plot_image(composed)
-        url = f"{PUBLIC_BASE_URL}/plot-image/{token}.png"
-        logger.info(f"Plot grid image ready: {url}")
-        return url
-    except Exception as e:
-        logger.warning(f"Plot grid image generation failed ({type(e).__name__}, non-fatal, skipping): {e}")
-        return None
 
 
 @app.post("/analyze")
@@ -354,7 +297,7 @@ async def analyze(req: AnalysisRequest):
         # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
         image_url = None
         if req.polygon and len(req.polygon) >= 3:
-            image_url = await _build_plot_grid_image_url(req.polygon, req.plot_name)
+            image_url = await build_plot_grid_image_url(req.polygon, req.plot_name)
 
         # บันทึก user (upsert) + แปลง + ผลวิเคราะห์
         await upsert_user(req.user_id, req.display_name)

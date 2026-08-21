@@ -21,15 +21,21 @@ name: Trigger daily scan and rain alert jobs
 # หมายเหตุ: ปิด cron ในโปรเซส (backend/scheduler.py) สำหรับ 2 งานนี้ไปแล้ว กัน
 # รันซ้ำสองครั้ง (ถ้าบังเอิญเซิร์ฟเวอร์ตื่นอยู่พอดีตอน 06:00/07:00 จาก traffic
 # อื่นด้วย) — endpoint เหล่านี้คือแหล่งความจริงหนึ่งเดียวของ 2 งานนี้แล้ว
+#
+# v3 (ตามฟีดแบ็ก "ส่งช้าไป อยากได้ก่อน 7 โมง"): รอบแรกทริกเกอร์ daily-scan ตรง
+# 07:00 น. พอดี — ตัวงานเองใช้เวลาสแกน+วิเคราะห์จริงหลายสิบนาที (พบว่าสรุปมาถึง
+# จริง 07:40 น.) ยิ่งตอนนี้สรุปประจำวันส่งการ์ดเต็ม+รูปทุกแปลงแล้ว (แทนสรุปย่อ
+# บรรทัดเดียว) ยิ่งใช้เวลานานขึ้นอีก (ต้องเรียก GEE ทำรูปแผนที่เพิ่มต่อแปลงที่มี
+# ขอบเขต) — ขยับเวลาทริกเกอร์ให้เร็วขึ้นแทน ให้มีบัฟเฟอร์เหลือเฟือก่อนถึง 07:00
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '0 23 * * *'  # 06:00 น. ไทย — rain_alert_job (ฝน/รากเน่า)
-    - cron: '0 0 * * *'   # 07:00 น. ไทย — daily_scan_job (ความเสี่ยง + สรุปประจำวัน)
+    - cron: '30 22 * * *'  # 05:30 น. ไทย — rain_alert_job (ฝน/รากเน่า)
+    - cron: '0 23 * * *'   # 06:00 น. ไทย — daily_scan_job (ความเสี่ยง + สรุปประจำวัน) — เผื่อบัฟเฟอร์ 1 ชม.ก่อน 07:00
 
 jobs:
   rain-alert:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 23 * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 22 * * *'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger rain-alert job
@@ -41,7 +47,7 @@ jobs:
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
 
   daily-scan:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 0 * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 23 * * *'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger daily-scan job (includes daily digest)

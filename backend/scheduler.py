@@ -19,7 +19,8 @@ from database import (get_all_reports, save_analysis, get_user_plots,
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
-                           build_daily_digest_flex, build_daily_digest_message)
+                           build_daily_digest_message, build_result_flex)
+from plot_image_service import build_plot_grid_image_url
 from line_sender import send_line_message
 from weather_alert import (
     get_7day_rain,
@@ -92,8 +93,8 @@ async def daily_scan_job():
             if not plots:
                 continue
 
-            # เก็บผลทุกแปลงของ user นี้ไว้ ถ้าเปิด "สรุปแปลงประจำวัน" จะส่งรวม
-            # เป็นข้อความเดียวหลังวนครบทุกแปลง — ไม่ว่าแปลงไหนจะเสี่ยงหรือไม่
+            # เก็บผลทุกแปลงของ user นี้ไว้ ถ้าเปิด "สรุปแปลงประจำวัน" จะส่งการ์ดเต็ม
+            # (เหมือน /analyze ปกติ) ทีละแปลงหลังวนครบทุกแปลง — ไม่ว่าแปลงไหนจะเสี่ยงหรือไม่
             plot_summaries: list[dict] = []
 
             for plot in plots:
@@ -112,6 +113,10 @@ async def daily_scan_job():
                 plot_summaries.append({
                     "name": plot.get("name") or "แปลงของคุณ",
                     "data": data,
+                    "lat": lat,
+                    "lng": lng,
+                    "message": message,
+                    "polygon": polygon,
                 })
 
                 # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ──
@@ -150,11 +155,22 @@ async def daily_scan_job():
                     await send_line_message(user_id, message, flex=flex)
                     alerted += 1
 
-            # ── สรุปแปลงประจำวัน — ส่งทีเดียวหลังวนครบทุกแปลงของ user นี้ ──
+            # ── สรุปแปลงประจำวัน — ส่งการ์ดเต็มรูปแบบ (เหมือนกดตรวจสอบแปลงเอง)
+            # พร้อมรูปแผนที่ความชื้น ทีละแปลง หลังวนครบทุกแปลงของ user นี้ ──
+            # v2 (ตามที่ผู้ใช้ขอ): เดิมส่งการ์ดสรุปย่อบรรทัดเดียวต่อแปลง อ่านไม่เห็น
+            # รายละเอียด — เปลี่ยนมาส่งข้อความสั้นๆ นำก่อน 1 ข้อความ (ภาพรวมเร็วๆ)
+            # แล้วตามด้วยการ์ดเต็ม + รูปของทุกแปลง ทีละใบเหมือนผลตรวจสอบปกติทุกประการ
+            # (ใช้ build_result_flex ตัวเดียวกับ /analyze ตรงๆ ไม่ทำการ์ดแยกใหม่ —
+            # กันสองจุดสร้างการ์ดหน้าตาต่างกันแล้วหลุดซิงก์กันในอนาคต)
             if user_id in digest_users and plot_summaries:
-                digest_message = build_daily_digest_message(plot_summaries)
-                digest_flex    = build_daily_digest_flex(plot_summaries)
-                await send_line_message(user_id, digest_message, flex=digest_flex)
+                intro = build_daily_digest_message(plot_summaries)
+                await send_line_message(user_id, intro)
+                for p in plot_summaries:
+                    img_url = None
+                    if p["polygon"] and len(p["polygon"]) >= 3:
+                        img_url = await build_plot_grid_image_url(p["polygon"], p["name"])
+                    plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"])
+                    await send_line_message(user_id, p["message"], flex=plot_flex, image_url=img_url)
                 digested += 1
 
         except Exception as e:
