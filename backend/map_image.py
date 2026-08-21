@@ -6,12 +6,18 @@ map_image.py — วาดจุดความชื้น/น้ำขัง�
 v2 (ปรับตามฟีดแบ็ก "ดูไม่รู้เรื่องเลย"): เดิมใช้ diverging gradient ต่อเนื่อง
 256 เฉด ซึ่งอ่านยากมากสำหรับคนที่ไม่คุ้นแผนที่ความร้อน — ไม่มี legend ในตัวรูป
 เลยด้วย (รูปที่ส่งเข้า LINE เป็น static image กดดู tooltip ไม่ได้เหมือนแอป LIFF)
-เปลี่ยนมาใช้สี "5 กลุ่มชัดเจน" ตรงกับสถานะที่ backend จำแนกไว้แล้วเป๊ะๆ (status
-ใน get_moisture_grid()/​_calc_swab()) แทนการไล่เฉด — ไม่ต้องคิดเลขเทียบสีเอง
-แค่ดูว่า "เขียว=ดี แดง/ส้ม=แห้ง ฟ้า/น้ำเงิน=ชื้น/น้ำขัง" ก็เข้าใจได้ทันที แถมสี
-ตรงกับคำอธิบายข้อความ (status_th) ที่เกษตรกรเห็นคู่กันอยู่แล้ว ไม่ใช่สเกลใหม่ที่
-ต้องมาเรียนรู้เพิ่ม พร้อมชื่อกลุ่ม + แถบหัวเรื่อง/สรุปสถานะ วาดลงในรูปเลย
-(ไม่ต้องพึ่ง legend ในแอป เพราะรูปนี้ยืนอิสระในแชท LINE)
+เปลี่ยนมาใช้สี "5 กลุ่มชัดเจน" ตรงกับสถานะที่ backend จำแนกไว้แล้วเป๊ะๆ
+
+v3 (ผู้ใช้ขอ "ทำสีในไลน์ให้เหมือนกับเว็บ อ้างอิงจากเว็บ"): พอไปเทียบจริงๆ พบว่า
+liff/index.html (showMoistureGrid) ไม่เคยถูกอัปเดตตาม v2 เลย ยังใช้ diverging
+gradient + contrast-stretch ต่อเนื่อง (swabColor/buildSwabNormalizer) อยู่แบบ
+เดิม — สองที่เลยมีสีไม่ตรงกันมาตลอด พอร์ตกลับมาใช้ต่อเนื่อง+ยืด scale ตามเว็บ
+เป๊ะๆ แทน (เว็บทำแบบนี้เพราะแปลงจริงส่วนใหญ่ค่าจะกระจุกแคบๆ ในช่วงเดียว สีคงที่ 5
+กลุ่มเลยมักโชว์สีเดียวทั้งภาพทั้งที่ยังมีความต่างจริงอยู่ — ตัวอย่างจริงที่ผู้ใช้เจอ:
+สวน 744 จุด swab_index 0.121-0.536 ทุกจุด อยู่ในกลุ่ม "ชื้นเกิน/น้ำขังวิกฤต" หมด
+ไม่มีจุดไหนแตะ "สมดุลดี" เลยจริงๆ — สีคงที่เลยเป็นฟ้า/น้ำเงินล้วน) ส่วนหัวเรื่อง/
+สรุปสถานะรวมยังใช้ status/status_th ที่ backend จำแนกไว้เป๊ะเหมือนเดิม (ข้อความ
+ยังบอกความรุนแรงจริงตรงไปตรงมา) เปลี่ยนแค่ "สีของกระเบื้อง" ให้ตรงกับเว็บ
 
 ฟอนต์: PIL ไม่มีฟอนต์ไทยในตัว ใช้ Kanit (SIL Open Font License, ฟรี redistribute
 ได้) เก็บไว้ที่ backend/assets/fonts/ — ต้อง bundle เพราะ default font ของ PIL
@@ -58,6 +64,56 @@ _DEFAULT_COLOR = (153, 153, 153)
 
 def status_color(status: str | None) -> tuple[int, int, int]:
     return STATUS_COLORS.get(status or "", _DEFAULT_COLOR)
+
+
+# ── ไล่สีต่อเนื่อง (diverging) — ต้องตรงกับ SWAB_GRADIENT_STOPS ใน liff/index.html
+# เป๊ะทุก anchor (นี่คือแหล่งอ้างอิง — ผู้ใช้ขอให้สีในรูปที่ส่งเข้า LINE ตรงกับเว็บ)
+SWAB_GRADIENT_STOPS: list[tuple[float, tuple[int, int, int]]] = [
+    (-0.45, (183, 28, 28)),    # #b71c1c แดงเข้ม — แล้งจัดสุด
+    (-0.30, (229, 57, 53)),    # #e53935 แดง — เกณฑ์แล้งวิกฤต
+    (-0.15, (251, 140, 0)),    # #fb8c00 ส้ม — เกณฑ์แห้งเกิน
+    (0.00,  (67, 160, 71)),    # #43a047 เขียว — สมดุลดี
+    (0.10,  (41, 182, 246)),   # #29b6f6 ฟ้า — เกณฑ์ชื้นเกิน
+    (0.30,  (21, 101, 192)),   # #1565c0 น้ำเงิน — เกณฑ์น้ำขังวิกฤต
+    (0.45,  (13, 71, 161)),    # #0d47a1 น้ำเงินเข้ม — น้ำขังวิกฤตสุด
+]
+
+
+def swab_color(swab_index: float | None) -> tuple[int, int, int]:
+    """ไล่เฉดต่อเนื่องตาม swab_index — พอร์ตตรงจาก swabColor() ใน liff/index.html"""
+    v = max(-0.45, min(0.45, swab_index if swab_index is not None else 0.0))
+    for i in range(len(SWAB_GRADIENT_STOPS) - 1):
+        v0, c0 = SWAB_GRADIENT_STOPS[i]
+        v1, c1 = SWAB_GRADIENT_STOPS[i + 1]
+        if v <= v1:
+            t = (v - v0) / (v1 - v0)
+            return tuple(round(c0[k] + (c1[k] - c0[k]) * t) for k in range(3))
+    return _DEFAULT_COLOR
+
+
+def build_normalizer(values: list[float | None]):
+    """
+    ยืดช่วงสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้ (contrast stretch) — พอร์ตตรงจาก
+    buildSwabNormalizer() ใน liff/index.html เป๊ะ รวม MIN_RANGE กันช่วงข้อมูลแคบ
+    เกินจนยืดจน noise เด่นเกินจริงด้วย
+    """
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return lambda v: v if v is not None else 0.0
+    lo, hi = min(vals), min(0.45, max(vals))
+    MIN_RANGE = 0.12
+    if hi - lo < MIN_RANGE:
+        mid = (hi + lo) / 2
+        lo, hi = mid - MIN_RANGE / 2, mid + MIN_RANGE / 2
+
+    def normalize(v):
+        if v is None:
+            return 0.0
+        t = (v - lo) / (hi - lo)
+        t = max(0.0, min(1.0, t))
+        return -0.45 + t * 0.9
+
+    return normalize
 
 
 def _offset_latlng(lat: float, lng: float, bearing_deg: float, distance_m: float) -> tuple[float, float]:
@@ -191,9 +247,10 @@ def render_plot_grid_image(
     # ตาราง 10×10 ม. แยกจุด แยกกัน — เติมเส้นขอบสีขาวโปร่งแสงรอบทุกกระเบื้อง
     # ให้เห็นเป็น "ตาราง" ชัดเจนแทนก้อนสีเรียบ (เหมือน grid line ใน spreadsheet)
     grid_line_w = max(1, min(4, round(px_per_m * spacing_m * 0.02)))
+    normalize = build_normalizer([p.get("swab_index") for p in grid_points])
     for p in grid_points:
         x, y = to_px(p["lat"], p["lng"])
-        color = status_color(p.get("status"))
+        color = swab_color(normalize(p.get("swab_index")))
         # ทึบสี (ไม่เกลี่ย alpha) — สีกลุ่มไม่ต้องไล่เฉด ทึบยิ่งแยกกลุ่มชัดกว่า
         draw.rectangle(
             [x - tile_half_px, y - tile_half_px, x + tile_half_px, y + tile_half_px],
@@ -279,43 +336,46 @@ def render_plot_grid_image(
 
     canvas.paste(map_img, (0, top_h))
 
-    # แถบ legend — พื้นขาว สี่เหลี่ยมสี + label ภาษาไทย เรียงแนวนอนตามลำดับ
-    # แห้ง → สมดุล → ชื้น ให้อ่านเป็น "สเกล" เดียวกับสีที่เห็นด้านบน
+    # แถบ legend — ไล่สีต่อเนื่อง (ตรงกับกระเบื้องด้านบนเป๊ะ ใช้ swab_color() ตัว
+    # เดียวกัน) + label 3 จุดอ้างอิง (แห้งสุด/ปานกลาง/แฉะสุด) — สไตล์เดียวกับ
+    # .legend-gradient-bar ในเว็บ (ผู้ใช้ขอให้สีในรูปอ้างอิงจากเว็บ)
     legend_y0 = top_h + h
     cdraw.rectangle([0, legend_y0, w, legend_y0 + bottom_h], fill=(246, 247, 249))
     cdraw.line([0, legend_y0, w, legend_y0], fill=(224, 226, 230), width=1)
 
-    f_legend = _font("Kanit-Regular.ttf", 15)
-    n = len(STATUS_ORDER)
-    col_w = w / n
-    swatch = 18
-    for i, status in enumerate(STATUS_ORDER):
-        cx = int(i * col_w + col_w / 2)
-        sw_x0 = cx - int(col_w / 2) + 10
-        sw_y0 = legend_y0 + 16
-        cdraw.rectangle(
-            [sw_x0, sw_y0, sw_x0 + swatch, sw_y0 + swatch],
-            fill=STATUS_COLORS[status],
-        )
-        label = STATUS_LABELS_TH[status]
-        tb = cdraw.textbbox((0, 0), label, font=f_legend)
+    bar_x0, bar_x1 = pad, w - pad
+    bar_y0, bar_y1 = legend_y0 + 14, legend_y0 + 24
+    bar_w = max(1, bar_x1 - bar_x0)
+    for i in range(bar_w):
+        v = -0.45 + (i / bar_w) * 0.9
+        cdraw.line([(bar_x0 + i, bar_y0), (bar_x0 + i, bar_y1)], fill=swab_color(v))
+    cdraw.rectangle([bar_x0, bar_y0, bar_x1, bar_y1], outline=(0, 0, 0))
+
+    # หมายเหตุ: ฟอนต์ Kanit ไม่มี glyph อีโมจิ (ทดสอบแล้วขึ้นเป็นกล่องว่าง) — วาดจุดสี
+    # จริงด้วย PIL แทนอีโมจิสี (🔴🟢🔵) เหมือนที่แก้ไว้กับจุดรวมน้ำ (วงม่วง) ก่อนหน้านี้
+    f_legend = _font("Kanit-Regular.ttf", 13)
+    label_y = bar_y1 + 8
+    dot_r = 4
+
+    def _legend_dot_label(x: int, text: str, color: tuple[int, int, int], align: str = "left"):
+        tb = cdraw.textbbox((0, 0), text, font=f_legend)
         text_w = tb[2] - tb[0]
-        max_text_w = col_w - swatch - 24
-        # label ยาวเกินคอลัมน์ (จอเล็ก) ตัดขึ้นบรรทัดที่สองแทนล้นทับคอลัมน์ข้างๆ
-        if text_w > max_text_w and len(label) > 2:
-            mid = len(label) // 2
-            cdraw.text((sw_x0 + swatch + 6, sw_y0 - 2), label[:mid], font=f_legend, fill=(51, 51, 51))
-            cdraw.text((sw_x0 + swatch + 6, sw_y0 + 16), label[mid:], font=f_legend, fill=(51, 51, 51))
-        else:
-            cdraw.text((sw_x0 + swatch + 6, sw_y0 + 1), label, font=f_legend, fill=(51, 51, 51))
+        total_w = dot_r * 2 + 5 + text_w
+        if align == "center":
+            x = x - total_w // 2
+        elif align == "right":
+            x = x - total_w
+        cdraw.ellipse([x, label_y + 2, x + dot_r * 2, label_y + 2 + dot_r * 2], fill=color)
+        cdraw.text((x + dot_r * 2 + 5, label_y), text, font=f_legend, fill=(51, 51, 51))
+
+    _legend_dot_label(bar_x0, "จุดแห้งสุด", SWAB_GRADIENT_STOPS[0][1], align="left")
+    _legend_dot_label((bar_x0 + bar_x1) // 2, "ปานกลาง", SWAB_GRADIENT_STOPS[3][1], align="center")
+    _legend_dot_label(bar_x1, "จุดแฉะสุด", SWAB_GRADIENT_STOPS[-1][1], align="right")
 
     # บรรทัดอธิบายลูกศร/จุดรวมน้ำ — ให้ครบตามที่เห็นในเว็บ (ผู้ใช้ขอ)
-    # หมายเหตุ: ฟอนต์ Kanit ไม่มี glyph อีโมจิ (ทดสอบแล้วขึ้นเป็นกล่องว่าง) — ▲ เป็น
-    # สัญลักษณ์เรขาคณิตธรรมดา (U+25B2) เรนเดอร์ได้ปกติ แต่ 🟡 ต้องวาดเป็นวงกลมจริง
-    # ด้วย PIL แทน ไม่ใช้ตัวอักษรอีโมจิ
     if show_flow_note:
         f_note = _font("Kanit-Regular.ttf", 13)
-        note_y = legend_y0 + 42
+        note_y = label_y + 24
         x_cursor = pad
         if has_flow_arrows:
             text = "▲ ลูกศร = ทิศทางน้ำไหล"
