@@ -16,7 +16,8 @@ import base64
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from database import (get_latest_report, upsert_user, set_notify, set_notify_digest,
+from database import (get_latest_report_by_plot, get_user_plots,
+                      upsert_user, set_notify, set_notify_digest,
                       set_notify_hour, PRESET_NOTIFY_HOURS)
 from flex_messages import build_result_flex
 
@@ -143,20 +144,52 @@ async def _handle_postback(event: dict):
         await _reply(reply_token, [_liff_button()])
 
     elif data == "action=history":
+        # v2 (ตามที่ผู้ใช้ขอ "ดูแปลงและดูการ์ดในปุ่มเดียว"): เดิมโชว์แค่ผลวิเคราะห์
+        # ล่าสุดสุดของ user (ไม่สนว่าแปลงไหน) — ถ้ามีหลายแปลง ปุ่มนี้เห็นได้แค่แปลง
+        # เดียว ต้องเปิด LIFF แยกไปดูแปลงอื่น ตอนนี้ดึงทุกแปลงของ user แล้วส่งเป็น
+        # การ์ดเต็มรูปแบบ (เหมือนเดิมทุกอย่าง) ต่อแปลง รวมในข้อความเดียว — 1 แปลง
+        # ส่งการ์ดเดี่ยวเหมือนเดิม, หลายแปลงส่งเป็น carousel (ปัดดูทีละใบ)
         try:
-            report = await get_latest_report(user_id)
+            plots = await get_user_plots(user_id)
         except Exception:
-            logger.exception("get_latest_report failed")
+            logger.exception("get_user_plots failed")
             await _reply(reply_token, [{"type": "text", "text": _DB_DOWN}])
             return
-        if report:
-            from rule_engine import format_message
-            plain = format_message(report, report["lat"], report["lng"])
-            flex  = build_result_flex(report, report["lat"], report["lng"], plain)
-            await _reply(reply_token, [flex])
-        else:
+
+        if not plots:
             await _reply(reply_token, [{"type": "text",
-                "text": "ยังไม่มีประวัติการตรวจสอบ กรุณากด 'ตรวจสอบแปลงใหม่' ก่อนครับ 🌿"}])
+                "text": "ยังไม่มีแปลงที่บันทึกไว้ กรุณากด 'ตรวจสอบแปลงใหม่' ก่อนครับ 🌿"}])
+            return
+
+        from rule_engine import format_message
+        bubbles = []
+        for plot in plots:
+            try:
+                report = await get_latest_report_by_plot(plot["id"])
+            except Exception:
+                logger.exception(f"get_latest_report_by_plot failed for plot {plot.get('id')}")
+                continue
+            if not report:
+                continue
+            plain = format_message(report, report["lat"], report["lng"])
+            flex = build_result_flex(report, report["lat"], report["lng"], plain)
+            bubbles.append(flex["contents"])   # เอาแค่ bubble ออกมา ไม่เอา {"type":"flex","altText":...} ทั้งก้อน
+            if len(bubbles) >= 10:   # LINE carousel รับสูงสุด 10 bubble/ข้อความ
+                break
+
+        if not bubbles:
+            await _reply(reply_token, [{"type": "text",
+                "text": "มีแปลงที่บันทึกไว้แล้ว แต่ยังไม่มีผลวิเคราะห์ กรุณากด 'ตรวจสอบแปลงใหม่' ก่อนครับ 🌿"}])
+        elif len(bubbles) == 1:
+            await _reply(reply_token, [{
+                "type": "flex", "altText": "📋 ผลวิเคราะห์แปลงของคุณ", "contents": bubbles[0],
+            }])
+        else:
+            await _reply(reply_token, [{
+                "type": "flex",
+                "altText": f"📋 ผลวิเคราะห์ {len(bubbles)} แปลงของคุณ — ปัดดูทีละแปลง",
+                "contents": {"type": "carousel", "contents": bubbles},
+            }])
 
     elif data == "action=settings":
         await _reply(reply_token, [_settings_menu()])
@@ -323,7 +356,7 @@ def _main_menu() -> dict:
                         "type": "button",
                         "action": {
                             "type": "postback",
-                            "label": "📋 ดูผลวิเคราะห์ล่าสุด",
+                            "label": "📋 แปลงของฉัน",
                             "data": "action=history"
                         },
                         "style": "secondary"

@@ -235,7 +235,7 @@ async def save_analysis(user_id: str, data: dict, message: str,
 
 
 async def get_latest_report(user_id: str) -> dict | None:
-    """ดึงผลวิเคราะห์ล่าสุดของ user_id"""
+    """ดึงผลวิเคราะห์ล่าสุดของ user_id (ทุกแปลงรวมกัน — เอาแค่รายการล่าสุดสุด)"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
 
@@ -253,6 +253,37 @@ async def get_latest_report(user_id: str) -> dict | None:
 
     if resp.status_code != 200:
         logger.error(f"Supabase query failed: {resp.status_code}")
+        return None
+
+    rows = resp.json()
+    if not rows:
+        return None
+    return _reconstruct_full_report(rows[0])
+
+
+async def get_latest_report_by_plot(plot_id: int) -> dict | None:
+    """
+    ดึงผลวิเคราะห์ล่าสุดของแปลง plot_id เดียว (ต่างจาก get_latest_report ที่ดึง
+    ล่าสุดสุดของ user รวมทุกแปลง) — ใช้สร้างการ์ดเต็มรูปแบบต่อแปลงตอนผู้ใช้กด
+    "📋 แปลงของฉัน" ในเมนู LINE (ดู webhook.py::_handle_postback action=history)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/analyses",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "plot_id":  f"eq.{plot_id}",
+                "order":    "created_at.desc",
+                "limit":    "1",
+                "select":   "*",
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.error(f"Supabase get_latest_report_by_plot failed: {resp.status_code}")
         return None
 
     rows = resp.json()
