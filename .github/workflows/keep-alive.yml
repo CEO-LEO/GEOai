@@ -10,50 +10,55 @@ name: Trigger daily scan and rain alert jobs
 # "พรุ่งนี้" ทันที ไม่ misfire ย้อนหลัง) — digest/แจ้งเตือนเลยไม่เคยทำงานจริงเลย
 # แม้จะมี keep-alive แล้วก็ตาม
 #
-# รุ่นนี้: เลิกพึ่ง "ปลุกเซิร์ฟเวอร์ให้ทันเวลาพอดี" เปลี่ยนมายิง POST ตรงไปยัง
-# /admin/trigger/rain-alert (06:00 น.) และ /admin/trigger/daily-scan (07:00 น.)
-# ที่มีอยู่แล้วในระบบ (ออกแบบมาสำหรับ external cron แบบนี้โดยเฉพาะ) — request
-# นี้เองจะปลุกเซิร์ฟเวอร์ขึ้นมาก่อน (Render ตื่นเมื่อมี HTTP request เข้า) แล้วค่อย
-# สั่งรันงานจริงทันทีที่ตื่น ไม่ต้องพึ่งความแม่นยำของเวลาปลุกอีกต่อไป — ต่อให้
-# GitHub Actions หน่วง/เลื่อนไปสักกี่นาที งานก็ยังรันจริง แค่ช้าลงเล็กน้อย ไม่ใช่
-# ไม่รันเลยแบบเดิม
+# v3: เลิกพึ่ง "ปลุกเซิร์ฟเวอร์ให้ทันเวลาพอดี" เปลี่ยนมายิง POST ตรงไปยัง
+# /admin/trigger/rain-alert และ /admin/trigger/daily-scan ที่มีอยู่แล้วในระบบ
+# (ออกแบบมาสำหรับ external cron แบบนี้โดยเฉพาะ) — request นี้เองจะปลุกเซิร์ฟเวอร์
+# ขึ้นมาก่อน (Render ตื่นเมื่อมี HTTP request เข้า) แล้วค่อยสั่งรันงานจริงทันทีที่ตื่น
+# ไม่ต้องพึ่งความแม่นยำของเวลาปลุกอีกต่อไป — ต่อให้ GitHub Actions หน่วง/เลื่อนไปสัก
+# กี่นาที งานก็ยังรันจริง แค่ช้าลงเล็กน้อย ไม่ใช่ไม่รันเลยแบบเดิม
+#
+# v4 (ตามที่ผู้ใช้ขอ "ตั้งเวลาแจ้งเตือนเองได้"): เดิมทริกเกอร์ 2 ครั้งตายตัว/วัน
+# (05:30 rain-alert, 06:00 daily-scan) ประมวลผลทุกคนพร้อมกัน — ตอนนี้ผู้ใช้แต่ละคน
+# เลือกเวลาแจ้งเตือนเองได้ (05:00-10:00 น., ดู migrate_v8.sql +
+# backend/webhook.py _time_picker_menu) เปลี่ยนมาทริกเกอร์ทุกชั่วโมงในช่วงที่เปิดให้
+# เลือก คำนวณชั่วโมงปัจจุบัน (เวลาไทย) แล้วส่งเป็น ?hour= ให้ทั้งสอง endpoint —
+# ฝั่ง backend (daily_scan_job/rain_alert_job) จะกรองเหลือเฉพาะผู้ใช้ที่ตั้ง
+# notify_hour ตรงกับชั่วโมงนั้นเท่านั้น คนอื่นไม่ถูกแตะเลยในรอบนั้น (กันสแกน/ส่งซ้ำ
+# 6 รอบ/วันให้ทุกคน)
 #
 # หมายเหตุ: ปิด cron ในโปรเซส (backend/scheduler.py) สำหรับ 2 งานนี้ไปแล้ว กัน
-# รันซ้ำสองครั้ง (ถ้าบังเอิญเซิร์ฟเวอร์ตื่นอยู่พอดีตอน 06:00/07:00 จาก traffic
-# อื่นด้วย) — endpoint เหล่านี้คือแหล่งความจริงหนึ่งเดียวของ 2 งานนี้แล้ว
-#
-# v3 (ตามฟีดแบ็ก "ส่งช้าไป อยากได้ก่อน 7 โมง"): รอบแรกทริกเกอร์ daily-scan ตรง
-# 07:00 น. พอดี — ตัวงานเองใช้เวลาสแกน+วิเคราะห์จริงหลายสิบนาที (พบว่าสรุปมาถึง
-# จริง 07:40 น.) ยิ่งตอนนี้สรุปประจำวันส่งการ์ดเต็ม+รูปทุกแปลงแล้ว (แทนสรุปย่อ
-# บรรทัดเดียว) ยิ่งใช้เวลานานขึ้นอีก (ต้องเรียก GEE ทำรูปแผนที่เพิ่มต่อแปลงที่มี
-# ขอบเขต) — ขยับเวลาทริกเกอร์ให้เร็วขึ้นแทน ให้มีบัฟเฟอร์เหลือเฟือก่อนถึง 07:00
+# รันซ้ำสองครั้ง (ถ้าบังเอิญเซิร์ฟเวอร์ตื่นอยู่พอดีตอนใดตอนหนึ่งจาก traffic อื่นด้วย)
+# — endpoint เหล่านี้คือแหล่งความจริงหนึ่งเดียวของ 2 งานนี้แล้ว
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '30 22 * * *'  # 05:30 น. ไทย — rain_alert_job (ฝน/รากเน่า)
-    - cron: '0 23 * * *'   # 06:00 น. ไทย — daily_scan_job (ความเสี่ยง + สรุปประจำวัน) — เผื่อบัฟเฟอร์ 1 ชม.ก่อน 07:00
+    - cron: '0 22 * * *'  # 05:00 น. ไทย
+    - cron: '0 23 * * *'  # 06:00 น. ไทย
+    - cron: '0 0 * * *'   # 07:00 น. ไทย
+    - cron: '0 1 * * *'   # 08:00 น. ไทย
+    - cron: '0 2 * * *'   # 09:00 น. ไทย
+    - cron: '0 3 * * *'   # 10:00 น. ไทย
 
 jobs:
-  rain-alert:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 22 * * *'
+  trigger:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger rain-alert job
+      - name: Compute current Bangkok hour
+        id: hour
+        run: echo "h=$(TZ=Asia/Bangkok date +%H)" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger rain-alert job for this hour
         run: |
           curl -sf -X POST --max-time 60 \
             -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
-            https://iamroot.onrender.com/admin/trigger/rain-alert \
-            && echo "OK — rain-alert job started" \
+            "https://iamroot.onrender.com/admin/trigger/rain-alert?hour=${{ steps.hour.outputs.h }}" \
+            && echo "OK — rain-alert job started (hour=${{ steps.hour.outputs.h }})" \
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
 
-  daily-scan:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 23 * * *'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger daily-scan job (includes daily digest)
+      - name: Trigger daily-scan job for this hour (includes daily digest)
         run: |
           curl -sf -X POST --max-time 60 \
             -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
-            https://iamroot.onrender.com/admin/trigger/daily-scan \
-            && echo "OK — daily-scan job started" \
+            "https://iamroot.onrender.com/admin/trigger/daily-scan?hour=${{ steps.hour.outputs.h }}" \
+            && echo "OK — daily-scan job started (hour=${{ steps.hour.outputs.h }})" \
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
