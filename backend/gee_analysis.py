@@ -985,21 +985,22 @@ def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]
     wettest = max(problem, key=lambda p: p.get("swab_index", 0.0))
     driest  = min(problem, key=lambda p: p.get("swab_index", 0.0))
 
+    # กันช่องกริดเดียวกันโผล่ซ้ำในลิสต์ (แปลงถี่ๆ มีหลายจุดข้อมูลอยู่ในช่องอ้างอิง
+    # เดียวกันได้ปกติ — dedupe ตาม grid_label ไม่ใช่แค่พิกัดเป๊ะๆ ไม่งั้นผู้ใช้เห็น
+    # "C2 น้ำขังหนัก" ซ้ำกัน 2 บรรทัดโดยไม่ได้ข้อมูลใหม่เพิ่มเลย)
     selected: list[dict] = []
-    seen: set[tuple[float, float]] = set()
+    seen_labels: set[str] = set()
     for p in (wettest, driest):
-        key = (p["lat"], p["lng"])
-        if key not in seen:
+        if p["grid_label"] not in seen_labels:
             selected.append(p)
-            seen.add(key)
+            seen_labels.add(p["grid_label"])
 
     for p in sorted(problem, key=lambda p: abs(p.get("swab_index", 0.0)), reverse=True):
         if len(selected) >= max_points:
             break
-        key = (p["lat"], p["lng"])
-        if key not in seen:
+        if p["grid_label"] not in seen_labels:
             selected.append(p)
-            seen.add(key)
+            seen_labels.add(p["grid_label"])
 
     return [
         {
