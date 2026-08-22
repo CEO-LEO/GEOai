@@ -357,17 +357,30 @@ def render_plot_grid_image(
             _, y = to_px(lat_b, ref_min_lng)
             draw.line([(0, y), (w, y)], fill=line_color, width=1)
 
+        # หมายเหตุ: จงใจไม่ใช้ anchor=/stroke_width= ของ draw.text() (ใหม่กว่า/พึ่ง
+        # ตัว layout engine มากกว่า) — ทดสอบจริงบน production แล้วป้ายไม่ขึ้นเลย
+        # (เงียบๆ ไม่มี exception ด้วย) ทั้งที่ทำงานถูกต้องทุกอย่างตอนรันโลคัล
+        # (สงสัยว่า Pillow build บน Render ต่างจากเครื่อง dev) เปลี่ยนมาวัดตำแหน่ง
+        # เองด้วย textbbox() + วาดกล่องพื้นเข้มรองหลังแทนเส้นขอบ (stroke) — ใช้ API
+        # พื้นฐานเดียวกับที่ _legend_dot_label ในไฟล์นี้ใช้อยู่แล้วและพิสูจน์แล้วว่า
+        # เสถียรบน production จริง
         f_ref = _font("Kanit-Bold.ttf", max(13, int(w / 32)))
+
+        def _draw_ref_label(cx: float, cy: float, text: str):
+            tb = draw.textbbox((0, 0), text, font=f_ref)
+            tw, th = tb[2] - tb[0], tb[3] - tb[1]
+            tx, ty = cx - tw / 2 - tb[0], cy - th / 2 - tb[1]
+            draw.rectangle([tx - 4, ty - 3, tx + tw + 4, ty + th + 3], fill=(0, 0, 0, 150))
+            draw.text((tx, ty), text, font=f_ref, fill=(255, 255, 255, 255))
+
         for c in range(ref_cols):
             lng_mid = ref_min_lng + (ref_max_lng - ref_min_lng) * (c + 0.5) / ref_cols
             x, _ = to_px(ref_min_lat, lng_mid)
-            draw.text((x, 5), str(c + 1), font=f_ref, fill=(255, 255, 255, 255),
-                      stroke_width=3, stroke_fill=(0, 0, 0, 190), anchor="mt")
+            _draw_ref_label(x, 16, str(c + 1))
         for r in range(ref_rows):
             lat_mid = ref_max_lat - (ref_max_lat - ref_min_lat) * (r + 0.5) / ref_rows
             _, y = to_px(lat_mid, ref_min_lng)
-            draw.text((5, y), chr(65 + r), font=f_ref, fill=(255, 255, 255, 255),
-                      stroke_width=3, stroke_fill=(0, 0, 0, 190), anchor="lm")
+            _draw_ref_label(16, y, chr(65 + r))
 
     map_img = Image.alpha_composite(sat_img, overlay).convert("RGB")
 
