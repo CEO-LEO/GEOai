@@ -9,6 +9,7 @@ scheduler.py — ระบบแจ้งเตือนอัตโนมัต
 
 import asyncio
 import logging
+from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.concurrency import run_in_threadpool
 
@@ -16,7 +17,9 @@ from database import (get_all_reports, save_analysis, get_user_plots,
                       get_notifiable_users, get_recent_analyses,
                       get_latest_plot_analysis, save_grid_snapshot,
                       get_digest_users, get_users_by_hour,
-                      delete_old_grid_snapshots, get_swab_level_days_ago)
+                      delete_old_grid_snapshots, get_swab_level_days_ago,
+                      get_scheduler_last_run, set_scheduler_last_run,
+                      PRESET_NOTIFY_HOURS)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
@@ -264,6 +267,66 @@ def create_scheduler() -> AsyncIOScheduler:
     """
     scheduler = AsyncIOScheduler(timezone="Asia/Bangkok")
     return scheduler
+
+
+# ─────────────────────────────────────────────────
+# Catch-up สำหรับชั่วโมงที่ GitHub Actions ทิ้งรอบ cron ไปเฉยๆ
+# ─────────────────────────────────────────────────
+# ยืนยันเกิดจริง 21-22 ส.ค. 2569: รอบ 07:00 น. หายไปทั้งรอบวันที่ 22 (ผู้ใช้ทุกคน
+# ตั้ง notify_hour ไว้ 7 โมงหมด เลยไม่มีใครได้รับแจ้งเตือนเลยวันนั้น) วันที่ 21 รันได้
+# แค่ 2 จาก 6 รอบที่ตั้งไว้ — GitHub เขียนไว้เองว่า scheduled workflow อาจถูก "ทิ้ง"
+# ได้ถ้าโหลดสูง ย้ายนาที cron ออกจากนาที 00 (ช่วงคับคั่งสุด) ไปแล้วที่
+# keep-alive.yml แต่กันไว้อีกชั้นตรงนี้ด้วย เผื่อ GitHub ยังทิ้งรอบอยู่ดี — รอบถัดไป
+# ที่ทริกเกอร์มาจะ "ตามงาน" ทุกชั่วโมงที่ยังไม่ได้ทำของวันนี้ ไม่ใช่แค่ hour เดียว
+# ที่ trigger ส่งมา
+_BANGKOK_TZ = timezone(timedelta(hours=7))
+
+
+async def _catchup_hours(job_name: str, current_hour: int) -> list[int]:
+    """
+    คืนชั่วโมง (จาก PRESET_NOTIFY_HOURS) ที่ควรรันแต่ยังไม่ได้รันวันนี้ จนถึง
+    current_hour เรียงจากเก่าไปใหม่ — ถ้าไม่มีอะไรพลาด (กรณีปกติ ชั่วโมงขยับทีละ 1)
+    จะได้ list ที่มีแค่ current_hour ตัวเดียว เหมือนพฤติกรรมเดิมทุกประการ
+    """
+    today = datetime.now(_BANGKOK_TZ).date().isoformat()
+    last = await get_scheduler_last_run(job_name)
+    if not last or last.get("last_run_date") != today:
+        return [h for h in PRESET_NOTIFY_HOURS if h <= current_hour]
+    last_hour = last.get("last_run_hour", 0)
+    return [h for h in PRESET_NOTIFY_HOURS if last_hour < h <= current_hour]
+
+
+async def run_job_with_catchup(job_fn, job_name: str, hour: int | None):
+    """
+    ห่อ daily_scan_job/rain_alert_job — เรียกให้ครบทุกชั่วโมงที่ "พลาดไป" ของวันนี้
+    แทนที่จะรันแค่ hour เดียวที่ trigger ส่งมา (ดูเหตุผลเต็มด้านบน) ใช้แทนการเรียก
+    job_fn(hour) ตรงๆ ใน /admin/trigger/* (main.py)
+
+    hour=None (เรียกทดสอบด้วยมือ ไม่ผ่าน cron ภายนอก) ข้ามการเช็ค catch-up ทั้งหมด
+    รันครั้งเดียวแบบเดิม (ประมวลผลทุกคนไม่กรองตาม notify_hour)
+
+    ถ้า job_fn ของบางชั่วโมงพัง (exception) ยังนับว่า "พยายามแล้ว" ไม่ retry วนซ้ำ
+    ไม่ให้ backlog พอกพูนจนงานหนักขึ้นเรื่อยๆ ถ้ามีปัญหาจริงจังกว่าแค่ cron หาย
+    """
+    if hour is None:
+        await job_fn(hour=None)
+        return
+
+    hours = await _catchup_hours(job_name, hour)
+    if not hours:
+        logger.info(f"{job_name}: hour={hour} ทำไปแล้วของวันนี้ ข้ามรอบนี้")
+        return
+    if len(hours) > 1:
+        logger.warning(f"{job_name}: ตามงานย้อนหลัง {len(hours)} ชั่วโมงที่พลาดไป: {hours}")
+
+    for h in hours:
+        try:
+            await job_fn(hour=h)
+        except Exception as e:
+            logger.error(f"{job_name} catch-up run failed for hour={h}: {e}")
+
+    today = datetime.now(_BANGKOK_TZ).date().isoformat()
+    await set_scheduler_last_run(job_name, today, hour)
 
 
 # ─────────────────────────────────────────────────

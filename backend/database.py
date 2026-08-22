@@ -615,6 +615,48 @@ async def get_digest_users() -> set[str]:
 PRESET_NOTIFY_HOURS = (5, 6, 7, 8, 9, 10)  # ต้องตรงกับ CHECK constraint ใน migrate_v8.sql
 
 
+async def get_scheduler_last_run(job_name: str) -> dict | None:
+    """
+    ดึงสถานะ "ชั่วโมงล่าสุดของวันนี้ที่ job นี้ทำสำเร็จแล้ว" — ให้
+    scheduler.py::run_job_with_catchup ใช้ตัดสินใจว่าต้อง "ตามงานย้อนหลัง" กี่ชั่วโมง
+    (ดู migrate_v10.sql — เพิ่มหลังพบว่า GitHub Actions ทิ้งรอบ cron 07:00 น. ไปทั้ง
+    รอบจริง ทำให้ผู้ใช้ทุกคนพลาดการแจ้งเตือนทั้งวัน)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/scheduler_runs",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "job_name": f"eq.{job_name}",
+                "select":   "last_run_date,last_run_hour",
+                "limit":    "1",
+            },
+        )
+    # 42P01 = ยังไม่ได้รัน migrate_v10.sql (ตารางยังไม่มี) — คืน None แบบเดียวกับ
+    # "ไม่เคยรันมาก่อน" กันการตามงานย้อนหลังพังเงียบๆ ทั้งที่แค่ยัง migrate ไม่เสร็จ
+    if resp.status_code != 200 or not resp.json():
+        return None
+    return resp.json()[0]
+
+
+async def set_scheduler_last_run(job_name: str, run_date: str, hour: int) -> bool:
+    """บันทึกว่า job นี้ทำถึงชั่วโมง hour แล้วสำหรับวันที่ run_date (upsert ตาม job_name)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/scheduler_runs",
+            headers={**_HEADERS(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json={"job_name": job_name, "last_run_date": run_date, "last_run_hour": hour},
+        )
+    ok = resp.status_code in (200, 201, 204)
+    if not ok:
+        logger.error(f"Supabase set_scheduler_last_run failed: {resp.status_code} — {resp.text}")
+    return ok
+
+
 async def set_notify_hour(user_id: str, hour: int) -> bool:
     """
     ตั้งเวลาแจ้งเตือนที่ผู้ใช้เลือกเอง — ใช้ร่วมกันทั้ง "แจ้งเตือนเฉพาะตอนเสี่ยง"

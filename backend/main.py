@@ -51,7 +51,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       save_field_observation, get_persistent_wet_points,
                       set_notify_digest)
 from webhook import router as webhook_router
-from scheduler import create_scheduler, daily_scan_job, rain_alert_job
+from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware
 from cache import cache_stats
 from i18n import t, Lang
@@ -762,17 +762,22 @@ async def trigger_daily_scan(background_tasks: BackgroundTasks, hour: int | None
     hour: ชั่วโมง (เวลาไทย) ที่ถูกทริกเกอร์มา — daily_scan_job จะประมวลผลเฉพาะผู้ใช้
     ที่ตั้ง notify_hour ตรงกับค่านี้ ไม่ใส่ (None) = ประมวลผลทุกคน (ใช้ตอนทดสอบด้วยมือ)
 
+    รันผ่าน run_job_with_catchup (ไม่ใช่เรียก daily_scan_job ตรงๆ) — ถ้า GitHub
+    Actions ทิ้งรอบ cron ก่อนหน้าไปเฉยๆ (ยืนยันเกิดจริง 21-22 ส.ค. 2569) รอบนี้จะ
+    "ตามงาน" ชั่วโมงที่พลาดไปให้ครบด้วย ไม่ใช่แค่ hour เดียวที่ trigger ส่งมา —
+    ดู scheduler.py::run_job_with_catchup
+
     รันเป็น background task แล้วตอบกลับทันที (ไม่รอผลลัพธ์) เพราะสแกนทุกแปลงของ
     ทุกคนอาจใช้เวลาหลายนาที ยิงยาวเกิน timeout ปกติของ cron ภายนอกได้
     """
-    background_tasks.add_task(daily_scan_job, hour)
+    background_tasks.add_task(run_job_with_catchup, daily_scan_job, "daily_scan", hour)
     return {"status": "started", "job": "daily_scan", "hour": hour}
 
 
 @app.post("/admin/trigger/rain-alert", dependencies=[Depends(verify_admin)])
 async def trigger_rain_alert(background_tasks: BackgroundTasks, hour: int | None = None):
     """เหมือน trigger_daily_scan แต่สำหรับงานแจ้งเตือนฝน (rain_alert_job)"""
-    background_tasks.add_task(rain_alert_job, hour)
+    background_tasks.add_task(run_job_with_catchup, rain_alert_job, "rain_alert", hour)
     return {"status": "started", "job": "rain_alert", "hour": hour}
 
 
