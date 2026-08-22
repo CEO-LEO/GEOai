@@ -204,6 +204,33 @@ def summarize_grid_status(grid_points: list[dict]) -> tuple[str, tuple[int, int,
     return f"พบจุด{label} {n} จุด ({pct}% ของแปลง)", STATUS_COLORS[worst]
 
 
+# ป้ายกริดอ้างอิง (A1, B2, ...) — พิมพ์ลงขอบรูปให้ตรงกับป้ายที่การ์ดไลน์อ้างถึงใน
+# "จุดที่พบปัญหาในแปลง" (ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้") พอร์ตตรงจาก
+# gee_analysis._grid_reference_dims()/_grid_ref_bounds() — เป็นสูตรเรขาคณิตล้วนๆ
+# จาก polygon ตรงๆ ไม่ใช่ threshold ทางธุรกิจ พอรับความเสี่ยง duplicate ได้เหมือน
+# _offset_latlng/_bearing_between ข้างบน (เหตุผลเดียวกัน — แยก failure domain)
+GRID_REF_TARGET_CELLS = 12
+GRID_REF_MIN_DIM = 2
+GRID_REF_MAX_DIM = 5
+
+
+def _grid_reference_dims(polygon: list[list[float]]) -> tuple[int, int]:
+    lngs = [pt[0] for pt in polygon]
+    lats = [pt[1] for pt in polygon]
+    min_lng, max_lng = min(lngs), max(lngs)
+    min_lat, max_lat = min(lats), max(lats)
+    mid_lat = (min_lat + max_lat) / 2
+    width_m  = max(1.0, (max_lng - min_lng) * 111320 * math.cos(math.radians(mid_lat)))
+    height_m = max(1.0, (max_lat - min_lat) * 110540)
+    aspect = width_m / height_m
+
+    cols = round((GRID_REF_TARGET_CELLS * aspect) ** 0.5)
+    rows = round(GRID_REF_TARGET_CELLS / max(1, cols))
+    cols = max(GRID_REF_MIN_DIM, min(GRID_REF_MAX_DIM, cols))
+    rows = max(GRID_REF_MIN_DIM, min(GRID_REF_MAX_DIM, rows))
+    return rows, cols
+
+
 def render_plot_grid_image(
     satellite_png_bytes: bytes,
     bounds: tuple[float, float, float, float],
@@ -309,14 +336,49 @@ def render_plot_grid_image(
         poly_px = [to_px(lat, lng) for lng, lat in polygon]
         draw.line(poly_px + [poly_px[0]], fill=(255, 255, 255, 255), width=max(2, int(w / 200)))
 
+    # ── ป้ายกริดอ้างอิง (A1, B2, ...) ── ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้" ใน
+    # การ์ดไลน์ (ดู flex_messages._build_problem_points_section) — ป้ายชุดนี้ต้อง
+    # ตรงกับที่การ์ดอ้างถึงเป๊ะ ถึงจะเทียบรูปกับข้อความได้จริง ใช้ bounding box ของ
+    # polygon ตรงๆ (ไม่ใช่ bounds ที่มี buffer) ให้ตรงกับสูตรฝั่ง gee_analysis.py
+    if polygon and len(polygon) >= 3:
+        ref_rows, ref_cols = _grid_reference_dims(polygon)
+        p_lngs = [pt[0] for pt in polygon]
+        p_lats = [pt[1] for pt in polygon]
+        ref_min_lng, ref_max_lng = min(p_lngs), max(p_lngs)
+        ref_min_lat, ref_max_lat = min(p_lats), max(p_lats)
+
+        line_color = (255, 255, 255, 110)
+        for c in range(1, ref_cols):
+            lng_b = ref_min_lng + (ref_max_lng - ref_min_lng) * c / ref_cols
+            x, _ = to_px(ref_min_lat, lng_b)
+            draw.line([(x, 0), (x, h)], fill=line_color, width=1)
+        for r in range(1, ref_rows):
+            lat_b = ref_max_lat - (ref_max_lat - ref_min_lat) * r / ref_rows
+            _, y = to_px(lat_b, ref_min_lng)
+            draw.line([(0, y), (w, y)], fill=line_color, width=1)
+
+        f_ref = _font("Kanit-Bold.ttf", max(13, int(w / 32)))
+        for c in range(ref_cols):
+            lng_mid = ref_min_lng + (ref_max_lng - ref_min_lng) * (c + 0.5) / ref_cols
+            x, _ = to_px(ref_min_lat, lng_mid)
+            draw.text((x, 5), str(c + 1), font=f_ref, fill=(255, 255, 255, 255),
+                      stroke_width=3, stroke_fill=(0, 0, 0, 190), anchor="mt")
+        for r in range(ref_rows):
+            lat_mid = ref_max_lat - (ref_max_lat - ref_min_lat) * (r + 0.5) / ref_rows
+            _, y = to_px(lat_mid, ref_min_lng)
+            draw.text((5, y), chr(65 + r), font=f_ref, fill=(255, 255, 255, 255),
+                      stroke_width=3, stroke_fill=(0, 0, 0, 190), anchor="lm")
+
     map_img = Image.alpha_composite(sat_img, overlay).convert("RGB")
 
     # ── ประกอบภาพสุดท้าย: แถบหัวเรื่อง (บน) + แผนที่ + แถบ legend (ล่าง) ──
     top_h = 92 if plot_name else 66
-    # เพิ่มความสูง legend อีกบรรทัดเมื่อมีลูกศร/จุดรวมน้ำให้อธิบาย (ตรงกับเว็บ) —
-    # แปลงพื้นที่ราบ/ไม่มีสัญญาณทิศทางน้ำไหลชัดเจนจะไม่มีลูกศรเลย ไม่ต้องเปลืองที่
+    # เพิ่มความสูง legend ทีละบรรทัดเมื่อมีลูกศร/จุดรวมน้ำให้อธิบาย (ตรงกับเว็บ) และ/
+    # หรือมีป้ายกริดอ้างอิงให้อธิบาย (มีทุกครั้งที่มี polygon — ผู้ใช้ขอ "บอกจุดที่
+    # เกิดปัญหา" ในการ์ด ป้ายในรูปนี้คือกุญแจอ่านการ์ดนั้น ต้องมีคำอธิบายกำกับเสมอ)
     show_flow_note = has_flow_arrows or sink_count > 0
-    bottom_h = 100 if show_flow_note else 78
+    has_grid_ref = bool(polygon and len(polygon) >= 3)
+    bottom_h = 78 + (22 if show_flow_note else 0) + (22 if has_grid_ref else 0)
     canvas = Image.new("RGB", (w, top_h + h + bottom_h), (255, 255, 255))
     cdraw = ImageDraw.Draw(canvas)
 
@@ -373,9 +435,9 @@ def render_plot_grid_image(
     _legend_dot_label(bar_x1, "จุดแฉะสุด", SWAB_GRADIENT_STOPS[-1][1], align="right")
 
     # บรรทัดอธิบายลูกศร/จุดรวมน้ำ — ให้ครบตามที่เห็นในเว็บ (ผู้ใช้ขอ)
+    f_note = _font("Kanit-Regular.ttf", 13)
+    note_y = label_y + 24
     if show_flow_note:
-        f_note = _font("Kanit-Regular.ttf", 13)
-        note_y = label_y + 24
         x_cursor = pad
         if has_flow_arrows:
             text = "▲ ลูกศร = ทิศทางน้ำไหล"
@@ -388,6 +450,15 @@ def render_plot_grid_image(
             x_cursor += dot_r * 2 + 6
             text = f"วงม่วง = จุดน้ำรวมมาก ({sink_count} จุด)"
             cdraw.text((x_cursor, note_y), text, font=f_note, fill=(102, 102, 102))
+        note_y += 22
+
+    # บรรทัดอธิบายป้ายกริดอ้างอิง — คู่กับ "จุดที่พบปัญหาในแปลง" ในการ์ดไลน์ (ป้าย
+    # ตัวอักษร+เลขต้องตรงกันเป๊ะระหว่างรูปนี้กับข้อความในการ์ด ดู _grid_reference_dims)
+    if has_grid_ref:
+        # หมายเหตุ: ห้ามใช้อีโมจิในข้อความนี้ — ฟอนต์ Kanit ไม่มี glyph อีโมจิ
+        # (ขึ้นเป็นกล่องว่าง ดูคอมเมนต์บนสุดของไฟล์)
+        cdraw.text((pad, note_y), "ตัวอักษร+เลข = ตำแหน่งอ้างอิง (ดูจุดที่พบปัญหาในข้อความ)",
+                   font=f_note, fill=(102, 102, 102))
 
     buf = io.BytesIO()
     canvas.save(buf, format="PNG", optimize=True)

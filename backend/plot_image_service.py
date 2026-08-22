@@ -145,18 +145,25 @@ async def delete_old_plot_images(older_than_days: int = 7) -> bool:
 async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str = "",
                                     plot_id: int | None = None) -> str | None:
     """
-    สร้างภาพแผนที่ความชื้นสำหรับส่งเข้า LINE คู่กับผลวิเคราะห์ — คืน URL รูปภาพ
-    หรือ None ถ้าล้มเหลว (แค่ "ของแถม" ไม่ควรทำให้คำขอหลักพังตาม — ใช้ที่เดียวกัน
-    ทั้ง /analyze และ daily_scan_job)
-    ยิง GEE 2 ครั้งพร้อมกัน (grid + ภาพถ่ายดาวเทียม) ผ่าน threadpool ลด wall-time
+    สร้างภาพแผนที่ความชื้นสำหรับส่งเข้า LINE คู่กับผลวิเคราะห์ — คืน dict
+    {"url": str|None, "problem_points": list[dict]} (url=None ถ้าล้มเหลว — แค่
+    "ของแถม" ไม่ควรทำให้คำขอหลักพังตาม — ใช้ที่เดียวกันทั้ง /analyze และ
+    daily_scan_job) ยิง GEE 2 ครั้งพร้อมกัน (grid + ภาพถ่ายดาวเทียม) ผ่าน
+    threadpool ลด wall-time
+
+    problem_points: จุดที่พบปัญหาเด่นสุดในแปลง (ป้ายกริดอ้างอิง A1/B2/... เดียวกับ
+    ที่พิมพ์ลงในรูป) — ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้" ในการ์ดไลน์ — คำนวณ
+    จาก grid_points ชุดเดียวกับที่ใช้ทำรูป ไม่เรียก GEE เพิ่ม (ดู
+    gee_analysis.select_problem_points) — ผู้เรียกเอาไปใส่ใน build_result_flex()
 
     plot_id (ถ้ามี): ถือโอกาสครอปรูปถ่ายดาวเทียมที่ดึงมาแล้ว (ไม่เรียก GEE เพิ่ม)
     เป็นรูปย่อสี่เหลี่ยมเล็กๆ อัปโหลดเก็บถาวรแยกต่างหาก แล้วบันทึกลง plots.thumbnail_url
     — ใช้แสดงในหน้า "แปลงของฉัน" (LIFF) ให้แยกแต่ละแปลงออกจากกันง่ายขึ้น (ผู้ใช้ขอ)
     ล้มเหลวได้โดยไม่กระทบรูปแผนที่หลักที่ส่งเข้า LINE (แยก try/except ต่างหาก)
     """
+    empty = {"url": None, "problem_points": []}
     if not _MAP_IMAGE_AVAILABLE:
-        return None
+        return empty
     try:
         grid_points, thumbnail = await asyncio.gather(
             run_in_threadpool(gee_analysis.get_moisture_grid, polygon, 10),
@@ -171,7 +178,14 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
             logger.info(f"Plot grid image ready: {url}")
     except Exception as e:
         logger.warning(f"Plot grid image generation failed ({type(e).__name__}, non-fatal, skipping): {e}")
-        return None
+        return empty
+
+    problem_points = []
+    try:
+        gee_analysis.assign_grid_reference(grid_points, polygon)
+        problem_points = gee_analysis.select_problem_points(grid_points)
+    except Exception as e:
+        logger.warning(f"Problem-point selection failed (non-fatal): {e}")
 
     if plot_id is not None:
         try:
@@ -182,4 +196,4 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
         except Exception as e:
             logger.warning(f"Plot list thumbnail failed (non-fatal, plot {plot_id}): {e}")
 
-    return url
+    return {"url": url, "problem_points": problem_points}

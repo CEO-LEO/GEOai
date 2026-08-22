@@ -39,7 +39,8 @@ _COLORS: dict[RiskLevel, dict] = {
 
 
 def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
-                      swab_trend: str | None = None) -> dict:
+                      swab_trend: str | None = None,
+                      problem_points: list[dict] | None = None) -> dict:
     """
     สร้าง LINE Flex Message bubble พร้อมกราฟ meter และคำแนะนำ
     คืน dict สำหรับใส่ใน messages array ของ LINE API
@@ -47,6 +48,11 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
     swab_trend (ถ้ามี): ข้อความเทียบ "ระดับ" ความชื้นกับผลวิเคราะห์ก่อนหน้า (เช่น
     "📈 ดีขึ้น 2 ระดับจากสัปดาห์ก่อน") — คำนวณจากประวัติ ต้องมาจากภายนอก (ฟังก์ชันนี้
     ไม่มีสิทธิ์เข้าถึง DB เอง) ดู build_daily_digest_message/scheduler.py ที่เรียกใช้
+
+    problem_points (ถ้ามี): จุดที่พบปัญหาเด่นสุดในแปลง (ดู
+    gee_analysis.select_problem_points) — มีแทนที่จะโชว์บรรทัดคำแนะนำวิธีแก้ทั่วไป
+    (ผู้ใช้ขอ) เฉพาะแปลงที่วาดขอบเขตไว้เท่านั้นถึงจะมีข้อมูลนี้ — plot_image_service.py
+    เป็นคนคำนวณให้ (ต้องมีตารางจุดความชื้นซึ่งคำนวณตอนทำรูปแผนที่อยู่แล้ว)
     """
     level  = _risk_level(data)
     colors = _COLORS[level]
@@ -243,7 +249,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     {"type": "separator"},
 
                     # v3: Soil Water-Air Balance
-                    *(_build_swab_section(data.get("swab", {}), swab_trend)),
+                    *(_build_swab_section(data.get("swab", {}), swab_trend, problem_points)),
 
                     # v2: Land impact summary
                     *(_build_impact_section(land_impact) if land_impact and land_impact.get("severity") != "low" else []),
@@ -565,6 +571,59 @@ def format_swab_trend(current_level: int, prev_level: int | None) -> str | None:
     return f"↔️ ระดับความชื้นเปลี่ยนฝั่งจากสัปดาห์ก่อน {arrow}"
 
 
+# สีป้ายกริดต่อจุดปัญหา — ใช้ชุดเดียวกับ _SWAB_ZONE_COLORS/gauge (ตรงกับสีในรูป
+# แผนที่ที่ map_image.py วาดเป๊ะ กันเกษตรกรงงว่าทำไมสีในการ์ดกับรูปไม่ตรงกัน)
+_PROBLEM_POINT_COLOR = {
+    "drought": "#B71C1C", "dry": "#FB8C00", "optimal": "#43A047",
+    "wet": "#29B6F6", "waterlogged": "#0D47A1",
+}
+
+
+def _build_problem_points_section(problem_points: list[dict]) -> dict:
+    """
+    "จุดที่พบปัญหาในแปลง" — แทนที่บรรทัดคำแนะนำวิธีแก้ทั่วไปเมื่อมีข้อมูลตาราง
+    จุดความชื้น (เฉพาะแปลงที่วาดขอบเขตไว้) ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้"
+    — ป้าย A1/B2/... อ้างอิงตำแหน่งเดียวกับที่พิมพ์ไว้ในรูปแผนที่ (map_image.py)
+    ให้เทียบรูปกับข้อความได้ทันที ไม่ต้องตีความเอง (ดู gee_analysis.select_problem_points)
+    """
+    rows = []
+    for i, p in enumerate(problem_points):
+        color = _PROBLEM_POINT_COLOR.get(p.get("status"), "#666666")
+        rows.append({
+            "type": "box", "layout": "horizontal", "spacing": "sm",
+            "margin": "sm" if i > 0 else "none",
+            "contents": [
+                {
+                    "type": "box", "layout": "vertical",
+                    "width": "32px", "height": "22px", "cornerRadius": "6px",
+                    "backgroundColor": color, "justifyContent": "center",
+                    "contents": [
+                        {"type": "text", "text": p["grid_label"], "align": "center",
+                         "size": "xxs", "color": "#FFFFFF", "weight": "bold"},
+                    ],
+                },
+                {
+                    "type": "box", "layout": "vertical", "flex": 1, "justifyContent": "center",
+                    "contents": [
+                        {"type": "text",
+                         "text": f"{p['label_th']} — {p['position_desc']}",
+                         "size": "xxs", "color": "#333333", "wrap": True},
+                    ],
+                },
+            ],
+        })
+
+    return {
+        "type": "box", "layout": "vertical",
+        "backgroundColor": "#F6F4EC", "cornerRadius": "8px",
+        "paddingAll": "9px", "margin": "sm",
+        "contents": [
+            {"type": "text", "text": f"📍 จุดที่พบปัญหาในแปลง ({len(problem_points)} จุด)",
+             "size": "xxs", "weight": "bold", "color": "#555555"},
+        ] + rows,
+    }
+
+
 # ป้ายระดับหลักที่แสดงใต้แถบเกจ — ไม่แสดงทุกระดับ (-5..+5 ครบจะแน่นเกินไปในการ์ด
 # แคบๆ) แสดงเฉพาะปลายสุดสองข้าง + จุดกึ่งกลาง + ขอบโซนแห้งเกิน/ชื้นเกิน (ระดับ ±2
 # ใกล้เคียงขอบจริงของโซนนั้นๆ) ให้พอเห็นว่าตัวเลขไล่ระดับตามแนวไหน
@@ -583,7 +642,8 @@ def _swab_level_tick_pct(level: int) -> float:
     return _swab_gauge_marker_pct(idx)
 
 
-def _build_swab_section(swab: dict, swab_trend: str | None = None) -> list[dict]:
+def _build_swab_section(swab: dict, swab_trend: str | None = None,
+                        problem_points: list[dict] | None = None) -> list[dict]:
     """
     สร้าง Flex components แสดงความชื้นในดิน (SWAB v3)
 
@@ -669,6 +729,15 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None) -> list[dict]
         ],
     }
 
+    # ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้" — มีเฉพาะแปลงที่วาดขอบเขตไว้ (ถึงจะมี
+    # ตารางจุดความชื้นให้หาตำแหน่งจุดแย่สุดได้) แปลงปักหมุดจุดเดียวไม่มีข้อมูลนี้
+    # ยังคงโชว์คำแนะนำทั่วไปแบบเดิมไป (ดีกว่าไม่มีอะไรให้เลย)
+    advice_or_points = (
+        _build_problem_points_section(problem_points) if problem_points else
+        {"type": "text", "text": advice,
+         "size": "xs", "color": "#555555", "wrap": True, "margin": "sm"}
+    )
+
     return [
         {"type": "text",
          "text": "💧 ความชื้นในดิน",
@@ -683,8 +752,7 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None) -> list[dict]
                 gauge,
                 {"type": "text", "text": status_th,
                  "size": "xs", "color": txt_color, "wrap": True, "margin": "sm"},
-                {"type": "text", "text": advice,
-                 "size": "xs", "color": "#555555", "wrap": True, "margin": "sm"},
+                advice_or_points,
             ] + ([{"type": "text", "text": swab_trend, "size": "xxs",
                    "color": "#888888", "wrap": True, "margin": "sm"}]
                  if swab_trend else [])

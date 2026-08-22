@@ -293,7 +293,6 @@ async def analyze(req: AnalysisRequest):
     try:
         data     = await _run_gee_analysis(req.lat, req.lng, polygon=req.polygon)
         message  = format_message(data, req.lat, req.lng)
-        flex     = build_result_flex(data, req.lat, req.lng, message)
 
         # บันทึก user (upsert) + แปลง ก่อน — ต้องรู้ plot_id ก่อนถึงจะฝากให้
         # build_plot_grid_image_url() เก็บรูปย่อของแปลงนี้ถาวรได้ (ดูเหตุผลเต็มที่
@@ -305,9 +304,16 @@ async def analyze(req: AnalysisRequest):
 
         # แปลงที่วาดขอบเขตไว้ (polygon) เท่านั้นถึงจะมีตารางความชื้นให้ทำภาพ —
         # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
+        # ต้องเรียกก่อนสร้าง flex การ์ด (ย้ายลงมาด้านล่างแล้ว) เพราะการ์ดต้องใช้
+        # problem_points ที่ได้จากตรงนี้ (ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้")
         image_url = None
+        problem_points = []
         if req.polygon and len(req.polygon) >= 3:
-            image_url = await build_plot_grid_image_url(req.polygon, req.plot_name, plot_id=plot_id)
+            img_result = await build_plot_grid_image_url(req.polygon, req.plot_name, plot_id=plot_id)
+            image_url = img_result["url"]
+            problem_points = img_result["problem_points"]
+
+        flex = build_result_flex(data, req.lat, req.lng, message, problem_points=problem_points)
 
         await send_line_message(req.user_id, message, flex=flex, image_url=image_url)
         await save_analysis(req.user_id, data, message, plot_id=plot_id)

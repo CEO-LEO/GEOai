@@ -201,9 +201,12 @@ async def daily_scan_job(hour: int | None = None):
                     await send_line_message(user_id, intro)
                     for p in plot_summaries:
                         img_url = None
+                        problem_points = []
                         if p["polygon"] and len(p["polygon"]) >= 3:
-                            img_url = await build_plot_grid_image_url(p["polygon"], p["name"],
-                                                                      plot_id=p.get("plot_id"))
+                            img_result = await build_plot_grid_image_url(p["polygon"], p["name"],
+                                                                         plot_id=p.get("plot_id"))
+                            img_url = img_result["url"]
+                            problem_points = img_result["problem_points"]
 
                         # ── แนวโน้มเทียบสัปดาห์ก่อน (เฉพาะสรุปประจำวัน ตามที่ผู้ใช้ขอ) ──
                         # ของแถม ไม่ควรทำให้การ์ดหลักพังถ้า query พลาด (เช่นแปลงใหม่)
@@ -217,7 +220,7 @@ async def daily_scan_job(hour: int | None = None):
                                 logger.warning(f"swab trend lookup failed for plot {p.get('plot_id')}: {e}")
 
                         plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"],
-                                                      swab_trend=swab_trend)
+                                                      swab_trend=swab_trend, problem_points=problem_points)
                         await send_line_message(user_id, p["message"], flex=plot_flex, image_url=img_url)
                     counters["digested"] += 1
 

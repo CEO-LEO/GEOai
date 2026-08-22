@@ -859,6 +859,160 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
     return points
 
 
+# ─────────────────────────────────────────────────────────
+# ป้ายกริดอ้างอิง (A1, B2, ...) + จุดที่พบปัญหา
+# ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้" — พิกัด GPS จริงใช้ประโยชน์ไม่ได้เลยถ้ายืน
+# อยู่ในสวนไม่มีเครื่อง GPS แต่ "ไปช่อง C2" นับจากขอบแปลงได้ด้วยตา ป้ายชุดเดียวกันนี้
+# ต้องพิมพ์ลงบนรูปแผนที่ (map_image.py) ด้วยให้ตรงกันเป๊ะ — คำนวณจาก bounding box
+# ของ polygon ล้วนๆ (ไม่ใช้ GEE) เลยพอร์ต/ทำซ้ำฟังก์ชันนี้ไว้ใน map_image.py ตรงๆ ได้
+# โดยไม่ต้อง import ข้ามไฟล์ (เหมือน _bearing_between/_compute_flow_graph ที่ทำไว้
+# แบบเดียวกันแล้ว — กันสองไฟล์ผูกกันจนแก้ไฟล์หนึ่งพังอีกไฟล์)
+# ─────────────────────────────────────────────────────────
+GRID_REF_TARGET_CELLS = 12   # จำนวนช่องกริดอ้างอิงที่พยายามให้ได้ (ก่อนปรับตามสัดส่วนแปลง)
+GRID_REF_MIN_DIM = 2
+GRID_REF_MAX_DIM = 5
+
+
+def _grid_reference_dims(polygon: list[list[float]]) -> tuple[int, int]:
+    """
+    คำนวณจำนวนแถว/คอลัมน์ของกริดอ้างอิง (สำหรับตั้งชื่อช่อง A1, B2, ...) จาก
+    สัดส่วนจริงของแปลง (กว้าง/ยาว เป็นเมตร) — แปลงยาวรีจะได้กริดยาวรีตาม ไม่ใช่
+    บังคับสี่เหลี่ยมจัตุรัสเสมอ คืน (rows, cols) จำกัดไว้ 2-5 ช่องต่อด้าน (เกินนี้
+    จำยากเกินไปในรูปเล็กๆ ที่ส่งเข้า LINE)
+    """
+    lngs = [pt[0] for pt in polygon]
+    lats = [pt[1] for pt in polygon]
+    min_lng, max_lng = min(lngs), max(lngs)
+    min_lat, max_lat = min(lats), max(lats)
+    mid_lat = (min_lat + max_lat) / 2
+    width_m  = max(1.0, (max_lng - min_lng) * 111320 * math.cos(math.radians(mid_lat)))
+    height_m = max(1.0, (max_lat - min_lat) * 110540)
+    aspect = width_m / height_m
+
+    cols = round((GRID_REF_TARGET_CELLS * aspect) ** 0.5)
+    rows = round(GRID_REF_TARGET_CELLS / max(1, cols))
+    cols = max(GRID_REF_MIN_DIM, min(GRID_REF_MAX_DIM, cols))
+    rows = max(GRID_REF_MIN_DIM, min(GRID_REF_MAX_DIM, rows))
+    return rows, cols
+
+
+def _grid_ref_bounds(polygon: list[list[float]]) -> tuple[float, float, float, float]:
+    """(min_lng, min_lat, max_lng, max_lat) ของ polygon ตรงๆ — คนละอันกับ bounds
+    ที่ get_plot_satellite_thumbnail คืน (อันนั้นมี buffer เผื่อขอบภาพด้วย ไม่ใช้
+    ทำกริดอ้างอิงเพราะจะทำให้ช่องขอบๆ ไม่พอดีกับขอบแปลงจริง)"""
+    lngs = [pt[0] for pt in polygon]
+    lats = [pt[1] for pt in polygon]
+    return min(lngs), min(lats), max(lngs), max(lats)
+
+
+def _describe_grid_position(row_idx: int, rows: int, col_idx: int, cols: int) -> str:
+    """
+    บรรยายตำแหน่งช่อง (row_idx, col_idx) เป็นภาษาคน โดยใช้ทิศจริง (เหนือ/ใต้/
+    ตะวันออก/ตะวันตก) แทนคำว่า "บน/ล่าง" ที่มีความหมายแค่บนหน้าจอ — มีประโยชน์กว่า
+    เวลายืนอยู่ในสวนจริงและรู้ทิศ (row 0 = เหนือสุด เพราะละติจูดมากสุด, col 0 =
+    ตะวันตกสุด เพราะลองจิจูดน้อยสุด)
+    """
+    ns = ""
+    if rows > 1:
+        frac = row_idx / (rows - 1)
+        if frac < 0.34:
+            ns = "เหนือ"
+        elif frac > 0.66:
+            ns = "ใต้"
+    ew = ""
+    if cols > 1:
+        frac = col_idx / (cols - 1)
+        if frac < 0.34:
+            ew = "ตะวันตก"
+        elif frac > 0.66:
+            ew = "ตะวันออก"
+
+    if ns and ew:
+        return f"มุม{ns}{ew}ของแปลง"
+    if ns:
+        return f"ฝั่ง{ns}ของแปลง"
+    if ew:
+        return f"ฝั่ง{ew}ของแปลง"
+    return "กลางแปลง"
+
+
+def assign_grid_reference(points: list[dict], polygon: list[list[float]]) -> None:
+    """
+    เติม grid_label ("A1", "B2", ...) + position_desc (ภาษาคน) ให้ทุกจุดใน points
+    (แก้ในตัว list เดิมเลย ไม่คืนค่าใหม่) — ใช้ทั้งตอนเลือก "จุดที่พบปัญหา" สำหรับ
+    การ์ดไลน์ (select_problem_points) และตอนพิมพ์ป้ายกริดลงรูปแผนที่ (map_image.py
+    ต้องเรียกฟังก์ชันแบบเดียวกันนี้ — ดูคอมเมนต์บนสุดของหมวดนี้)
+    """
+    if not points or not polygon or len(polygon) < 3:
+        return
+    rows, cols = _grid_reference_dims(polygon)
+    min_lng, min_lat, max_lng, max_lat = _grid_ref_bounds(polygon)
+    lng_span = max(1e-9, max_lng - min_lng)
+    lat_span = max(1e-9, max_lat - min_lat)
+
+    for p in points:
+        col_idx = min(cols - 1, max(0, int((p["lng"] - min_lng) / lng_span * cols)))
+        row_idx = min(rows - 1, max(0, int((max_lat - p["lat"]) / lat_span * rows)))
+        p["grid_label"] = f"{chr(65 + row_idx)}{col_idx + 1}"
+        p["position_desc"] = _describe_grid_position(row_idx, rows, col_idx, cols)
+
+
+_PROBLEM_STATUS_LABEL = {
+    "waterlogged": "น้ำขังหนัก",
+    "wet":         "ชื้นเกิน",
+    "dry":         "แห้งเกิน",
+    "drought":     "แล้งจัด",
+}
+
+
+def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]:
+    """
+    เลือกจุดที่ "มีปัญหา" เด่นที่สุดในแปลง (ไม่ใช่ optimal) สำหรับใส่ในการ์ดแทนคำ
+    แนะนำวิธีแก้ทั่วไป — ต้องเรียก assign_grid_reference(points, polygon) ก่อนเสมอ
+    ให้แต่ละจุดมี grid_label/position_desc พร้อมแล้ว
+
+    หลักการ: เอาจุดที่ "เปียกสุด" กับ "แห้งสุด" มาก่อนเสมอถ้ามี (ครอบคลุมทั้งสอง
+    ปัญหาถ้าแปลงมีทั้งคู่) แล้วเติมที่เหลือด้วยจุดที่รุนแรงรองลงมา (เรียงตาม
+    |swab_index| ห่างจากศูนย์/สมดุล) จนครบ max_points
+
+    คืน list ของ dict {"grid_label","position_desc","status","label_th","swab_index"}
+    """
+    problem = [p for p in points if p.get("status") not in (None, "optimal")
+              and p.get("grid_label")]
+    if not problem:
+        return []
+
+    wettest = max(problem, key=lambda p: p.get("swab_index", 0.0))
+    driest  = min(problem, key=lambda p: p.get("swab_index", 0.0))
+
+    selected: list[dict] = []
+    seen: set[tuple[float, float]] = set()
+    for p in (wettest, driest):
+        key = (p["lat"], p["lng"])
+        if key not in seen:
+            selected.append(p)
+            seen.add(key)
+
+    for p in sorted(problem, key=lambda p: abs(p.get("swab_index", 0.0)), reverse=True):
+        if len(selected) >= max_points:
+            break
+        key = (p["lat"], p["lng"])
+        if key not in seen:
+            selected.append(p)
+            seen.add(key)
+
+    return [
+        {
+            "grid_label":    p["grid_label"],
+            "position_desc": p["position_desc"],
+            "status":        p.get("status"),
+            "label_th":      _PROBLEM_STATUS_LABEL.get(p.get("status"), p.get("status_th", "—")),
+            "swab_index":    p.get("swab_index"),
+        }
+        for p in selected[:max_points]
+    ]
+
+
 THUMBNAIL_BUFFER_M    = 25    # ขอบเผื่อรอบแปลงในภาพ (เมตร) กันขอบแปลงชิดขอบภาพเกินไป
 THUMBNAIL_DIMENSIONS  = 640   # ความกว้าง/สูงภาพ (พิกเซล) — LINE preview ไม่ต้องใหญ่มาก
 

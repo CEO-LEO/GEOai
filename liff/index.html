@@ -309,29 +309,34 @@
     .sphere-marker-pin { background: none !important; border: none !important; }
     .sphere-marker-html { background: none !important; border: none !important; }
 
-    /* ── SWAB — Soil Water-Air Balance visualisation ── */
-    .swab-gauge-wrap { margin: 10px 0 4px; }
-    .swab-gauge {
-      position: relative; height: 14px; border-radius: 7px;
-      background: linear-gradient(to right,
-        #1565c0 0%, #42a5f5 30%, #43a047 50%, #fb8c00 70%, #e53935 100%);
+    /* ── SWAB — Soil Water-Air Balance visualisation ──
+       v4 (ผู้ใช้ขอ "หน้ารายละเอียดในเว็บแก้ไขให้เหมือนในไลน์เลย"): เดิมเป็นเข็มชี้
+       บนไล่สีต่อเนื่อง (ทิศทางย้อนกลับกับการ์ดไลน์ด้วย — ที่นี่ชื้นอยู่ซ้าย การ์ด
+       ไลน์แห้งอยู่ซ้าย) เปลี่ยนเป็นแถบ 5 โซนสี + หมุด + ป้ายระดับตัวเลข ให้ตรงกับ
+       การ์ดไลน์ทุกอย่าง (สี/ทิศทาง/ระดับ ±5) ดู flex_messages.py::_build_swab_section
+       ฝั่ง backend เป็นต้นแบบ */
+    .swab-gauge-wrap { margin: 18px 0 4px; position: relative; height: 40px; }
+    .swab-track {
+      position: absolute; top: 16px; left: 0; right: 0; height: 6px;
+      border-radius: 3px; display: flex; overflow: hidden;
     }
-    .swab-optimal {
-      position: absolute; top: -2px; height: 18px;
-      left: 42.5%; width: 15%;   /* index −15% to +15% → center zone */
-      border: 2px solid #43a047; border-radius: 5px;
-      background: rgba(67,160,71,0.15);
+    .swab-track > div { height: 100%; }
+    .swab-marker {
+      position: absolute; top: 13px; width: 12px; height: 12px; border-radius: 6px;
+      background: #fff; border: 2px solid #333; transform: translateX(-6px);
     }
-    .swab-needle {
-      position: absolute; top: -4px;
-      width: 4px; height: 22px;
-      background: white; border: 2px solid #333;
-      border-radius: 2px; transform: translateX(-2px);
+    .swab-level-badge {
+      position: absolute; top: -2px; transform: translateX(-50%);
+      font-size: 11px; font-weight: 700;
+      background: #fff; border: 1px solid #ddd; border-radius: 5px; padding: 1px 6px;
+      white-space: nowrap;
     }
-    .swab-gauge-labels {
-      display: flex; justify-content: space-between;
-      font-size: 10px; color: #888; margin-top: 3px;
+    .swab-ticks { position: relative; height: 14px; margin-top: 2px; }
+    .swab-ticks span {
+      position: absolute; transform: translateX(-50%); font-size: 10px; color: #999;
+      font-variant-numeric: tabular-nums;
     }
+    .swab-ticks span.zero { color: #2e7d32; font-weight: 700; }
     .swab-pore-bar {
       display: flex; height: 10px;
       border-radius: 5px; overflow: hidden;
@@ -997,6 +1002,36 @@
       const t = (v - lo) / (hi - lo);
       return -0.45 + Math.max(0, Math.min(1, t)) * 0.9;
     };
+  }
+
+  // ─── ระดับความชื้น (-5..+5) ── พอร์ตตรงจาก gee_analysis.swab_index_to_level
+  // (backend) — ต้องคำนวณผลลัพธ์ตรงกันเป๊ะกับการ์ดที่ส่งเข้าไลน์ ดูเหตุผลเต็มที่
+  // ฟังก์ชันต้นแบบฝั่ง Python (0=สมดุลดี, นับทีละ 0.15 หน่วยของ swab_index/1 ระดับ)
+  const SWAB_LEVEL_RANGE = 5;
+  const SWAB_ZONE_COLORS = ["#B71C1C", "#FB8C00", "#43A047", "#29B6F6", "#0D47A1"];
+  const SWAB_ZONE_FLEX   = [70, 15, 25, 20, 70];   // ต้องตรงกับ flex_messages.py เป๊ะ
+
+  function swabIndexToLevel(swabIndex, levelRange) {
+    levelRange = levelRange || SWAB_LEVEL_RANGE;
+    const eps = 1e-9;   // กัน float imprecision เหมือนฝั่ง Python (ดูคอมเมนต์ต้นแบบ)
+    let level;
+    if (swabIndex >= -0.15 && swabIndex <= 0.10) level = 0;
+    else if (swabIndex > 0.10) level = 1 + Math.trunc((swabIndex - 0.10 + eps) / 0.15);
+    else level = -1 - Math.trunc((-0.15 - swabIndex + eps) / 0.15);
+    return Math.max(-levelRange, Math.min(levelRange, level));
+  }
+
+  function swabGaugeMarkerPct(swabIndex) {
+    const pct = (Math.max(-1, Math.min(1, swabIndex)) + 1) / 2 * 100;
+    return Math.max(3, Math.min(97, pct));
+  }
+
+  function swabLevelTickPct(level) {
+    let idx;
+    if (level === 0) idx = -0.025;
+    else if (level > 0) idx = 0.10 + (level - 1) * 0.15 + 0.075;
+    else idx = -0.15 - (-level - 1) * 0.15 - 0.075;
+    return swabGaugeMarkerPct(idx);
   }
 
   // ─── รูปทรง "หยดน้ำชี้ทิศ" สำหรับจุดที่มีทิศทางน้ำไหล (flow_to) ──────
@@ -1854,8 +1889,22 @@
         const swabSev  = swab.severity || 'low';
         const swCls    = swabSev === 'high' ? 'danger' : swabSev === 'medium' ? 'warn' : '';
         const swCol    = swabSev === 'high' ? '#c62828' : swabSev === 'medium' ? '#e65100' : '#1565c0';
-        const needleL  = ((swabIdx + 1) / 2 * 100).toFixed(1);
         const ndwiLbl  = ndwi >= 0.05 ? '💧 มีน้ำ' : ndwi >= -0.1 ? '🟰 ปกติ' : '🏜️ แห้ง';
+
+        // เกจระดับ -5..+5 — ให้ตรงกับการ์ดไลน์เป๊ะ (สี/ทิศทาง/ตำแหน่งหมุด/ป้ายระดับ)
+        const swabLevel = swab.swab_level != null ? swab.swab_level : swabIndexToLevel(swabIdx);
+        const markerPct = swabGaugeMarkerPct(swabIdx);
+        const levelText = 'ระดับ ' + (swabLevel > 0 ? '+' : '') + swabLevel;
+        const majorLevels = [-5, -2, 0, 2, 5];
+        const zoneBars = SWAB_ZONE_FLEX.map((flex, i) =>
+          `<div style="flex:${flex};background:${SWAB_ZONE_COLORS[i]};"></div>`).join('');
+        const tickSpans = majorLevels.map(lvl => {
+          const p = swabLevelTickPct(lvl);
+          const cls = lvl === 0 ? ' class="zero"' : '';
+          const txt = lvl === 0 ? '0' : (lvl > 0 ? '+' + lvl : lvl);
+          return `<span${cls} style="left:${p}%;">${txt}</span>`;
+        }).join('');
+
         return `
         <div class="result-section ${swCls}">
           <div class="result-section-title">💧 ความสมดุลน้ำ-อากาศในดิน</div>
@@ -1868,13 +1917,10 @@
             <span class="value">${ndwiLbl} (${ndwi >= 0 ? '+' : ''}${ndwi.toFixed(3)})</span>
           </div>
           <div class="swab-gauge-wrap">
-            <div class="swab-gauge">
-              <div class="swab-optimal"></div>
-              <div class="swab-needle" style="left:${needleL}%"></div>
-            </div>
-            <div class="swab-gauge-labels">
-              <span>💧 น้ำขัง</span><span>✅ สมดุล</span><span>🏜️ แล้ง</span>
-            </div>
+            <div class="swab-level-badge" style="left:${markerPct}%;color:${swCol};">${levelText}</div>
+            <div class="swab-track">${zoneBars}</div>
+            <div class="swab-marker" style="left:${markerPct}%;"></div>
+            <div class="swab-ticks">${tickSpans}</div>
           </div>
           <div class="swab-pore-bar">
             <div class="swab-pore-water" style="width:${waterPct}%"></div>

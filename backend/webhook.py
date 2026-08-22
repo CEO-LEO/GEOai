@@ -203,19 +203,30 @@ async def _handle_postback(event: dict):
             from plot_image_service import build_plot_grid_image_url
             from line_sender import send_line_message
 
-            image_urls = await asyncio.gather(*[
+            img_results = await asyncio.gather(*[
                 build_plot_grid_image_url(p["polygon"], p.get("name") or "แปลงของคุณ",
                                           plot_id=p.get("id"))
                 for p in plots_with_polygon
             ], return_exceptions=True)
 
-            for plot, result in zip(plots_with_polygon, image_urls):
-                if isinstance(result, Exception) or not result:
+            for plot, result in zip(plots_with_polygon, img_results):
+                if isinstance(result, Exception) or not result.get("url"):
                     if isinstance(result, Exception):
                         logger.warning(f"map image failed for plot {plot.get('id')}: {result}")
                     continue
                 plot_name = plot.get("name") or "แปลงของคุณ"
-                await send_line_message(user_id, f"🗺️ แผนที่ความชื้น — {plot_name}", image_url=result)
+                caption = f"🗺️ แผนที่ความชื้น — {plot_name}"
+                # การ์ดสรุป (ส่งไปก่อนหน้าแล้วใน reply) ใช้ข้อมูลแคชล่าสุด ยังไม่มี
+                # จุดที่พบปัญหาเพราะต้องรอตารางจุดที่เพิ่งคำนวณเสร็จตรงนี้ — แนบสรุป
+                # สั้นๆ ต่อท้ายรูปแทน ดีกว่าไม่มีเลย (ผู้ใช้ขอ "บอกจุดที่เกิดปัญหา")
+                problem_points = result.get("problem_points") or []
+                if problem_points:
+                    lines = "\n".join(
+                        f"• {p['grid_label']} {p['label_th']} — {p['position_desc']}"
+                        for p in problem_points
+                    )
+                    caption += f"\n📍 จุดที่พบปัญหา:\n{lines}"
+                await send_line_message(user_id, caption, image_url=result["url"])
 
     elif data == "action=settings":
         await _reply(reply_token, [_settings_menu()])
