@@ -15,7 +15,8 @@ from fastapi.concurrency import run_in_threadpool
 from database import (get_all_reports, save_analysis, get_user_plots,
                       get_notifiable_users, get_recent_analyses,
                       get_latest_plot_analysis, save_grid_snapshot,
-                      get_digest_users, get_users_by_hour)
+                      get_digest_users, get_users_by_hour,
+                      delete_old_grid_snapshots)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
@@ -80,6 +81,13 @@ async def daily_scan_job(hour: int | None = None):
     ผ่าน /admin/trigger/daily-scan โดยไม่ใส่ ?hour= เช่นตอนทดสอบด้วยมือ)
     """
     logger.info(f"🕐 Daily scan started (hour={hour})")
+
+    # เก็บกวาด grid_snapshots เก่า (ดู delete_old_grid_snapshots — ตารางนี้โตไม่จำกัด
+    # มาตลอดเพราะไม่เคยมีการลบ) ก่อนเริ่มสแกน ไม่ให้ล้มทั้งงานถ้าเก็บกวาดพัง
+    try:
+        await delete_old_grid_snapshots()
+    except Exception as e:
+        logger.warning(f"grid_snapshots cleanup failed (non-fatal): {e}")
 
     # ดึง unique users จาก reports
     all_reports = await get_all_reports(limit=1000)

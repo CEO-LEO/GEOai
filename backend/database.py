@@ -816,6 +816,32 @@ async def save_grid_snapshot(plot_id: int, points: list[dict]) -> bool:
     return True
 
 
+async def delete_old_grid_snapshots(older_than_days: int = 30) -> bool:
+    """
+    ลบ grid_snapshots ที่เก่ากว่า older_than_days วัน — เจอระหว่างตรวจความพร้อม
+    ก่อนขยายผู้ใช้ (2026-08-22): บันทึก 1 แถวต่อ 1 จุดตาราง ทุกแปลงที่มีขอบเขต
+    ทุกวัน (ดู save_grid_snapshot) แต่ get_persistent_wet_points() มองย้อนหลัง
+    แค่ 14 วันเป็นค่าเริ่มต้นเท่านั้น — ไม่เคยมีการลบมาก่อน ตารางเลยโตไม่จำกัด
+    (พบจริง ~11,900 แถวจากแค่ 13 แปลงช่วงทดสอบสั้นๆ) ขยายไปหลายสิบผู้ใช้จะเกิน
+    Supabase free tier 500MB ได้เร็วมาก เก็บ buffer ไว้ 30 วัน (มากกว่า 14 วันที่
+    query จริงใช้ เผื่ออนาคตอยากขยายช่วงดูย้อนหลัง) — เรียกจาก daily_scan_job
+    ทุกรอบที่ทำงาน (DELETE ตาม cutoff วันที่ ไม่แพง เรียกซ้ำได้ไม่มีผลข้างเคียง)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/grid_snapshots",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            params={"created_at": f"lt.{cutoff}"},
+        )
+    if resp.status_code not in (200, 204):
+        logger.error(f"Supabase delete_old_grid_snapshots failed: {resp.status_code} — {resp.text}")
+        return False
+    return True
+
+
 async def get_persistent_wet_points(
     plot_id: int, days: int = 14, min_days_observed: int = 3, min_wet_ratio: float = 0.6
 ) -> list[dict]:
