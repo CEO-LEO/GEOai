@@ -40,10 +40,16 @@ _COLORS: dict[RiskLevel, dict] = {
 
 def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                       swab_trend: str | None = None,
-                      problem_points: list[dict] | None = None) -> dict:
+                      problem_points: list[dict] | None = None,
+                      plot_name: str = "") -> dict:
     """
     สร้าง LINE Flex Message bubble พร้อมกราฟ meter และคำแนะนำ
     คืน dict สำหรับใส่ใน messages array ของ LINE API
+
+    plot_name (ถ้ามี): ผู้ใช้ขอเปลี่ยนหัวการ์ดจากคำว่า "GEOai" คงที่ เป็นชื่อแปลง
+    ของเขาเอง (มีหลายแปลง อยากรู้ทันทีว่าการ์ดนี้คือแปลงไหนโดยไม่ต้องเปิดดูพิกัด)
+    — fallback กลับไปที่ "GEOai" ถ้าไม่ได้ส่งมา (เช่น ผลวิเคราะห์เก่าที่ไม่มีชื่อ
+    แปลงติดมาด้วย)
 
     swab_trend (ถ้ามี): ข้อความเทียบ "ระดับ" ความชื้นกับผลวิเคราะห์ก่อนหน้า (เช่น
     "📈 ดีขึ้น 2 ระดับจากสัปดาห์ก่อน") — คำนวณจากประวัติ ต้องมาจากภายนอก (ฟังก์ชันนี้
@@ -82,9 +88,12 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
     disp_str = {"high": "⚠️ ไม่เสถียร", "medium": "🔶 ปานกลาง", "low": "✅ เสถียร"}.get(disp_level, "✅ เสถียร")
     disp_color = {"high": "#C62828", "medium": "#E65100", "low": "#2E7D32"}.get(disp_level, "#2E7D32")
 
+    header_title = f"🌿 {plot_name}" if plot_name else "🌿 GEOai"
+
     return {
         "type": "flex",
-        "altText": f"{colors['icon']} ผลวิเคราะห์แปลงทุเรียน — {colors['label']}",
+        "altText": (f"{colors['icon']} ผลวิเคราะห์ {plot_name} — {colors['label']}" if plot_name
+                    else f"{colors['icon']} ผลวิเคราะห์แปลงทุเรียน — {colors['label']}"),
         "contents": {
             "type": "bubble",
             "size": "mega",
@@ -102,11 +111,12 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                         "contents": [
                             {
                                 "type": "text",
-                                "text": "🌿 GEOai",
+                                "text": header_title,
                                 "color": "#FFFFFF",
                                 "weight": "bold",
                                 "size": "lg",
-                                "flex": 1
+                                "flex": 1,
+                                "wrap": True
                             },
                             {
                                 "type": "box",
@@ -811,11 +821,12 @@ def _build_topsoil_high_warning() -> list[dict]:
     ]
 
 
-def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str) -> dict:
+def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str,
+                            plot_name: str = "") -> dict:
     """Flex สำหรับแจ้งเตือนรายวัน — มี header สีส้มบอกว่าเป็น alert"""
-    base = build_result_flex(data, lat, lng, plain_text)
+    base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name)
     # Prepend alert banner ใน body
-    base["altText"] = "⚠️ แจ้งเตือนประจำวัน — GEOai"
+    base["altText"] = f"⚠️ แจ้งเตือนประจำวัน — {plot_name}" if plot_name else "⚠️ แจ้งเตือนประจำวัน — GEOai"
     base["contents"]["body"]["contents"].insert(0, {
         "type": "box",
         "layout": "horizontal",
@@ -832,13 +843,15 @@ def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str)
 
 
 def build_escalation_flex(data: dict, lat: float, lng: float,
-                          plain_text: str, consecutive_days: int) -> dict:
+                          plain_text: str, consecutive_days: int,
+                          plot_name: str = "") -> dict:
     """
     Flex สำหรับ escalation alert — เสี่ยงสูงต่อเนื่อง 2+ วัน
     เน้นสีแดง + เตือนซ้ำรุนแรงขึ้น
     """
-    base = build_result_flex(data, lat, lng, plain_text)
-    base["altText"] = f"🚨 แจ้งเตือนฉุกเฉิน — เสี่ยงสูงต่อเนื่อง {consecutive_days} วัน"
+    base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name)
+    banner_name = f" — {plot_name}" if plot_name else ""
+    base["altText"] = f"🚨 แจ้งเตือนฉุกเฉิน{banner_name} — เสี่ยงสูงต่อเนื่อง {consecutive_days} วัน"
 
     escalation_banner = {
         "type": "box",

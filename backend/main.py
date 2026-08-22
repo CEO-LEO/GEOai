@@ -313,7 +313,8 @@ async def analyze(req: AnalysisRequest):
             image_url = img_result["url"]
             problem_points = img_result["problem_points"]
 
-        flex = build_result_flex(data, req.lat, req.lng, message, problem_points=problem_points)
+        flex = build_result_flex(data, req.lat, req.lng, message,
+                                 problem_points=problem_points, plot_name=req.plot_name)
 
         await send_line_message(req.user_id, message, flex=flex, image_url=image_url)
         await save_analysis(req.user_id, data, message, plot_id=plot_id)

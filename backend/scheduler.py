@@ -175,7 +175,8 @@ async def daily_scan_job(hour: int | None = None):
                             consec = _count_consecutive_high_risk(recent)
                             if consec >= ESCALATION_DAYS:
                                 flex = build_escalation_flex(
-                                    data, lat, lng, message, consec
+                                    data, lat, lng, message, consec,
+                                    plot_name=plot.get("name") or ""
                                 )
                                 await send_line_message(user_id, message, flex=flex)
                                 counters["escalated"] += 1
@@ -185,7 +186,8 @@ async def daily_scan_job(hour: int | None = None):
                                 )
                                 continue
 
-                        flex = build_weekly_alert_flex(data, lat, lng, message)
+                        flex = build_weekly_alert_flex(data, lat, lng, message,
+                                                       plot_name=plot.get("name") or "")
                         await send_line_message(user_id, message, flex=flex)
                         counters["alerted"] += 1
 
@@ -220,7 +222,8 @@ async def daily_scan_job(hour: int | None = None):
                                 logger.warning(f"swab trend lookup failed for plot {p.get('plot_id')}: {e}")
 
                         plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"],
-                                                      swab_trend=swab_trend, problem_points=problem_points)
+                                                      swab_trend=swab_trend, problem_points=problem_points,
+                                                      plot_name=p.get("name") or "")
                         await send_line_message(user_id, p["message"], flex=plot_flex, image_url=img_url)
                     counters["digested"] += 1
 

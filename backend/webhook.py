@@ -173,7 +173,8 @@ async def _handle_postback(event: dict):
             if not report:
                 continue
             plain = format_message(report, report["lat"], report["lng"])
-            flex = build_result_flex(report, report["lat"], report["lng"], plain)
+            flex = build_result_flex(report, report["lat"], report["lng"], plain,
+                                     plot_name=plot.get("name") or "")
             bubbles.append(flex["contents"])   # เอาแค่ bubble ออกมา ไม่เอา {"type":"flex","altText":...} ทั้งก้อน
             if len(bubbles) >= 10:   # LINE carousel รับสูงสุด 10 bubble/ข้อความ
                 break
