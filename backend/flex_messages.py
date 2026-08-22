@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Literal
 
 from rule_engine import compute_risk_level
+from gee_analysis import swab_index_to_level
 
 _BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -37,10 +38,15 @@ _COLORS: dict[RiskLevel, dict] = {
 }
 
 
-def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> dict:
+def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
+                      swab_trend: str | None = None) -> dict:
     """
     สร้าง LINE Flex Message bubble พร้อมกราฟ meter และคำแนะนำ
     คืน dict สำหรับใส่ใน messages array ของ LINE API
+
+    swab_trend (ถ้ามี): ข้อความเทียบ "ระดับ" ความชื้นกับผลวิเคราะห์ก่อนหน้า (เช่น
+    "📈 ดีขึ้น 2 ระดับจากสัปดาห์ก่อน") — คำนวณจากประวัติ ต้องมาจากภายนอก (ฟังก์ชันนี้
+    ไม่มีสิทธิ์เข้าถึง DB เอง) ดู build_daily_digest_message/scheduler.py ที่เรียกใช้
     """
     level  = _risk_level(data)
     colors = _COLORS[level]
@@ -237,7 +243,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str) -> di
                     {"type": "separator"},
 
                     # v3: Soil Water-Air Balance
-                    *(_build_swab_section(data.get("swab", {}))),
+                    *(_build_swab_section(data.get("swab", {}), swab_trend)),
 
                     # v2: Land impact summary
                     *(_build_impact_section(land_impact) if land_impact and land_impact.get("severity") != "low" else []),
@@ -534,7 +540,50 @@ def _swab_gauge_marker_pct(swab_index: float) -> float:
     return max(3.0, min(97.0, pct))  # กันหมุดหลุดขอบแถบตอนค่าสุดขั้ว
 
 
-def _build_swab_section(swab: dict) -> list[dict]:
+def format_swab_trend(current_level: int, prev_level: int | None) -> str | None:
+    """
+    เทียบ "ระดับ" ความชื้นปัจจุบันกับผลวิเคราะห์ก่อนหน้า (ดู
+    database.get_swab_level_days_ago) เป็นข้อความสั้นๆ ใส่ในการ์ดสรุปประจำวัน —
+    ไอเดียต่อยอดจากระบบระดับ: 0=สมดุลดี ยิ่งใกล้ 0 ยิ่งดี ไม่ว่าจะติดลบ(แห้ง)หรือ
+    บวก(ชื้น) เลยตัดสิน "ดีขึ้น/แย่ลง" จากระยะห่างจาก 0 ที่ลด/เพิ่ม ไม่ใช่ค่าดิบเพิ่ม/
+    ลด ตรงๆ (เช่น -3 → -1 คือดีขึ้นทั้งที่ตัวเลขดิบเพิ่มขึ้น)
+
+    คืน None ถ้าไม่มีข้อมูลเทียบ (แปลงใหม่ยังไม่ถึงสัปดาห์ ฯลฯ) — ผู้เรียกต้องเช็ค
+    ก่อนใส่เข้าการ์ด
+    """
+    if prev_level is None:
+        return None
+    if current_level == prev_level:
+        return "ระดับความชื้นเท่าสัปดาห์ก่อน — ยังไม่เปลี่ยนแปลง"
+
+    delta_levels = abs(current_level - prev_level)
+    arrow = f"(ระดับ {prev_level:+d} → {current_level:+d})"
+    if abs(current_level) < abs(prev_level):
+        return f"📈 ดีขึ้น {delta_levels} ระดับจากสัปดาห์ก่อน {arrow}"
+    if abs(current_level) > abs(prev_level):
+        return f"📉 แย่ลง {delta_levels} ระดับจากสัปดาห์ก่อน {arrow}"
+    return f"↔️ ระดับความชื้นเปลี่ยนฝั่งจากสัปดาห์ก่อน {arrow}"
+
+
+# ป้ายระดับหลักที่แสดงใต้แถบเกจ — ไม่แสดงทุกระดับ (-5..+5 ครบจะแน่นเกินไปในการ์ด
+# แคบๆ) แสดงเฉพาะปลายสุดสองข้าง + จุดกึ่งกลาง + ขอบโซนแห้งเกิน/ชื้นเกิน (ระดับ ±2
+# ใกล้เคียงขอบจริงของโซนนั้นๆ) ให้พอเห็นว่าตัวเลขไล่ระดับตามแนวไหน
+_SWAB_MAJOR_LEVELS = [-5, -2, 0, 2, 5]
+
+
+def _swab_level_tick_pct(level: int) -> float:
+    """ระดับ (int, ดู gee_analysis.swab_index_to_level) → ตำแหน่ง % บนแถบเกจ —
+    ผกผันสูตรเดียวกับที่ใช้แปลง swab_index → ระดับ เพื่อวางป้ายให้ตรงกับโซนสีจริง"""
+    if level == 0:
+        idx = -0.025  # กึ่งกลางโซนสมดุล (-0.15..+0.10)
+    elif level > 0:
+        idx = 0.10 + (level - 1) * 0.15 + 0.075
+    else:
+        idx = -0.15 - (-level - 1) * 0.15 - 0.075
+    return _swab_gauge_marker_pct(idx)
+
+
+def _build_swab_section(swab: dict, swab_trend: str | None = None) -> list[dict]:
     """
     สร้าง Flex components แสดงความชื้นในดิน (SWAB v3)
 
@@ -551,6 +600,12 @@ def _build_swab_section(swab: dict) -> list[dict]:
     severity    = swab.get("severity", "low")
     swab_index  = swab.get("swab_index", 0.0)
     advice      = swab.get("advice", "")
+    # แถวเก่าที่บันทึกไว้ก่อนเพิ่มฟีเจอร์นี้ (ดู migrate ที่เกี่ยวข้อง) จะไม่มีคีย์นี้
+    # ใน full_data ที่เก็บไว้ — คำนวณสดจาก swab_index ด้วยสูตรเดียวกันแทน กันพัง/
+    # โชว์ "ระดับ None" กับผลวิเคราะห์เก่า (ดู gee_analysis.swab_index_to_level)
+    swab_level  = swab.get("swab_level")
+    if swab_level is None:
+        swab_level = swab_index_to_level(swab_index)
 
     bg_color   = {"high": "#FFEBEE", "medium": "#FFF3E0"}.get(severity, "#E3F2FD")
     txt_color  = {"high": "#C62828", "medium": "#E65100"}.get(severity, "#1565C0")
@@ -564,14 +619,29 @@ def _build_swab_section(swab: dict) -> list[dict]:
     }.get(status, "🟩")
 
     marker_pct = _swab_gauge_marker_pct(swab_index)
+    level_text = f"ระดับ {swab_level:+d}" if swab_level != 0 else "ระดับ 0"
+
+    # ป้ายเลขระดับลอยเหนือหมุด — ผู้ใช้ขอเปลี่ยนจาก % เป็น "ระดับ" ที่เทียบกันง่าย
+    # กว่า (0=สมดุลดี, ติดลบ=ค่อนไปทางแห้ง, บวก=ค่อนไปทางชื้น/น้ำขัง) วางแบบเดียวกับ
+    # หมุดด้านล่าง — ไม่มี transform ให้จัดกึ่งกลางเป๊ะแบบ CSS ได้ใน Flex เลยขยับซ้าย
+    # เล็กน้อยเอาตามความยาวข้อความคร่าวๆ (2-3 ตัวอักษร) แทนการจัดกึ่งกลางจริง
+    badge_offset = max(0.0, marker_pct - 10.0)
 
     gauge = {
         "type": "box", "layout": "vertical",
-        "height": "18px", "margin": "sm",
+        "height": "38px", "margin": "sm",
         "contents": [
             {
+                "type": "text", "text": level_text,
+                "position": "absolute",
+                "size": "xxs", "weight": "bold", "color": txt_color,
+                "offsetTop": "0px", "offsetStart": f"{badge_offset:.1f}%",
+            },
+            {
                 "type": "box", "layout": "horizontal",
-                "height": "6px", "cornerRadius": "3px", "margin": "sm",
+                "position": "absolute",
+                "width": "100%", "height": "6px", "cornerRadius": "3px",
+                "offsetTop": "16px",
                 "contents": [
                     {"type": "box", "layout": "vertical", "flex": w,
                      "backgroundColor": c, "contents": []}
@@ -583,9 +653,19 @@ def _build_swab_section(swab: dict) -> list[dict]:
                 "position": "absolute",
                 "width": "12px", "height": "12px", "cornerRadius": "6px",
                 "backgroundColor": "#FFFFFF", "borderWidth": "2px", "borderColor": "#333333",
-                "offsetTop": "2px", "offsetStart": f"{marker_pct:.1f}%",
+                "offsetTop": "13px", "offsetStart": f"{marker_pct:.1f}%",
                 "contents": [],
             },
+        ] + [
+            {
+                "type": "text",
+                "text": (f"+{lvl}" if lvl > 0 else str(lvl)),
+                "position": "absolute",
+                "size": "xxs", "color": "#999999",
+                "offsetTop": "27px",
+                "offsetStart": f"{max(0.0, _swab_level_tick_pct(lvl) - 4.0):.1f}%",
+            }
+            for lvl in _SWAB_MAJOR_LEVELS
         ],
     }
 
@@ -601,20 +681,13 @@ def _build_swab_section(swab: dict) -> list[dict]:
                 {"type": "text", "text": status_icon,
                  "size": "sm", "color": txt_color, "weight": "bold"},
                 gauge,
-                {
-                    "type": "box", "layout": "horizontal",
-                    "contents": [
-                        {"type": "text", "text": "แห้ง", "size": "xxs",
-                         "color": "#999999", "flex": 1},
-                        {"type": "text", "text": "ชื้นเกิน", "size": "xxs",
-                         "color": "#999999", "align": "end"},
-                    ]
-                },
                 {"type": "text", "text": status_th,
                  "size": "xs", "color": txt_color, "wrap": True, "margin": "sm"},
                 {"type": "text", "text": advice,
                  "size": "xs", "color": "#555555", "wrap": True, "margin": "sm"},
-            ]
+            ] + ([{"type": "text", "text": swab_trend, "size": "xxs",
+                   "color": "#888888", "wrap": True, "margin": "sm"}]
+                 if swab_trend else [])
         },
         {"type": "separator"},
     ]

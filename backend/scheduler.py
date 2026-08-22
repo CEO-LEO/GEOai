@@ -16,11 +16,12 @@ from database import (get_all_reports, save_analysis, get_user_plots,
                       get_notifiable_users, get_recent_analyses,
                       get_latest_plot_analysis, save_grid_snapshot,
                       get_digest_users, get_users_by_hour,
-                      delete_old_grid_snapshots)
+                      delete_old_grid_snapshots, get_swab_level_days_ago)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
-                           build_daily_digest_message, build_result_flex)
+                           build_daily_digest_message, build_result_flex,
+                           format_swab_trend)
 from plot_image_service import build_plot_grid_image_url, delete_old_plot_images
 from line_sender import send_line_message
 from weather_alert import (
@@ -203,7 +204,20 @@ async def daily_scan_job(hour: int | None = None):
                         if p["polygon"] and len(p["polygon"]) >= 3:
                             img_url = await build_plot_grid_image_url(p["polygon"], p["name"],
                                                                       plot_id=p.get("plot_id"))
-                        plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"])
+
+                        # ── แนวโน้มเทียบสัปดาห์ก่อน (เฉพาะสรุปประจำวัน ตามที่ผู้ใช้ขอ) ──
+                        # ของแถม ไม่ควรทำให้การ์ดหลักพังถ้า query พลาด (เช่นแปลงใหม่)
+                        swab_trend = None
+                        current_level = p["data"].get("swab", {}).get("swab_level")
+                        if current_level is not None and p.get("plot_id"):
+                            try:
+                                prev_level = await get_swab_level_days_ago(p["plot_id"], days_ago=7)
+                                swab_trend = format_swab_trend(current_level, prev_level)
+                            except Exception as e:
+                                logger.warning(f"swab trend lookup failed for plot {p.get('plot_id')}: {e}")
+
+                        plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"],
+                                                      swab_trend=swab_trend)
                         await send_line_message(user_id, p["message"], flex=plot_flex, image_url=img_url)
                     counters["digested"] += 1
 

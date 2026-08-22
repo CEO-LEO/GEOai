@@ -795,6 +795,55 @@ async def get_latest_plot_analysis(plot_id: int) -> dict | None:
     return resp.json()[0]
 
 
+async def get_swab_level_days_ago(plot_id: int, days_ago: int = 7) -> int | None:
+    """
+    ดึง "ระดับ" ความชื้น (swab_level, ดู gee_analysis.swab_index_to_level) ของแปลง
+    นี้จากผลวิเคราะห์ที่ใกล้เคียง days_ago วันก่อนที่สุด — ใช้เทียบแนวโน้มในการ์ด
+    สรุปประจำวัน (ผู้ใช้ขอ "บอกได้ว่าดีขึ้น/แย่ลงกี่ระดับจากสัปดาห์ก่อน")
+
+    เอาแถวล่าสุดที่เก่ากว่า (days_ago - 1) วัน (ไม่ใช่แถวที่ตรง days_ago เป๊ะ เพราะ
+    สแกนไม่ได้รันทุกวันแม่นยำเป๊ะเสมอ) — คืน None ถ้าแปลงนี้ยังไม่มีประวัติเก่าขนาดนั้น
+    (เช่น เพิ่งเพิ่มแปลงมาไม่ถึงสัปดาห์) หรือแถวนั้นไม่มี full_data (ก่อน migrate_v5)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_ago - 1)).isoformat()
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/analyses",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "plot_id":     f"eq.{plot_id}",
+                "created_at":  f"lte.{cutoff}",
+                "order":       "created_at.desc",
+                "limit":       "1",
+                "select":      "full_data",
+            },
+        )
+
+    if resp.status_code != 200 or not resp.json():
+        return None
+    full_data = resp.json()[0].get("full_data")
+    if not full_data:
+        return None
+    swab = full_data.get("swab") or {}
+    level = swab.get("swab_level")
+    if level is not None:
+        return level
+    # แถวเก่าก่อนมีคีย์นี้ — คำนวณสดจาก swab_index แทน (ไม่ import gee_analysis ที่นี่
+    # กัน database.py ผูกกับ ee/GEE โดยไม่จำเป็น — สูตรง่ายพอทำซ้ำตรงนี้ได้)
+    swab_index = swab.get("swab_index")
+    if swab_index is None:
+        return None
+    if -0.15 <= swab_index <= 0.10:
+        return 0
+    if swab_index > 0.10:
+        return min(5, 1 + int((swab_index - 0.10) // 0.15))
+    return max(-5, -1 - int((-0.15 - swab_index) // 0.15))
+
+
 # ─────────────────────────────────────────────────────────
 # Grid snapshots — เก็บผลตารางความชื้น/น้ำขังรายวันของแต่ละแปลง
 # ใช้หาจุด "ชื้นซ้ำๆ ต่อเนื่อง" → บ่งชี้แนวโน้มทางน้ำไหลใต้ผิวดิน (ดู migrate_v6.sql)

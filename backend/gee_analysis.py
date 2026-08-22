@@ -540,6 +540,38 @@ def _get_ndwi(area, start_date: str, end_date: str) -> float:
     return val
 
 
+SWAB_LEVEL_RANGE = 5  # เพดานระดับ ±5 — ดูเหตุผลการเลือกช่วงนี้ที่ swab_index_to_level()
+
+
+def swab_index_to_level(swab_index: float, level_range: int = SWAB_LEVEL_RANGE) -> int:
+    """
+    แปลง swab_index (-1..+1) → "ระดับ" จำนวนเต็ม -5..+5 (0 = สมดุลดี, ติดลบ = ค่อนไป
+    ทางแห้ง, บวก = ค่อนไปทางชื้น/น้ำขัง) — ผู้ใช้ขอเปลี่ยนจากเปอร์เซ็นต์เป็นตัวเลข
+    ระดับที่ "เทียบง่าย" กว่า (เหมือนเทอร์โมมิเตอร์ที่ทุกคนคุ้นจากพยากรณ์อากาศ)
+
+    ผูกกับขอบเขตสถานะจริงที่ _calc_swab() ใช้จำแนกอยู่แล้วด้านล่าง ไม่ใช่เลขคิดเอง:
+    โซน "สมดุลดี" (-0.15..+0.10) ทั้งช่วง = ระดับ 0 (ไม่แบ่งย่อย เพราะ "ดีอยู่แล้ว"
+    ไม่จำเป็นต้องไล่เกรด) ถัดจากนั้นนับทีละ 0.15 หน่วย (เท่ากับความกว้างจริงของโซน
+    แห้งเกิน/ชื้นเกินเดิม) เป็น 1 ระดับ
+
+    เลือกเพดาน ±5 (ไม่ใช่ ±3 หรือ ±10): ±3 แคบไป — เคสน้ำขังวิกฤตจริงที่เจอ (index
+    0.448) จะชนเพดาน "+3" ทันทีทั้งที่ยังแย่กว่านี้ได้อีก แยกความรุนแรงเคสร้ายแรงไม่
+    ออก ส่วน ±10 กว้างเกินจริง — index สูงสุดตามทฤษฎี (±1.0) แปลงได้ไม่ถึงระดับ 7
+    อยู่ดี ระดับ 8/9/10 ไม่มีทางเกิดขึ้นจริงเลย
+    """
+    # epsilon กัน float imprecision ตอนหารด้วย 0.15 (เลขที่ไม่ลงตัวเป๊ะในฐาน 2) —
+    # ไม่ใส่แล้วค่าอย่าง swab_index=-0.6 จะได้ระดับ -3 แทนที่จะเป็น -4 ที่ถูกต้อง
+    # เพราะ (-0.15 - (-0.6)) ลอยเป็น 0.44999999999999996 ไม่ใช่ 0.45 เป๊ะ
+    eps = 1e-9
+    if -0.15 <= swab_index <= 0.10:
+        level = 0
+    elif swab_index > 0.10:
+        level = 1 + int((swab_index - 0.10 + eps) / 0.15)
+    else:
+        level = -1 - int((-0.15 - swab_index + eps) / 0.15)
+    return max(-level_range, min(level_range, level))
+
+
 def _calc_swab(moisture_vv: float, bsi: float,
                elevation_diff: float, ndwi: float) -> dict:
     """
@@ -647,6 +679,7 @@ def _calc_swab(moisture_vv: float, bsi: float,
         "soil_air_pct":   soil_air_pct,
         "soil_solid_pct": solid_pct,   # วัสดุดิน — คงที่ตามเนื้อดิน ไม่ผันตามฝนแล้ว
         "swab_index":     swab_index,
+        "swab_level":     swab_index_to_level(swab_index),
         "ndwi":           round(ndwi, 3),
         "status":         status,
         "status_th":      status_th,
