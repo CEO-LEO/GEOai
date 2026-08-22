@@ -605,7 +605,10 @@ def _build_problem_points_section(problem_points: list[dict]) -> dict:
     """
     rows = []
     for i, p in enumerate(problem_points):
-        color = _PROBLEM_POINT_COLOR.get(p.get("status"), "#666666")
+        # color_hint (ถ้ามี) มาจาก gee_analysis.select_problem_points — จุดที่ไม่ใช่
+        # เปียก/แห้งสุดจริงของแปลง ใช้สีเทียบสัมพัทธ์แทนสีตาม status ตายตัว กันสี
+        # ป้ายขัดกับสีกระเบื้องในรูปแผนที่ (ดูเหตุผลเต็มที่ฟังก์ชันนั้น)
+        color = p.get("color_hint") or _PROBLEM_POINT_COLOR.get(p.get("status"), "#666666")
         rows.append({
             "type": "box", "layout": "horizontal", "spacing": "sm",
             "margin": "sm" if i > 0 else "none",

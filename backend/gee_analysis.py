@@ -964,6 +964,39 @@ _PROBLEM_STATUS_LABEL = {
     "drought":     "แล้งจัด",
 }
 
+_RELATIVE_WET_COLOR = "#1565C0"
+_RELATIVE_DRY_COLOR = "#E65100"
+
+
+def _plot_relative_normalizer(values: list[float | None]):
+    """
+    พอร์ตตรงจาก map_image.build_normalizer() / liff buildSwabNormalizer() —
+    ต้องให้ผลตรงกันเป๊ะ เพราะสีของกระเบื้องบนรูปแผนที่คำนวณจากสูตรเดียวกันนี้
+    (contrast-stretch ตามช่วงข้อมูลจริงของแปลงนั้นๆ ไม่ใช่ threshold ตายตัว)
+
+    ใช้เช็คว่าจุดหนึ่งอยู่ "ฝั่งชื้น" หรือ "ฝั่งแห้ง" เทียบกับจุดอื่นในแปลงเดียวกัน —
+    ผู้ใช้เจอเคสจริง: จุดที่จัดว่า "ชื้นเกิน" ตาม threshold ตายตัวของทั้งระบบ แต่
+    อยู่ในแปลงที่ชื้นทั้งแปลง (ค่าจริงกระจุกตัวสูง) เลยออกสีค่อนไปทางแดง/แห้งใน
+    รูป (เพราะเป็นจุดที่ "ชื้นน้อยที่สุด" ในแปลงนั้น) ขัดกับคำว่า "ชื้นเกิน" ที่เห็น
+    ในข้อความ — ฟังก์ชันนี้ทำให้คำอธิบายอ้างอิงสีเดียวกับที่ตาเห็นในรูปเสมอ
+    """
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return lambda v: 0.0
+    lo, hi = min(vals), min(0.45, max(vals))
+    MIN_RANGE = 0.12
+    if hi - lo < MIN_RANGE:
+        mid = (hi + lo) / 2
+        lo, hi = mid - MIN_RANGE / 2, mid + MIN_RANGE / 2
+
+    def normalize(v):
+        if v is None:
+            return 0.0
+        t = (v - lo) / (hi - lo)
+        t = max(0.0, min(1.0, t))
+        return -0.45 + t * 0.9
+    return normalize
+
 
 def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]:
     """
@@ -975,7 +1008,15 @@ def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]
     ปัญหาถ้าแปลงมีทั้งคู่) แล้วเติมที่เหลือด้วยจุดที่รุนแรงรองลงมา (เรียงตาม
     |swab_index| ห่างจากศูนย์/สมดุล) จนครบ max_points
 
-    คืน list ของ dict {"grid_label","position_desc","status","label_th","swab_index"}
+    ป้ายข้อความ: จุดเปียก/แห้งสุดจริงในแปลงใช้สถานะจริง (status_th thresholds)
+    ได้เสมอ เพราะเป็นจุดที่ swab_index สูงสุด/ต่ำสุด → รับประกันว่าเป็นสีเข้มสุด
+    ของฝั่งนั้นบนรูปด้วยเสมอ (ไม่มีทางขัดกัน) — จุดเสริมอื่นๆ (ไม่ใช่จุดสุดขั้ว)
+    ใช้คำเทียบเชิงสัมพัทธ์แทน ("ชื้น/แห้งกว่าจุดอื่นในแปลงนี้") ไม่ใช้ threshold
+    ตายตัว กันขัดกับสีที่ยืดสเกลตามข้อมูลจริงของแปลงนั้น (ดู _plot_relative_normalizer)
+
+    คืน list ของ dict {"grid_label","position_desc","status","label_th",
+    "swab_index","lat","lng","color_hint"} — color_hint เป็น None สำหรับจุด
+    สุดขั้ว (ให้ผู้เรียกใช้สีตาม status จริงได้เลย) หรือสีเทียบสัมพัทธ์สำหรับจุดเสริม
     """
     problem = [p for p in points if p.get("status") not in (None, "optimal")
               and p.get("grid_label")]
@@ -1002,18 +1043,30 @@ def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]
             selected.append(p)
             seen_labels.add(p["grid_label"])
 
-    return [
-        {
+    normalize = _plot_relative_normalizer([p.get("swab_index") for p in points])
+
+    result = []
+    for p in selected[:max_points]:
+        if p is wettest or p is driest:
+            label_th   = _PROBLEM_STATUS_LABEL.get(p.get("status"), p.get("status_th", "—"))
+            color_hint = None
+        else:
+            rel = normalize(p.get("swab_index"))
+            if rel >= 0:
+                label_th, color_hint = "ชื้นกว่าจุดอื่นในแปลงนี้", _RELATIVE_WET_COLOR
+            else:
+                label_th, color_hint = "แห้งกว่าจุดอื่นในแปลงนี้", _RELATIVE_DRY_COLOR
+        result.append({
             "grid_label":    p["grid_label"],
             "position_desc": p["position_desc"],
             "status":        p.get("status"),
-            "label_th":      _PROBLEM_STATUS_LABEL.get(p.get("status"), p.get("status_th", "—")),
+            "label_th":      label_th,
             "swab_index":    p.get("swab_index"),
             "lat":           p.get("lat"),
             "lng":           p.get("lng"),
-        }
-        for p in selected[:max_points]
-    ]
+            "color_hint":    color_hint,
+        })
+    return result
 
 
 THUMBNAIL_BUFFER_M    = 25    # ขอบเผื่อรอบแปลงในภาพ (เมตร) กันขอบแปลงชิดขอบภาพเกินไป
