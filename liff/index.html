@@ -75,10 +75,21 @@
     .plot-card:active { transform: scale(.985); }
     .plot-icon { font-size: 30px; flex-shrink: 0; width:46px; height:46px; display:grid; place-items:center;
       background:#eaf7ee; border-radius:13px; }
+    /* รูปย่อดาวเทียมของแปลง (ถ้ามี — ดู thumbnail_url) แทน .plot-icon เดิม ช่วยแยก
+       แปลงที่หน้าตาคล้ายกันในลิสต์ออกจากกันง่ายขึ้น (ผู้ใช้ขอ) ล้อขนาด .plot-icon
+       เป๊ะๆ ไม่ให้เลย์เอาต์กระโดดตอนสลับระหว่างแปลงที่มี/ไม่มีรูป */
+    .plot-thumb { flex-shrink:0; width:46px; height:46px; border-radius:13px;
+      object-fit:cover; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); background:#eaf7ee; }
+    /* แปลงที่ยังไม่มีรูปย่อ (ยังไม่เคยวาดขอบเขต/วิเคราะห์) — เลขลำดับแทนไอคอนต้นไม้
+       เดิมทุกการ์ดหน้าตาเหมือนกันหมด อย่างน้อยจำ "เลข" ได้ง่ายกว่า */
+    .plot-badge-num { flex-shrink:0; width:46px; height:46px; border-radius:13px;
+      display:grid; place-items:center; font-weight:700; font-size:18px; color:#fff;
+      background: linear-gradient(135deg, var(--green2), var(--green)); }
     .plot-info { flex: 1; min-width:0; }
     .plot-name { font-weight: 700; font-size: 15px; color: var(--ink); }
     .plot-coords { font-size: 11.5px; color: var(--soft); margin-top: 3px; }
     .plot-area { font-size: 11.5px; color: var(--green); font-weight:600; margin-top: 2px; }
+    .plot-created { font-size: 11.5px; color: var(--soft); margin-top: 2px; }
     .plot-check-btn {
       background: var(--line-green); color: white; border: none;
       padding: 9px 15px; border-radius: 11px; font-size: 13.5px;
@@ -567,6 +578,21 @@
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
   });
 
+  // แสดงวันที่สร้างแปลงแบบอ่านง่าย (ให้ทั้งการ์ดที่มีรูปย่อ/ไม่มี ยังแยกแปลงได้จาก
+  // ข้อมูลนี้ด้วย) — created_at มาจาก Supabase อยู่แล้ว (select "*") ไม่ต้องเรียกเพิ่ม
+  function formatPlotCreated(createdAt) {
+    if (!createdAt) return "";
+    const d = new Date(createdAt);
+    if (isNaN(d)) return "";
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    let text;
+    if (days <= 0) text = "วันนี้";
+    else if (days === 1) text = "เมื่อวาน";
+    else if (days < 30) text = `${days} วันก่อน`;
+    else text = d.toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" });
+    return `<div class="plot-created">🕐 สร้างเมื่อ ${text}</div>`;
+  }
+
   // ─── Load user plots ──────────────────────────────
   async function loadUserPlots() {
     try {
@@ -590,15 +616,20 @@
     }
     noPlot.style.display = "none";
 
-    userPlots.forEach(plot => {
+    userPlots.forEach((plot, idx) => {
       const card = document.createElement("div");
       card.className = "plot-card";
+      const thumbHtml = plot.thumbnail_url
+        ? `<img class="plot-thumb" src="${escHtml(plot.thumbnail_url)}" alt="" loading="lazy"
+             onerror="this.outerHTML='<div class=&quot;plot-badge-num&quot;>${idx + 1}</div>'">`
+        : `<div class="plot-badge-num">${idx + 1}</div>`;
       card.innerHTML = `
-        <div class="plot-icon">🌳</div>
+        ${thumbHtml}
         <div class="plot-info">
           <div class="plot-name">${escHtml(plot.name || "แปลงที่ไม่มีชื่อ")}</div>
           <div class="plot-coords">📍 ${plot.lat.toFixed(4)}, ${plot.lng.toFixed(4)}</div>
           ${plot.area_rai ? `<div class="plot-area">📐 ${plot.area_rai} ไร่</div>` : ""}
+          ${formatPlotCreated(plot.created_at)}
         </div>
         <div class="plot-btn-col">
           <button class="plot-check-btn" data-lat="${plot.lat}" data-lng="${plot.lng}"

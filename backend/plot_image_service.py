@@ -10,6 +10,7 @@ scheduler.py อยู่แล้ว (create_scheduler/daily_scan_job/rain_aler
 
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -17,18 +18,19 @@ import httpx
 from fastapi.concurrency import run_in_threadpool
 
 import gee_analysis
-from database import SUPABASE_URL, SUPABASE_KEY
+from database import SUPABASE_URL, SUPABASE_KEY, set_plot_thumbnail
 
 logger = logging.getLogger(__name__)
 
 # Pillow เป็น dependency ใหม่ (สำหรับฟีเจอร์ส่งรูปแผนที่เข้า LINE) — กัน import พัง
 # แล้วดึงทั้งแอปตายไปด้วย ถ้าพัง ฟีเจอร์นี้แค่ปิดตัวเอง (คืน None) ส่วนอื่นทำงานต่อได้ปกติ
 try:
-    from map_image import render_plot_grid_image
+    from map_image import render_plot_grid_image, make_list_thumbnail
     _MAP_IMAGE_AVAILABLE = True
 except Exception as _map_image_err:
     logger.warning(f"map_image unavailable — image feature disabled: {_map_image_err}")
     render_plot_grid_image = None
+    make_list_thumbnail = None
     _MAP_IMAGE_AVAILABLE = False
 
 # ── ที่เก็บภาพ ──────────────────────────────────────────────────────────
@@ -41,34 +43,54 @@ except Exception as _map_image_err:
 # เปลี่ยนมาอัปโหลดขึ้น Supabase Storage แทน (bucket "plot-images", public) — URL
 # คงอยู่ถาวรไม่ผูกกับ process/instance ที่สร้างมันขึ้นมาอีกต่อไป
 _STORAGE_BUCKET = "plot-images"
+# โฟลเดอร์รูปย่อ (thumbnail) ต่อแปลง — คนละชุดกับรูปแผนที่ที่ push เข้า LINE
+# (โฟลเดอร์ YYYY-MM-DD, สุ่มชื่อไฟล์ทุกครั้ง) รูปย่อนี้เขียนทับที่ path เดิมเสมอ
+# (thumbnails/{plot_id}.png, upsert) เพราะเป็นรูปตัวแทนถาวรของแปลง ไม่ใช่ของที่
+# ส่งครั้งเดียวแล้วทิ้ง — ต้อง "ไม่" โดน delete_old_plot_images กวาดทิ้งเหมือนกัน
+_THUMB_PREFIX = "thumbnails"
+_DATE_FOLDER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-async def upload_plot_image(png_bytes: bytes) -> str | None:
-    """อัปโหลดภาพขึ้น Supabase Storage คืน public URL หรือ None ถ้าล้มเหลว"""
+async def _upload_bytes(path: str, png_bytes: bytes, upsert: bool = False) -> bool:
     if not SUPABASE_URL or not SUPABASE_KEY:
         logger.warning("Supabase not configured — cannot upload plot image")
-        return None
-    # แยกโฟลเดอร์ตามวัน (YYYY-MM-DD) ตั้งแต่ตอนอัปโหลด เพื่อให้ลบของเก่าเป็นชุดตาม
-    # วันได้ง่ายทีหลัง (ดู delete_old_plot_images) ไม่ต้อง list ทีละไฟล์เป็นพัน
-    path = f"{datetime.now(timezone.utc):%Y-%m-%d}/{uuid.uuid4().hex}.png"
+        return False
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_KEY,
+        "Content-Type": "image/png",
+    }
+    if upsert:
+        headers["x-upsert"] = "true"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 f"{SUPABASE_URL}/storage/v1/object/{_STORAGE_BUCKET}/{path}",
-                headers={
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "apikey": SUPABASE_KEY,
-                    "Content-Type": "image/png",
-                },
-                content=png_bytes,
+                headers=headers, content=png_bytes,
             )
         if resp.status_code not in (200, 201):
-            logger.warning(f"Plot image upload failed: {resp.status_code} — {resp.text}")
-            return None
-        return f"{SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}"
+            logger.warning(f"Plot image upload failed ({path}): {resp.status_code} — {resp.text}")
+            return False
+        return True
     except Exception as e:
-        logger.warning(f"Plot image upload error: {e}")
-        return None
+        logger.warning(f"Plot image upload error ({path}): {e}")
+        return False
+
+
+async def upload_plot_image(png_bytes: bytes) -> str | None:
+    """อัปโหลดภาพขึ้น Supabase Storage คืน public URL หรือ None ถ้าล้มเหลว"""
+    # แยกโฟลเดอร์ตามวัน (YYYY-MM-DD) ตั้งแต่ตอนอัปโหลด เพื่อให้ลบของเก่าเป็นชุดตาม
+    # วันได้ง่ายทีหลัง (ดู delete_old_plot_images) ไม่ต้อง list ทีละไฟล์เป็นพัน
+    path = f"{datetime.now(timezone.utc):%Y-%m-%d}/{uuid.uuid4().hex}.png"
+    ok = await _upload_bytes(path, png_bytes)
+    return f"{SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}" if ok else None
+
+
+async def _upload_plot_thumbnail(plot_id: int, thumb_bytes: bytes) -> str | None:
+    """อัปโหลดรูปย่อของแปลงที่ path คงที่ (เขียนทับรูปเก่าของแปลงเดิมเสมอ)"""
+    path = f"{_THUMB_PREFIX}/{plot_id}.png"
+    ok = await _upload_bytes(path, thumb_bytes, upsert=True)
+    return f"{SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}" if ok else None
 
 
 async def delete_old_plot_images(older_than_days: int = 7) -> bool:
@@ -95,8 +117,12 @@ async def delete_old_plot_images(older_than_days: int = 7) -> bool:
                 logger.warning(f"Plot image list failed: {resp.status_code} — {resp.text}")
                 return False
             # โฟลเดอร์ (prefix เสมือน) มี id เป็น null เสมอตาม Supabase Storage list API
+            # เช็ครูปแบบ YYYY-MM-DD ด้วย ไม่ใช่แค่เทียบ string เฉยๆ — กันโฟลเดอร์อื่น
+            # (เช่น "thumbnails/" ของรูปย่อถาวรต่อแปลง) หลุดเข้ามาโดนลบผิดพลาด
             old_folders = [item["name"] for item in resp.json()
-                          if item.get("id") is None and item["name"] < cutoff]
+                          if item.get("id") is None
+                          and _DATE_FOLDER_RE.match(item["name"])
+                          and item["name"] < cutoff]
             for folder in old_folders:
                 list_resp = await client.post(
                     f"{SUPABASE_URL}/storage/v1/object/list/{_STORAGE_BUCKET}",
@@ -116,12 +142,18 @@ async def delete_old_plot_images(older_than_days: int = 7) -> bool:
         return False
 
 
-async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str = "") -> str | None:
+async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str = "",
+                                    plot_id: int | None = None) -> str | None:
     """
     สร้างภาพแผนที่ความชื้นสำหรับส่งเข้า LINE คู่กับผลวิเคราะห์ — คืน URL รูปภาพ
     หรือ None ถ้าล้มเหลว (แค่ "ของแถม" ไม่ควรทำให้คำขอหลักพังตาม — ใช้ที่เดียวกัน
     ทั้ง /analyze และ daily_scan_job)
     ยิง GEE 2 ครั้งพร้อมกัน (grid + ภาพถ่ายดาวเทียม) ผ่าน threadpool ลด wall-time
+
+    plot_id (ถ้ามี): ถือโอกาสครอปรูปถ่ายดาวเทียมที่ดึงมาแล้ว (ไม่เรียก GEE เพิ่ม)
+    เป็นรูปย่อสี่เหลี่ยมเล็กๆ อัปโหลดเก็บถาวรแยกต่างหาก แล้วบันทึกลง plots.thumbnail_url
+    — ใช้แสดงในหน้า "แปลงของฉัน" (LIFF) ให้แยกแต่ละแปลงออกจากกันง่ายขึ้น (ผู้ใช้ขอ)
+    ล้มเหลวได้โดยไม่กระทบรูปแผนที่หลักที่ส่งเข้า LINE (แยก try/except ต่างหาก)
     """
     if not _MAP_IMAGE_AVAILABLE:
         return None
@@ -137,7 +169,17 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
         url = await upload_plot_image(composed)
         if url:
             logger.info(f"Plot grid image ready: {url}")
-        return url
     except Exception as e:
         logger.warning(f"Plot grid image generation failed ({type(e).__name__}, non-fatal, skipping): {e}")
         return None
+
+    if plot_id is not None:
+        try:
+            thumb_bytes = await run_in_threadpool(make_list_thumbnail, png_bytes)
+            thumb_url = await _upload_plot_thumbnail(plot_id, thumb_bytes)
+            if thumb_url:
+                await set_plot_thumbnail(plot_id, thumb_url)
+        except Exception as e:
+            logger.warning(f"Plot list thumbnail failed (non-fatal, plot {plot_id}): {e}")
+
+    return url

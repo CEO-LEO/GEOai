@@ -295,17 +295,20 @@ async def analyze(req: AnalysisRequest):
         message  = format_message(data, req.lat, req.lng)
         flex     = build_result_flex(data, req.lat, req.lng, message)
 
-        # แปลงที่วาดขอบเขตไว้ (polygon) เท่านั้นถึงจะมีตารางความชื้นให้ทำภาพ —
-        # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
-        image_url = None
-        if req.polygon and len(req.polygon) >= 3:
-            image_url = await build_plot_grid_image_url(req.polygon, req.plot_name)
-
-        # บันทึก user (upsert) + แปลง + ผลวิเคราะห์
+        # บันทึก user (upsert) + แปลง ก่อน — ต้องรู้ plot_id ก่อนถึงจะฝากให้
+        # build_plot_grid_image_url() เก็บรูปย่อของแปลงนี้ถาวรได้ (ดูเหตุผลเต็มที่
+        # plot_image_service.py) สลับลำดับมาก่อนขั้นตอนสร้างรูปด้านล่าง
         await upsert_user(req.user_id, req.display_name)
         plot_id = await save_plot(req.user_id, req.lat, req.lng,
                                   req.plot_name, req.area_rai,
                                   polygon=req.polygon)
+
+        # แปลงที่วาดขอบเขตไว้ (polygon) เท่านั้นถึงจะมีตารางความชื้นให้ทำภาพ —
+        # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
+        image_url = None
+        if req.polygon and len(req.polygon) >= 3:
+            image_url = await build_plot_grid_image_url(req.polygon, req.plot_name, plot_id=plot_id)
+
         await send_line_message(req.user_id, message, flex=flex, image_url=image_url)
         await save_analysis(req.user_id, data, message, plot_id=plot_id)
         return {"status": "ok", "plot_id": plot_id, "data": data}

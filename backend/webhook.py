@@ -204,7 +204,8 @@ async def _handle_postback(event: dict):
             from line_sender import send_line_message
 
             image_urls = await asyncio.gather(*[
-                build_plot_grid_image_url(p["polygon"], p.get("name") or "แปลงของคุณ")
+                build_plot_grid_image_url(p["polygon"], p.get("name") or "แปลงของคุณ",
+                                          plot_id=p.get("id"))
                 for p in plots_with_polygon
             ], return_exceptions=True)
 

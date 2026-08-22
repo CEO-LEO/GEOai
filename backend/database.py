@@ -433,6 +433,28 @@ async def save_plot(user_id: str, lat: float, lng: float,
     return None
 
 
+async def set_plot_thumbnail(plot_id: int, url: str) -> bool:
+    """
+    บันทึก URL รูปย่อดาวเทียมของแปลง (ดู make_list_thumbnail ใน map_image.py) —
+    เรียกจาก plot_image_service.py หลังอัปโหลดรูปย่อขึ้น Supabase Storage แล้ว
+    เพื่อให้หน้า "แปลงของฉัน" (get_user_plots คืนมาพร้อม select "*" อยู่แล้ว) ใช้
+    รูปนี้แยกความแตกต่างระหว่างแปลงในลิสต์ได้ โดยไม่ต้องรอ user เปิดแปลงนั้นก่อน
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/plots",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            params={"id": f"eq.{plot_id}"},
+            json={"thumbnail_url": url},
+        )
+    if resp.status_code not in (200, 204):
+        logger.error(f"Supabase set_plot_thumbnail failed: {resp.status_code} — {resp.text}")
+        return False
+    return True
+
+
 async def get_user_plots(user_id: str) -> list[dict]:
     """ดึงแปลงทั้งหมดของ user"""
     if not SUPABASE_URL or not SUPABASE_KEY:

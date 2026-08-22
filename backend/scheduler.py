@@ -149,6 +149,7 @@ async def daily_scan_job(hour: int | None = None):
                         "lng": lng,
                         "message": message,
                         "polygon": polygon,
+                        "plot_id": plot_id,
                     })
 
                     # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ──
@@ -200,7 +201,8 @@ async def daily_scan_job(hour: int | None = None):
                     for p in plot_summaries:
                         img_url = None
                         if p["polygon"] and len(p["polygon"]) >= 3:
-                            img_url = await build_plot_grid_image_url(p["polygon"], p["name"])
+                            img_url = await build_plot_grid_image_url(p["polygon"], p["name"],
+                                                                      plot_id=p.get("plot_id"))
                         plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"])
                         await send_line_message(user_id, p["message"], flex=plot_flex, image_url=img_url)
                     counters["digested"] += 1

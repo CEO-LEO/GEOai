@@ -392,3 +392,23 @@ def render_plot_grid_image(
     buf = io.BytesIO()
     canvas.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+def make_list_thumbnail(satellite_png: bytes, size: int = 160) -> bytes:
+    """
+    ครอปภาพถ่ายดาวเทียมจริง (ตัวเดียวกับที่ render_plot_grid_image ใช้เป็นพื้นหลัง
+    — ไม่เรียก GEE เพิ่ม) ให้เป็นสี่เหลี่ยมจัตุรัสเล็กๆ สำหรับใช้เป็นรูปย่อของแปลงใน
+    หน้า "แปลงของฉัน" (ผู้ใช้ขอ "ใส่รูป map บอกขนาด/ตำแหน่งแปลง" ช่วยแยกแปลงที่หน้า
+    ตาคล้ายกันในลิสต์) — ครอปกึ่งกลางเป็นจัตุรัส (ภาพต้นทางเป็นสี่เหลี่ยมผืนผ้าตาม
+    bounds จริงของแปลง) แล้วย่อลงเหลือ size×size พิกเซล เก็บเป็นไฟล์เล็กพอส่งเร็ว
+    """
+    img = Image.open(io.BytesIO(satellite_png)).convert("RGB")
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top  = (h - side) // 2
+    img  = img.crop((left, top, left + side, top + side)).resize((size, size), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
