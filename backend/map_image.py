@@ -238,6 +238,7 @@ def render_plot_grid_image(
     polygon: list[list[float]],
     spacing_m: float = 10,
     plot_name: str = "",
+    problem_points: list[dict] | None = None,
 ) -> bytes:
     """
     วาดจุดความชื้น (สีตามกลุ่มสถานะ 5 กลุ่ม สอดคล้อง status_th ที่ backend
@@ -249,6 +250,11 @@ def render_plot_grid_image(
     get_plot_satellite_thumbnail) — ใช้แปลง lat/lng ของแต่ละจุด → พิกเซล
     (แปลงแบบเชิงเส้นตรงๆ พอสำหรับพื้นที่เล็กระดับแปลงเกษตร ไม่ต้องคิดโค้งโลก)
     polygon เป็น [[lng,lat], ...] ตาม convention เดียวกับที่ endpoint อื่นใช้ทั้งระบบ
+
+    problem_points (ถ้ามี): ผลจาก gee_analysis.select_problem_points() — ผู้ใช้ขอ
+    "แสดงจุดที่พบปัญหาในรูปแผนที่เลยได้มั้ย" (เดิมมีแค่ป้ายกริดอ้างอิงที่ขอบรูป
+    ต้องนับช่องเทียบเอง) วาดวงกลมขาวขอบดำ + ป้ายกริดเดียวกับที่อยู่ในข้อความ ตรง
+    ตำแหน่งจริงบนรูปเลย ไม่ต้องนับ
     """
     sat_img = Image.open(io.BytesIO(satellite_png_bytes)).convert("RGBA")
     w, h = sat_img.size
@@ -336,6 +342,26 @@ def render_plot_grid_image(
         poly_px = [to_px(lat, lng) for lng, lat in polygon]
         draw.line(poly_px + [poly_px[0]], fill=(255, 255, 255, 255), width=max(2, int(w / 200)))
 
+    # ── จุดที่พบปัญหา (วงกลมขาวขอบดำ + ป้ายกริดเดียวกับในข้อความ) ── ผู้ใช้ขอให้
+    # ชี้ตำแหน่งตรงบนรูปเลย ไม่ต้องนับช่องกริดเทียบเอง — สีขาว/ดำ ไม่ชนกับสีสถานะ
+    # ทั้ง 5 สีหรือสีม่วงของจุดรวมน้ำ (sink point) เลย แยกออกจากกันชัดเจน
+    if problem_points:
+        marker_r_px = max(11.0, tile_half_px * 1.7)
+        f_pp = _font("Kanit-Bold.ttf", max(12, int(w / 40)))
+        for pp in problem_points:
+            p_lat, p_lng = pp.get("lat"), pp.get("lng")
+            if p_lat is None or p_lng is None:
+                continue
+            x, y = to_px(p_lat, p_lng)
+            draw.ellipse(
+                [x - marker_r_px, y - marker_r_px, x + marker_r_px, y + marker_r_px],
+                fill=(255, 255, 255, 235), outline=(20, 20, 20, 255), width=3,
+            )
+            text = pp.get("grid_label") or "?"
+            tb = draw.textbbox((0, 0), text, font=f_pp)
+            tw, th = tb[2] - tb[0], tb[3] - tb[1]
+            draw.text((x - tw / 2 - tb[0], y - th / 2 - tb[1]), text, font=f_pp, fill=(20, 20, 20, 255))
+
     # ── ป้ายกริดอ้างอิง (A1, B2, ...) ── ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้" ใน
     # การ์ดไลน์ (ดู flex_messages._build_problem_points_section) — ป้ายชุดนี้ต้อง
     # ตรงกับที่การ์ดอ้างถึงเป๊ะ ถึงจะเทียบรูปกับข้อความได้จริง ใช้ bounding box ของ
@@ -391,7 +417,9 @@ def render_plot_grid_image(
     # เกิดปัญหา" ในการ์ด ป้ายในรูปนี้คือกุญแจอ่านการ์ดนั้น ต้องมีคำอธิบายกำกับเสมอ)
     show_flow_note = has_flow_arrows or sink_count > 0
     has_grid_ref = bool(polygon and len(polygon) >= 3)
-    bottom_h = 78 + (22 if show_flow_note else 0) + (22 if has_grid_ref else 0)
+    has_problem_markers = bool(problem_points)
+    ref_note_lines = (1 if has_grid_ref else 0) + (1 if has_problem_markers else 0)
+    bottom_h = 78 + (22 if show_flow_note else 0) + 22 * ref_note_lines
     canvas = Image.new("RGB", (w, top_h + h + bottom_h), (255, 255, 255))
     cdraw = ImageDraw.Draw(canvas)
 
@@ -465,12 +493,21 @@ def render_plot_grid_image(
             cdraw.text((x_cursor, note_y), text, font=f_note, fill=(102, 102, 102))
         note_y += 22
 
-    # บรรทัดอธิบายป้ายกริดอ้างอิง — คู่กับ "จุดที่พบปัญหาในแปลง" ในการ์ดไลน์ (ป้าย
-    # ตัวอักษร+เลขต้องตรงกันเป๊ะระหว่างรูปนี้กับข้อความในการ์ด ดู _grid_reference_dims)
+    # บรรทัดอธิบายวงกลมจุดปัญหา + ป้ายกริดอ้างอิง — คู่กับ "จุดที่พบปัญหาในแปลง" ใน
+    # การ์ดไลน์ (ป้ายตัวอักษร+เลขต้องตรงกันเป๊ะระหว่างรูปนี้กับข้อความในการ์ด) แยก
+    # คนละบรรทัดกันข้อความยาวเกินจนล้นขอบรูป (ไม่มี auto-wrap ให้ใน PIL)
+    # หมายเหตุ: ห้ามใช้อีโมจิในข้อความพวกนี้ — ฟอนต์ Kanit ไม่มี glyph อีโมจิ
+    # (ขึ้นเป็นกล่องว่าง ดูคอมเมนต์บนสุดของไฟล์)
+    if has_problem_markers:
+        dot_r = 6
+        dot_cy = note_y + 8
+        cdraw.ellipse([pad, dot_cy - dot_r, pad + dot_r * 2, dot_cy + dot_r],
+                     fill=(255, 255, 255), outline=(20, 20, 20), width=2)
+        cdraw.text((pad + dot_r * 2 + 6, note_y), "วงกลม = จุดที่พบปัญหา (รายละเอียดในข้อความ)",
+                   font=f_note, fill=(102, 102, 102))
+        note_y += 22
     if has_grid_ref:
-        # หมายเหตุ: ห้ามใช้อีโมจิในข้อความนี้ — ฟอนต์ Kanit ไม่มี glyph อีโมจิ
-        # (ขึ้นเป็นกล่องว่าง ดูคอมเมนต์บนสุดของไฟล์)
-        cdraw.text((pad, note_y), "ตัวอักษร+เลข = ตำแหน่งอ้างอิง (ดูจุดที่พบปัญหาในข้อความ)",
+        cdraw.text((pad, note_y), "ตัวอักษร+เลข = ตำแหน่งอ้างอิง",
                    font=f_note, fill=(102, 102, 102))
 
     buf = io.BytesIO()

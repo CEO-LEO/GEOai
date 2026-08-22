@@ -1009,6 +1009,8 @@ def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]
             "status":        p.get("status"),
             "label_th":      _PROBLEM_STATUS_LABEL.get(p.get("status"), p.get("status_th", "—")),
             "swab_index":    p.get("swab_index"),
+            "lat":           p.get("lat"),
+            "lng":           p.get("lng"),
         }
         for p in selected[:max_points]
     ]

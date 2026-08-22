@@ -170,8 +170,20 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
             run_in_threadpool(gee_analysis.get_plot_satellite_thumbnail, polygon),
         )
         png_bytes, bounds = thumbnail
+
+        # ต้องหา problem_points ก่อนวาดรูป (ไม่ใช่หลัง) เพราะผู้ใช้ขอให้วงกลมจุด
+        # ปัญหาปรากฏ "บนรูป" ด้วยเลย ไม่ใช่แค่ในข้อความ — ล้มเหลวได้โดยไม่กระทบรูป
+        # หลัก (แค่จะไม่มีวงกลม/ป้ายจุดปัญหาบนรูป ยังมีป้ายกริดอ้างอิงข้างขอบอยู่)
+        problem_points = []
+        try:
+            gee_analysis.assign_grid_reference(grid_points, polygon)
+            problem_points = gee_analysis.select_problem_points(grid_points)
+        except Exception as e:
+            logger.warning(f"Problem-point selection failed (non-fatal): {e}")
+
         composed = await run_in_threadpool(
-            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, 10, plot_name
+            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, 10, plot_name,
+            problem_points,
         )
         url = await upload_plot_image(composed)
         if url:
@@ -179,13 +191,6 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
     except Exception as e:
         logger.warning(f"Plot grid image generation failed ({type(e).__name__}, non-fatal, skipping): {e}")
         return empty
-
-    problem_points = []
-    try:
-        gee_analysis.assign_grid_reference(grid_points, polygon)
-        problem_points = gee_analysis.select_problem_points(grid_points)
-    except Exception as e:
-        logger.warning(f"Problem-point selection failed (non-fatal): {e}")
 
     if plot_id is not None:
         try:
