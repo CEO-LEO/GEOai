@@ -43,7 +43,7 @@ except Exception as _ml_model_err:
 from rule_engine import format_message, compute_risk_level
 from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
-from plot_image_service import build_plot_grid_image_url, get_cached_plot_image
+from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
@@ -282,18 +282,10 @@ async def liff_config():
 
 # ─────────────────────────────────────────────────────────
 # Plot grid image — สำหรับส่งภาพแผนที่ความชื้นเข้า LINE OA คู่กับผลวิเคราะห์
-# (ตัวสร้าง+แคชย้ายไป plot_image_service.py แล้ว — daily_scan_job ใน scheduler.py
-# ต้องเรียกใช้ด้วย ดูเหตุผลเต็มที่ไฟล์นั้น) — เหลือแค่ endpoint เสิร์ฟภาพไว้ที่นี่
-# เพราะต้องเป็น FastAPI route
+# (สร้าง + อัปโหลดขึ้น Supabase Storage อยู่ใน plot_image_service.py ทั้งหมดแล้ว —
+# ไม่มี endpoint เสิร์ฟภาพของแอปเองอีกต่อไป เพราะ URL ที่ได้เป็น public URL ของ
+# Supabase Storage ตรงๆ ดูเหตุผลที่เลิกใช้แคชในแรมของโปรเซสเองที่ไฟล์นั้น)
 # ─────────────────────────────────────────────────────────
-@app.get("/plot-image/{token}.png")
-async def plot_image(token: str):
-    """เสิร์ฟภาพแผนที่ความชื้นที่ compose ไว้ชั่วคราว — LINE server ดึง URL นี้เอง"""
-    png_bytes = get_cached_plot_image(token)
-    if png_bytes is None:
-        raise HTTPException(status_code=404, detail="ไม่พบภาพ หรือหมดอายุแล้ว")
-    return Response(content=png_bytes, media_type="image/png")
-
 
 @app.post("/analyze")
 async def analyze(req: AnalysisRequest):

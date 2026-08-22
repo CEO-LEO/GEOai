@@ -21,7 +21,7 @@ from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
                            build_daily_digest_message, build_result_flex)
-from plot_image_service import build_plot_grid_image_url
+from plot_image_service import build_plot_grid_image_url, delete_old_plot_images
 from line_sender import send_line_message
 from weather_alert import (
     get_7day_rain,
@@ -97,6 +97,10 @@ async def daily_scan_job(hour: int | None = None):
         await delete_old_grid_snapshots()
     except Exception as e:
         logger.warning(f"grid_snapshots cleanup failed (non-fatal): {e}")
+    try:
+        await delete_old_plot_images()
+    except Exception as e:
+        logger.warning(f"plot_images cleanup failed (non-fatal): {e}")
 
     # ดึง unique users จาก reports
     all_reports = await get_all_reports(limit=1000)

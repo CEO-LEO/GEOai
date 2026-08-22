@@ -35,7 +35,8 @@ async def send_line_message(
     image_url (ถ้ามี) จะถูกส่งเป็นข้อความรูปภาพ "เพิ่มเติม" ต่อจากการ์ด/ข้อความหลัก
     ในการ push ครั้งเดียวกัน (LINE รับ messages หลายชิ้นต่อ 1 การเรียก API ได้ ขึ้น
     เป็นบับเบิลแยกกันในแชทตามลำดับ) ต้องเป็น URL https ที่ LINE server เข้าถึงได้เอง
-    โดยไม่ต้องใช้ auth (ดู /plot-image/{token}.png ใน main.py)
+    โดยไม่ต้องใช้ auth (ดู upload_plot_image ใน plot_image_service.py — อัปโหลด
+    ขึ้น Supabase Storage แล้วคืน public URL ตรงนั้น)
     """
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
