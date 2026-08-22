@@ -56,6 +56,15 @@ def _is_high_risk(data: dict) -> bool:
 ESCALATION_DAYS = 2  # แจ้งเตือนฉุกเฉินถ้าเสี่ยงสูงติดต่อกัน ≥ n วัน (scan รายวัน)
 GRID_SNAPSHOT_TIMEOUT_S = 45  # กันจุดชื้นสะสม (grid snapshot) ค้างนานเกินไปต่อแปลง
 
+# เดิมวนทีละ user ทีละแปลงล้วนๆ (sequential) — ผู้ใช้หลักสิบคน x หลายแปลง x GEE call
+# ที่ใช้เวลาหลายวินาที/ครั้ง รวมกันแล้วงานสแกนรายวันอาจกินเวลานานหลายนาทีจนเสี่ยง
+# ทับเวลาที่ trigger รอบถัดไปมาถึง — คุมด้วย Semaphore ให้ประมวลผลหลาย user พร้อมกัน
+# ได้สูงสุด GEE_CONCURRENCY คน ณ ขณะหนึ่ง (ยังไม่รู้โควตาจริงของ GEE service account
+# ที่โปรเจกต์นี้ใช้ — ผู้ใช้ต้องเช็คเองใน Google Cloud Console — เลยเลือกค่าระมัดระวัง
+# ไว้ก่อน ปรับขึ้นได้ภายหลังถ้าเห็นว่าปลอดภัยจริง) แต่ละ user ยังประมวลผลแปลงของ
+# ตัวเองทีละแปลงเหมือนเดิม (ไม่ทวีคูณ concurrency อีกชั้น เพราะส่วนใหญ่มี 1-2 แปลง)
+GEE_CONCURRENCY = 5
+
 
 def _count_consecutive_high_risk(analyses: list[dict]) -> int:
     """นับจำนวนผลวิเคราะห์ล่าสุดที่เสี่ยงสูงติดต่อกัน"""
@@ -102,104 +111,108 @@ async def daily_scan_job(hour: int | None = None):
 
     notifiable   = await get_notifiable_users()
     digest_users = await get_digest_users()
-    total_plots  = 0
-    alerted      = 0
-    escalated    = 0
-    digested     = 0
+    counters = {"total_plots": 0, "alerted": 0, "escalated": 0, "digested": 0}
+    semaphore = asyncio.Semaphore(GEE_CONCURRENCY)
 
-    for user_id in seen_users:
-        try:
-            plots = await get_user_plots(user_id)
-            if not plots:
-                continue
+    async def _process_user(user_id: str):
+        async with semaphore:
+            try:
+                plots = await get_user_plots(user_id)
+                if not plots:
+                    return
 
-            # เก็บผลทุกแปลงของ user นี้ไว้ ถ้าเปิด "สรุปแปลงประจำวัน" จะส่งการ์ดเต็ม
-            # (เหมือน /analyze ปกติ) ทีละแปลงหลังวนครบทุกแปลง — ไม่ว่าแปลงไหนจะเสี่ยงหรือไม่
-            plot_summaries: list[dict] = []
+                # เก็บผลทุกแปลงของ user นี้ไว้ ถ้าเปิด "สรุปแปลงประจำวัน" จะส่งการ์ดเต็ม
+                # (เหมือน /analyze ปกติ) ทีละแปลงหลังวนครบทุกแปลง — ไม่ว่าแปลงไหนจะเสี่ยงหรือไม่
+                plot_summaries: list[dict] = []
 
-            for plot in plots:
-                total_plots += 1
-                lat = float(plot["lat"])
-                lng = float(plot["lng"])
-                plot_id = plot.get("id")
-                polygon = plot.get("polygon")
+                for plot in plots:
+                    counters["total_plots"] += 1
+                    lat = float(plot["lat"])
+                    lng = float(plot["lng"])
+                    plot_id = plot.get("id")
+                    polygon = plot.get("polygon")
 
-                # เรียกผ่าน threadpool กัน GEE call (blocking) ค้าง event loop ทั้งตัว
-                # ระหว่างสแกน — เหมือน fix เดิมที่ทำกับ /analyze
-                data    = await run_in_threadpool(analyze_durian_plot, lat, lng)
-                message = format_message(data, lat, lng)
-                await save_analysis(user_id, data, message,
-                                    plot_id=plot_id)
-                plot_summaries.append({
-                    "name": plot.get("name") or "แปลงของคุณ",
-                    "data": data,
-                    "lat": lat,
-                    "lng": lng,
-                    "message": message,
-                    "polygon": polygon,
-                })
+                    # เรียกผ่าน threadpool กัน GEE call (blocking) ค้าง event loop ทั้งตัว
+                    # ระหว่างสแกน — เหมือน fix เดิมที่ทำกับ /analyze
+                    data    = await run_in_threadpool(analyze_durian_plot, lat, lng)
+                    message = format_message(data, lat, lng)
+                    await save_analysis(user_id, data, message,
+                                        plot_id=plot_id)
+                    plot_summaries.append({
+                        "name": plot.get("name") or "แปลงของคุณ",
+                        "data": data,
+                        "lat": lat,
+                        "lng": lng,
+                        "message": message,
+                        "polygon": polygon,
+                    })
 
-                # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ──
-                # เฉพาะแปลงที่วาดขอบเขตไว้ (polygon) เท่านั้น ถึงจะมีตาราง grid ให้เก็บ
-                # แยก try/except ต่างหาก ไม่ให้ grid ล้มเหลวกระทบการแจ้งเตือนเสี่ยงหลักของแปลงนี้
-                if polygon and plot_id and len(polygon) >= 3:
-                    try:
-                        points = await asyncio.wait_for(
-                            run_in_threadpool(get_moisture_grid, polygon),
-                            timeout=GRID_SNAPSHOT_TIMEOUT_S,
-                        )
-                        await save_grid_snapshot(plot_id, points)
-                    except Exception as e:
-                        logger.warning(f"Grid snapshot failed for plot {plot_id}: {e}")
-
-                if _is_high_risk(data) and user_id in notifiable:
-                    # ── Check escalation: ติดต่อกัน ≥ ESCALATION_DAYS วัน ──
-                    if plot_id:
-                        recent = await get_recent_analyses(
-                            plot_id, days=ESCALATION_DAYS + 5
-                        )
-                        consec = _count_consecutive_high_risk(recent)
-                        if consec >= ESCALATION_DAYS:
-                            flex = build_escalation_flex(
-                                data, lat, lng, message, consec
+                    # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ──
+                    # เฉพาะแปลงที่วาดขอบเขตไว้ (polygon) เท่านั้น ถึงจะมีตาราง grid ให้เก็บ
+                    # แยก try/except ต่างหาก ไม่ให้ grid ล้มเหลวกระทบการแจ้งเตือนเสี่ยงหลักของแปลงนี้
+                    if polygon and plot_id and len(polygon) >= 3:
+                        try:
+                            points = await asyncio.wait_for(
+                                run_in_threadpool(get_moisture_grid, polygon),
+                                timeout=GRID_SNAPSHOT_TIMEOUT_S,
                             )
-                            await send_line_message(user_id, message, flex=flex)
-                            escalated += 1
-                            logger.warning(
-                                f"🚨 Escalation alert: {user_id} plot {plot_id} "
-                                f"— high risk {consec} consecutive days"
+                            await save_grid_snapshot(plot_id, points)
+                        except Exception as e:
+                            logger.warning(f"Grid snapshot failed for plot {plot_id}: {e}")
+
+                    if _is_high_risk(data) and user_id in notifiable:
+                        # ── Check escalation: ติดต่อกัน ≥ ESCALATION_DAYS วัน ──
+                        if plot_id:
+                            recent = await get_recent_analyses(
+                                plot_id, days=ESCALATION_DAYS + 5
                             )
-                            continue
+                            consec = _count_consecutive_high_risk(recent)
+                            if consec >= ESCALATION_DAYS:
+                                flex = build_escalation_flex(
+                                    data, lat, lng, message, consec
+                                )
+                                await send_line_message(user_id, message, flex=flex)
+                                counters["escalated"] += 1
+                                logger.warning(
+                                    f"🚨 Escalation alert: {user_id} plot {plot_id} "
+                                    f"— high risk {consec} consecutive days"
+                                )
+                                continue
 
-                    flex = build_weekly_alert_flex(data, lat, lng, message)
-                    await send_line_message(user_id, message, flex=flex)
-                    alerted += 1
+                        flex = build_weekly_alert_flex(data, lat, lng, message)
+                        await send_line_message(user_id, message, flex=flex)
+                        counters["alerted"] += 1
 
-            # ── สรุปแปลงประจำวัน — ส่งการ์ดเต็มรูปแบบ (เหมือนกดตรวจสอบแปลงเอง)
-            # พร้อมรูปแผนที่ความชื้น ทีละแปลง หลังวนครบทุกแปลงของ user นี้ ──
-            # v2 (ตามที่ผู้ใช้ขอ): เดิมส่งการ์ดสรุปย่อบรรทัดเดียวต่อแปลง อ่านไม่เห็น
-            # รายละเอียด — เปลี่ยนมาส่งข้อความสั้นๆ นำก่อน 1 ข้อความ (ภาพรวมเร็วๆ)
-            # แล้วตามด้วยการ์ดเต็ม + รูปของทุกแปลง ทีละใบเหมือนผลตรวจสอบปกติทุกประการ
-            # (ใช้ build_result_flex ตัวเดียวกับ /analyze ตรงๆ ไม่ทำการ์ดแยกใหม่ —
-            # กันสองจุดสร้างการ์ดหน้าตาต่างกันแล้วหลุดซิงก์กันในอนาคต)
-            if user_id in digest_users and plot_summaries:
-                intro = build_daily_digest_message(plot_summaries)
-                await send_line_message(user_id, intro)
-                for p in plot_summaries:
-                    img_url = None
-                    if p["polygon"] and len(p["polygon"]) >= 3:
-                        img_url = await build_plot_grid_image_url(p["polygon"], p["name"])
-                    plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"])
-                    await send_line_message(user_id, p["message"], flex=plot_flex, image_url=img_url)
-                digested += 1
+                # ── สรุปแปลงประจำวัน — ส่งการ์ดเต็มรูปแบบ (เหมือนกดตรวจสอบแปลงเอง)
+                # พร้อมรูปแผนที่ความชื้น ทีละแปลง หลังวนครบทุกแปลงของ user นี้ ──
+                # v2 (ตามที่ผู้ใช้ขอ): เดิมส่งการ์ดสรุปย่อบรรทัดเดียวต่อแปลง อ่านไม่เห็น
+                # รายละเอียด — เปลี่ยนมาส่งข้อความสั้นๆ นำก่อน 1 ข้อความ (ภาพรวมเร็วๆ)
+                # แล้วตามด้วยการ์ดเต็ม + รูปของทุกแปลง ทีละใบเหมือนผลตรวจสอบปกติทุกประการ
+                # (ใช้ build_result_flex ตัวเดียวกับ /analyze ตรงๆ ไม่ทำการ์ดแยกใหม่ —
+                # กันสองจุดสร้างการ์ดหน้าตาต่างกันแล้วหลุดซิงก์กันในอนาคต)
+                if user_id in digest_users and plot_summaries:
+                    intro = build_daily_digest_message(plot_summaries)
+                    await send_line_message(user_id, intro)
+                    for p in plot_summaries:
+                        img_url = None
+                        if p["polygon"] and len(p["polygon"]) >= 3:
+                            img_url = await build_plot_grid_image_url(p["polygon"], p["name"])
+                        plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"])
+                        await send_line_message(user_id, p["message"], flex=plot_flex, image_url=img_url)
+                    counters["digested"] += 1
 
-        except Exception as e:
-            logger.error(f"Daily scan failed for {user_id}: {e}")
+            except Exception as e:
+                logger.error(f"Daily scan failed for {user_id}: {e}")
+
+    # ประมวลผลทุก user พร้อมกัน (คุมสูงสุด GEE_CONCURRENCY คนพร้อมกันด้วย semaphore
+    # ข้างบน) แทนการวน for ทีละคน — งานที่เคยกินเวลา ~N*T (N คน x T วินาที/คน) เหลือ
+    # ประมาณ ceil(N/GEE_CONCURRENCY)*T แทน
+    await asyncio.gather(*(_process_user(u) for u in seen_users))
 
     logger.info(
         f"✅ Daily scan done — {len(seen_users)} users, "
-        f"{total_plots} plots scanned, {alerted} alerts sent, "
-        f"{escalated} escalations, {digested} daily digests"
+        f"{counters['total_plots']} plots scanned, {counters['alerted']} alerts sent, "
+        f"{counters['escalated']} escalations, {counters['digested']} daily digests"
     )
 
 
@@ -249,80 +262,87 @@ async def rain_alert_job(hour: int | None = None):
         if hour_users is not None:
             seen_users &= hour_users
 
-    alerted = 0
-    combined_alerts = 0
+    counters = {"alerted": 0, "combined_alerts": 0}
     notifiable = await get_notifiable_users()
+    # งานนี้ไม่ได้เรียก GEE ตรงๆ (ใช้ weather API + อ่านผลดินที่ analyze ไว้แล้วจาก
+    # Supabase) แต่โครงสร้างเดิมเป็น sequential ทีละคนเหมือน daily_scan_job — ใช้
+    # semaphore ผูกจำนวนความขนานเดียวกันเพื่อความสม่ำเสมอ กันยิง weather API/Supabase
+    # พร้อมกันมากเกินไปตอนผู้ใช้เยอะขึ้นด้วย
+    semaphore = asyncio.Semaphore(GEE_CONCURRENCY)
 
-    for user_id in seen_users:
+    async def _process_user(user_id: str):
         if user_id not in notifiable:
-            continue
-        try:
-            plots = await get_user_plots(user_id)
-            if not plots:
-                continue
+            return
+        async with semaphore:
+            try:
+                plots = await get_user_plots(user_id)
+                if not plots:
+                    return
 
-            for plot in plots:
-                lat     = float(plot["lat"])
-                lng     = float(plot["lng"])
-                name    = plot.get("name", "แปลงของคุณ")
-                plot_id = plot.get("id")
+                for plot in plots:
+                    lat     = float(plot["lat"])
+                    lng     = float(plot["lng"])
+                    name    = plot.get("name", "แปลงของคุณ")
+                    plot_id = plot.get("id")
 
-                forecast = await get_7day_rain(lat, lng)
+                    forecast = await get_7day_rain(lat, lng)
 
-                # ── ดึงข้อมูลดินล่าสุด (ถ้ามี) ──
-                soil_data = None
-                if plot_id:
-                    soil_data = await get_latest_plot_analysis(plot_id)
+                    # ── ดึงข้อมูลดินล่าสุด (ถ้ามี) ──
+                    soil_data = None
+                    if plot_id:
+                        soil_data = await get_latest_plot_analysis(plot_id)
 
-                if soil_data:
-                    # ── Combined alert: อากาศ + ดิน ──
-                    soil_risk = assess_soil_waterlog_risk(soil_data)
-                    alert = evaluate_combined_risk(forecast, soil_risk)
+                    if soil_data:
+                        # ── Combined alert: อากาศ + ดิน ──
+                        soil_risk = assess_soil_waterlog_risk(soil_data)
+                        alert = evaluate_combined_risk(forecast, soil_risk)
 
-                    # Gap 1: combined_score >= 60 → force critical + notify immediately
-                    if alert["combined_score"] >= 60 and alert["alert_level"] != "critical":
-                        alert = dict(alert)
-                        alert["alert_level"] = "critical"
-                        alert["should_notify"] = True
-                        alert["alert_title"] = "🔴 วิกฤต: คะแนนความเสี่ยงสูง — ต้องดำเนินการทันที"
-                        logger.warning(
-                            f"🚨 Critical threshold override: {user_id} plot '{name}' "
-                            f"combined_score={alert['combined_score']}"
-                        )
+                        # Gap 1: combined_score >= 60 → force critical + notify immediately
+                        if alert["combined_score"] >= 60 and alert["alert_level"] != "critical":
+                            alert = dict(alert)
+                            alert["alert_level"] = "critical"
+                            alert["should_notify"] = True
+                            alert["alert_title"] = "🔴 วิกฤต: คะแนนความเสี่ยงสูง — ต้องดำเนินการทันที"
+                            logger.warning(
+                                f"🚨 Critical threshold override: {user_id} plot '{name}' "
+                                f"combined_score={alert['combined_score']}"
+                            )
 
-                    if alert["should_notify"]:
-                        flex = build_combined_alert_flex(
-                            forecast, soil_risk, alert,
-                            lat, lng, plot_name=name)
-                        msg = build_combined_alert_message(
-                            forecast, soil_risk, alert,
-                            lat, lng, plot_name=name)
-                        await send_line_message(user_id, msg, flex=flex)
-                        combined_alerts += 1
-                        logger.info(
-                            f"{alert['alert_title']} → {user_id} plot '{name}' "
-                            f"rain={forecast['total_rain_mm']}mm "
-                            f"soil_score={soil_risk['soil_risk_score']} "
-                            f"level={alert['alert_level']}"
-                        )
-                else:
-                    # ── Fallback: ไม่มีข้อมูลดิน → ใช้ rain-only alert ──
-                    if forecast["is_heavy_rain"]:
-                        flex = build_rain_alert_flex(
-                            forecast, lat, lng, plot_name=name)
-                        msg = build_rain_alert_message(
-                            forecast, lat, lng, plot_name=name)
-                        await send_line_message(user_id, msg, flex=flex)
-                        alerted += 1
-                        logger.info(
-                            f"🌧️ Rain-only alert → {user_id} plot '{name}' "
-                            f"— {forecast['total_rain_mm']}mm"
-                        )
+                        if alert["should_notify"]:
+                            flex = build_combined_alert_flex(
+                                forecast, soil_risk, alert,
+                                lat, lng, plot_name=name)
+                            msg = build_combined_alert_message(
+                                forecast, soil_risk, alert,
+                                lat, lng, plot_name=name)
+                            await send_line_message(user_id, msg, flex=flex)
+                            counters["combined_alerts"] += 1
+                            logger.info(
+                                f"{alert['alert_title']} → {user_id} plot '{name}' "
+                                f"rain={forecast['total_rain_mm']}mm "
+                                f"soil_score={soil_risk['soil_risk_score']} "
+                                f"level={alert['alert_level']}"
+                            )
+                    else:
+                        # ── Fallback: ไม่มีข้อมูลดิน → ใช้ rain-only alert ──
+                        if forecast["is_heavy_rain"]:
+                            flex = build_rain_alert_flex(
+                                forecast, lat, lng, plot_name=name)
+                            msg = build_rain_alert_message(
+                                forecast, lat, lng, plot_name=name)
+                            await send_line_message(user_id, msg, flex=flex)
+                            counters["alerted"] += 1
+                            logger.info(
+                                f"🌧️ Rain-only alert → {user_id} plot '{name}' "
+                                f"— {forecast['total_rain_mm']}mm"
+                            )
 
-        except Exception as e:
-            logger.error(f"Rain alert failed for {user_id}: {e}")
+            except Exception as e:
+                logger.error(f"Rain alert failed for {user_id}: {e}")
+
+    await asyncio.gather(*(_process_user(u) for u in seen_users))
 
     logger.info(
         f"✅ Weather+soil alert scan done — "
-        f"{combined_alerts} combined + {alerted} rain-only alerts sent"
+        f"{counters['combined_alerts']} combined + {counters['alerted']} rain-only alerts sent"
     )
