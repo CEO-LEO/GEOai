@@ -145,11 +145,22 @@
        #map มี flex:1 อยู่แล้ว — พับเนื้อหาส่วนนี้ลงเท่ากับแผนที่โตขึ้นอัตโนมัติ */
     .accordion-toggle {
       width: 100%; display: flex; justify-content: space-between; align-items: center;
-      background: #eef9f1; border: none; border-radius: 11px; padding: 11px 13px;
-      font-family: inherit; font-size: 13px; font-weight: 700; color: var(--green-dk);
-      cursor: pointer; margin-bottom: 9px;
+      background: #eef9f1; border: none; border-radius: 11px; padding: 10px 13px;
+      font-family: inherit; cursor: pointer; margin-bottom: 9px; text-align: left;
     }
-    .accordion-toggle .chev { transition: transform .2s ease; font-size: 11px; }
+    /* v2 (ผู้ใช้ขอ "ตัวเลือกเพิ่มเติมดูยาก"): เดิมยัดหัวข้อ + รายการย่อยทั้ง 3
+       ไว้บรรทัดเดียวตัวหนาเท่ากันหมด อ่านเป็นก้อนข้อความยาวๆ — แยกเป็นหัวข้อหลัก
+       ตัวหนา กับรายการย่อยตัวเล็กสีอ่อนกว่าไว้บรรทัดล่าง ให้ตาจับหัวข้อได้ก่อน */
+    .accordion-toggle .toggle-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .accordion-toggle .toggle-title { font-size: 13.5px; font-weight: 700; color: var(--green-dk); }
+    .accordion-toggle .toggle-hint {
+      font-size: 11px; font-weight: 500; color: #6d8a7a;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .accordion-toggle .chev {
+      transition: transform .2s ease; font-size: 11px; color: var(--green-dk);
+      flex-shrink: 0; margin-left: 10px;
+    }
     .accordion-toggle[aria-expanded="true"] .chev { transform: rotate(180deg); }
     .accordion-content {
       max-height: 0; overflow: hidden; transition: max-height .28s ease;
@@ -428,7 +439,10 @@
     </div>
 
     <button type="button" class="accordion-toggle" id="more-options-toggle" aria-expanded="false">
-      <span>⚙️ ตัวเลือกเพิ่มเติม — ค้นหาพิกัด, ตำแหน่งของฉัน, ตั้งชื่อแปลง</span>
+      <span class="toggle-label">
+        <span class="toggle-title">⚙️ ตัวเลือกเพิ่มเติม</span>
+        <span class="toggle-hint">ค้นหาพิกัด · ตำแหน่งของฉัน · ตั้งชื่อแปลง</span>
+      </span>
       <span class="chev">▾</span>
     </button>
     <div class="accordion-content" id="more-options-content">
