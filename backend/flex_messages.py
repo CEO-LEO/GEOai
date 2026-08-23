@@ -96,7 +96,9 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     else f"{colors['icon']} ผลวิเคราะห์แปลงทุเรียน — {colors['label']}"),
         "contents": {
             "type": "bubble",
-            "size": "mega",
+            # "giga" = การ์ดกว้างเกือบเต็มจอมือถือ — ตอนอยู่ใน carousel (หลายแปลง)
+            # ค่าเดิม "mega" แคบไป ทำให้เห็นขอบการ์ดถัดไปโผล่มาข้างๆ ดูล้นจอ
+            "size": "giga",
 
             # ── Header ──────────────────────────────────
             "header": {

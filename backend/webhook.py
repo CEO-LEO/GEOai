@@ -127,11 +127,23 @@ async def _handle_follow(event: dict):
 
 
 async def _handle_message(event: dict):
-    """ผู้ใช้ส่งข้อความ → ส่ง main menu ก่อน แล้วค่อย upsert user"""
+    """ผู้ใช้พิมพ์ข้อความมา (ไม่ใช่กดปุ่ม) → ตอบขอบคุณ + แนะนำให้ใช้ Rich Menu
+    แทน ไม่ส่ง main menu แบบเดิมแล้ว (ตอนนี้มี Rich Menu ติดอยู่ใต้แชทให้กดตรงๆ
+    อยู่แล้ว — ส่ง main menu ซ้ำทุกครั้งที่พิมพ์อะไรมาเลยดูซ้ำซ้อน/ไม่จำเป็น)"""
     reply_token = event["replyToken"]
     user_id     = event["source"]["userId"]
 
-    await _reply(reply_token, [_main_menu()])         # ตอบก่อนเสมอ
+    await _reply(reply_token, [{
+        "type": "text",
+        "text": (
+            "ขอบคุณที่ทักมานะครับ 🌿\n\n"
+            "ใช้เมนูด้านล่างแชทได้เลยครับ ไม่ต้องพิมพ์:\n"
+            "🔍 ตรวจสอบ — ดูผลวิเคราะห์แปลงล่าสุด\n"
+            "🗺️ วาดแปลง — ปักหมุด/เพิ่มแปลงใหม่\n"
+            "⚙️ ตั้งค่า — ปรับเวลา/รูปแบบการแจ้งเตือน\n"
+            "📞 ติดต่อเจ้าหน้าที่ — โทรหาทีมงานได้ทันที"
+        ),
+    }])
     await _safe(upsert_user, user_id)
 
 
@@ -342,80 +354,6 @@ def _welcome_message() -> dict:
                         },
                         "style": "primary",
                         "color": "#1a7a3c"
-                    }
-                ]
-            }
-        }
-    }
-
-
-def _main_menu() -> dict:
-    return {
-        "type": "flex",
-        "altText": "เมนูหลัก GEOai",
-        "contents": {
-            "type": "bubble",
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": "🌿 GEOai — เมนูหลัก",
-                        "weight": "bold",
-                        "size": "lg",
-                        "color": "#1a7a3c"
-                    },
-                    {
-                        "type": "text",
-                        "text": "เลือกสิ่งที่ต้องการด้านล่าง",
-                        "size": "sm",
-                        "color": "#888888",
-                        "margin": "sm"
-                    }
-                ]
-            },
-            "footer": {
-                "type": "box",
-                "layout": "vertical",
-                "spacing": "sm",
-                "contents": [
-                    {
-                        "type": "button",
-                        "action": {
-                            "type": "postback",
-                            "label": "🔍 ตรวจสอบแปลงใหม่",
-                            "data": "action=check"
-                        },
-                        "style": "primary",
-                        "color": "#1a7a3c"
-                    },
-                    {
-                        "type": "button",
-                        "action": {
-                            "type": "postback",
-                            "label": "📋 แปลงของฉัน",
-                            "data": "action=history"
-                        },
-                        "style": "secondary"
-                    },
-                    {
-                        "type": "button",
-                        "action": {
-                            "type": "postback",
-                            "label": "⚙️ ตั้งค่าการแจ้งเตือน",
-                            "data": "action=settings"
-                        },
-                        "style": "secondary"
-                    },
-                    {
-                        "type": "button",
-                        "action": {
-                            "type": "postback",
-                            "label": "❓ วิธีใช้งาน",
-                            "data": "action=help"
-                        },
-                        "style": "secondary"
                     }
                 ]
             }
