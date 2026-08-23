@@ -563,7 +563,10 @@
       switchTab("new-plot");
       initSphereMap();
       await new Promise(r => setTimeout(r, 500));
-      switchTab("my-plots");
+      // รองรับ deep-link ?tab=new-plot (เช่นจากปุ่ม "วาดแปลง" ใน Rich Menu) —
+      // ไม่งั้นแอปจะสลับกลับไป "แปลงของฉัน" เสมอไม่ว่าจะเปิดมาทางไหน
+      const requestedTab = new URLSearchParams(window.location.search).get("tab");
+      switchTab(requestedTab === "new-plot" ? "new-plot" : "my-plots");
 
       hideSpinner();
     });
