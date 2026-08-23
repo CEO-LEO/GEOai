@@ -105,7 +105,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                 "type": "box",
                 "layout": "vertical",
                 "backgroundColor": colors["header"],
-                "paddingAll": "10px",
+                "paddingAll": "8px",
                 "contents": [
                     {
                         "type": "box",
@@ -155,8 +155,8 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
             "body": {
                 "type": "box",
                 "layout": "vertical",
-                "paddingAll": "10px",
-                "spacing": "sm",
+                "paddingAll": "8px",
+                "spacing": "xs",
                 "contents": [
 
                     # NDVI section
@@ -227,7 +227,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     {
                         "type": "box",
                         "layout": "horizontal",
-                        "spacing": "sm",
+                        "spacing": "xs",
                         "contents": [
                             _stat_box("💧 ความชื้นดิน", moist_str,
                                       "#E53935" if moisture > -10 else "#2E7D32",
@@ -245,7 +245,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     {
                         "type": "box",
                         "layout": "horizontal",
-                        "spacing": "sm",
+                        "spacing": "xs",
                         "contents": [
                             _stat_box("🌍 สภาพพื้นดิน", f"{disp_str} ({stability_pct}%)", disp_color,
                                       caption="ดินทรุด/เคลื่อนตัวหรือไม่ % ยิ่งสูงยิ่งมั่นคง"),
@@ -286,7 +286,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
             "footer": {
                 "type": "box",
                 "layout": "vertical",
-                "paddingAll": "8px",
+                "paddingAll": "6px",
                 "backgroundColor": "#F5F5F5",
                 "contents": [
                     {
@@ -335,7 +335,7 @@ def _stat_box(label: str, value: str, color: str, caption: str = "") -> dict:
         "flex": 1,
         "backgroundColor": "#F5F5F5",
         "cornerRadius": "8px",
-        "paddingAll": "7px",
+        "paddingAll": "6px",
         "contents": contents,
     }
 
@@ -424,7 +424,7 @@ def _build_impact_section(land_impact: dict) -> list[dict]:
         {
             "type": "box", "layout": "vertical",
             "backgroundColor": bg_color, "cornerRadius": "8px",
-            "paddingAll": "7px", "margin": "sm",
+            "paddingAll": "6px", "margin": "sm",
             "contents": impact_items if impact_items else [
                 {"type": "text", "text": "✅ ไม่พบผลกระทบ", "size": "sm", "color": "#2E7D32"}
             ]
@@ -471,7 +471,7 @@ def _build_topsoil_section(bsi, topsoil_risk: str) -> list[dict]:
         contents.append({
             "type": "box", "layout": "horizontal",
             "backgroundColor": "#FFEBEE", "cornerRadius": "8px",
-            "paddingAll": "6px", "margin": "sm",
+            "paddingAll": "5px", "margin": "xs",
             "contents": [
                 {"type": "text",
                  "text": "💡 คำแนะนำ: หน้าดินเปิดโล่งมาก แนะนำให้ปลูกพืชคลุมดิน (เช่น หญ้าแฝก) เพื่อป้องกันปุ๋ยไหลทิ้งช่วงหน้าฝน",
@@ -485,7 +485,7 @@ def _build_topsoil_section(bsi, topsoil_risk: str) -> list[dict]:
         {
             "type": "box", "layout": "vertical",
             "backgroundColor": bg_color, "cornerRadius": "8px",
-            "paddingAll": "7px", "margin": "sm",
+            "paddingAll": "6px", "margin": "sm",
             "contents": contents,
         },
         {"type": "separator"},
@@ -651,7 +651,7 @@ def _build_problem_points_section(problem_points: list[dict]) -> dict:
     return {
         "type": "box", "layout": "vertical",
         "backgroundColor": "#F6F4EC", "cornerRadius": "8px",
-        "paddingAll": "7px", "margin": "sm",
+        "paddingAll": "6px", "margin": "xs",
         "contents": [
             {"type": "text", "text": f"📍 จุดที่พบปัญหาในแปลง ({len(problem_points)} จุด)",
              "size": "xxs", "weight": "bold", "color": "#555555"},
@@ -730,7 +730,7 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None,
 
     gauge = {
         "type": "box", "layout": "vertical",
-        "height": "32px", "margin": "sm",
+        "height": "28px", "margin": "xs",
         "contents": [
             {
                 "type": "text", "text": level_text,
@@ -741,8 +741,8 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None,
             {
                 "type": "box", "layout": "horizontal",
                 "position": "absolute",
-                "width": "100%", "height": "6px", "cornerRadius": "3px",
-                "offsetTop": "16px",
+                "width": "100%", "height": "5px", "cornerRadius": "3px",
+                "offsetTop": "14px",
                 "contents": [
                     {"type": "box", "layout": "vertical", "flex": w,
                      "backgroundColor": c, "contents": []}
@@ -752,9 +752,9 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None,
             {
                 "type": "box", "layout": "vertical",
                 "position": "absolute",
-                "width": "12px", "height": "12px", "cornerRadius": "6px",
+                "width": "10px", "height": "10px", "cornerRadius": "5px",
                 "backgroundColor": "#FFFFFF", "borderWidth": "2px", "borderColor": "#333333",
-                "offsetTop": "13px", "offsetStart": f"{marker_pct:.1f}%",
+                "offsetTop": "11px", "offsetStart": f"{marker_pct:.1f}%",
                 "contents": [],
             },
         ] + [
@@ -763,7 +763,7 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None,
                 "text": (f"+{lvl}" if lvl > 0 else str(lvl)),
                 "position": "absolute",
                 "size": "xxs", "color": "#999999",
-                "offsetTop": "27px",
+                "offsetTop": "24px",
                 "offsetStart": f"{max(0.0, _swab_level_tick_pct(lvl) - 4.0):.1f}%",
             }
             for lvl in _SWAB_MAJOR_LEVELS
@@ -786,7 +786,7 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None,
         {
             "type": "box", "layout": "vertical",
             "backgroundColor": bg_color, "cornerRadius": "8px",
-            "paddingAll": "7px", "margin": "sm",
+            "paddingAll": "6px", "margin": "sm",
             "contents": [
                 {"type": "text", "text": status_icon,
                  "size": "sm", "color": txt_color, "weight": "bold"},
@@ -810,8 +810,8 @@ def _build_topsoil_high_warning() -> list[dict]:
             "layout": "horizontal",
             "backgroundColor": "#FFEBEE",
             "cornerRadius": "8px",
-            "paddingAll": "8px",
-            "margin": "sm",
+            "paddingAll": "6px",
+            "margin": "xs",
             "contents": [
                 {
                     "type": "text",
