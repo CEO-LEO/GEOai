@@ -264,6 +264,44 @@
   }
   .close-modal-btn:active{ transform: scale(.98); }
 
+  /* ── ป๊อปอัพสอนวิธีวาดแปลง (ครั้งแรกที่ใช้งานเท่านั้น) ── ผู้ใช้ขอ "เอาข้อความ
+     สอนออกจากแถบพิกัดถาวร" — ย้ายมาเป็นป๊อปอัพครั้งแรก + ปุ่ม ? มุมขวาบนแผนที่
+     (ตำแหน่งเดิมของปุ่มสลับดาวเทียมที่เอาออกไปแล้ว) ไว้เรียกดูซ้ำได้ทีหลัง —
+     ใช้ style เดียวกับ #detail-modal/#detail-box เพื่อความสม่ำเสมอ */
+  #tutorial-modal {
+    display: none; position: fixed; inset: 0; z-index: 9991;
+    background: rgba(15,30,20,.5); align-items: flex-end;
+    justify-content: center; backdrop-filter: blur(2px);
+  }
+  #tutorial-modal.show { display: flex; }
+  #tutorial-box {
+    background: var(--bg); width: 100%; max-height: 80dvh;
+    border-radius: 22px 22px 0 0; padding: 8px 18px calc(20px + env(safe-area-inset-bottom));
+    overflow-y: auto; box-shadow: 0 -8px 40px rgba(0,0,0,.25);
+    animation: sheetUp .28s cubic-bezier(.22,1,.36,1);
+  }
+  #tutorial-box::before{ content:""; display:block; width:42px; height:5px; border-radius:3px;
+    background:#cdd8d0; margin:6px auto 14px; }
+  #tutorial-box h3 { font-size: 17px; color: var(--green-dk); margin-bottom: 14px; font-weight:700; }
+  .tut-step { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; }
+  .tut-icon {
+    flex: none; width: 36px; height: 36px; border-radius: 50%; background: #eef9f1;
+    display: flex; align-items: center; justify-content: center; font-size: 17px;
+  }
+  .tut-text { font-size: 13.5px; color: var(--ink); line-height: 1.55; padding-top: 4px; }
+  .tut-text b { color: var(--green-dk); }
+
+  #help-btn {
+    position: absolute; top: 12px; right: 12px; z-index: 999;
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(255,255,255,.95); color: var(--green-dk); border: none;
+    font-size: 16px; font-weight: 800;
+    box-shadow: 0 3px 12px rgba(0,0,0,.22); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-family: inherit;
+  }
+  #help-btn:active { transform: scale(.92); }
+
     /* ── Result Card (farmer-friendly analysis display) ── */
     .result-header {
       text-align: center; padding: 18px 14px 16px; margin-bottom: 14px;
@@ -418,9 +456,14 @@
 <div class="panel" id="panel-new-plot">
   <div style="position:relative;flex:1;min-height:0">
     <div id="map" style="width:100%;height:100%"></div>
+    <button id="help-btn" title="วิธีใช้งาน" aria-label="วิธีใช้งาน">?</button>
   </div>
   <div id="new-plot-panel">
-    <div id="coords-display">📍 จิ้มบนแผนที่ หรือวาดขอบเขตแปลง 🔷</div>
+    <!-- v2 (ผู้ใช้ขอ "เอาข้อความสอนออก"): เดิมมีข้อความ "จิ้มบนแผนที่ หรือ
+         วาดขอบเขตแปลง" ค้างอยู่ถาวรตั้งแต่เปิดแท็บ — ย้ายไปเป็นป๊อปอัพสอนครั้งแรก
+         แทน (#tutorial-modal) แถบนี้เลยซ่อนไว้ก่อนจนกว่าจะมีพิกัด/สถานะจริงให้โชว์
+         (ดู showCoordsDisplay ที่ JS ด้านล่าง) -->
+    <div id="coords-display" style="display:none"></div>
     <div class="btn-row">
       <button class="btn-draw" id="draw-btn">🔷 วาดขอบเขต</button>
       <button class="btn-primary"   id="submit-btn" disabled>🔍 ตรวจสอบแปลงนี้</button>
@@ -471,6 +514,21 @@
     <h3 id="modal-title">📊 ประวัติการวิเคราะห์</h3>
     <div id="modal-body"></div>
     <button class="close-modal-btn" id="close-modal-btn">✕ ปิด</button>
+  </div>
+</div>
+
+<div id="tutorial-modal">
+  <div id="tutorial-box">
+    <h3>📍 วิธีวาดแปลงของคุณ</h3>
+    <div class="tut-step">
+      <div class="tut-icon">📍</div>
+      <div class="tut-text"><b>จิ้มจุดเดียว</b> บนแผนที่ตรงตำแหน่งแปลง แล้วกด "ตรวจสอบแปลงนี้" ได้เลย</div>
+    </div>
+    <div class="tut-step">
+      <div class="tut-icon">🔷</div>
+      <div class="tut-text">หรือกด <b>"วาดขอบเขต"</b> แล้วจิ้มไล่ตามมุมแปลงทีละจุด (อย่างน้อย 3 จุด) เพื่อวาดขอบเขตแปลงให้แม่นยำขึ้น</div>
+    </div>
+    <button class="close-modal-btn" id="tutorial-close-btn">เข้าใจแล้ว</button>
   </div>
 </div>
 
@@ -572,7 +630,9 @@
       // รองรับ deep-link ?tab=new-plot (เช่นจากปุ่ม "วาดแปลง" ใน Rich Menu) —
       // ไม่งั้นแอปจะสลับกลับไป "แปลงของฉัน" เสมอไม่ว่าจะเปิดมาทางไหน
       const requestedTab = new URLSearchParams(window.location.search).get("tab");
-      switchTab(requestedTab === "new-plot" ? "new-plot" : "my-plots");
+      const initialTab = requestedTab === "new-plot" ? "new-plot" : "my-plots";
+      switchTab(initialTab);
+      if (initialTab === "new-plot") maybeShowTutorial();
 
       hideSpinner();
     });
@@ -589,7 +649,37 @@
   }
 
   document.querySelectorAll(".tab").forEach(tab => {
-    tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+    tab.addEventListener("click", () => {
+      switchTab(tab.dataset.tab);
+      // เช็คตรงนี้ (ไม่ใช่ใน switchTab เอง) เพราะ switchTab ยังถูกเรียกตอน init
+      // เพื่อ warm-up ขนาดแผนที่ชั่วคราวด้วย (สลับไปแล้วสลับกลับใน 500ms) — ถ้าเช็ค
+      // ในนั้นป๊อปอัพจะโผล่วาบแล้วหายไปเองโดยผู้ใช้ไม่ได้ตั้งใจเปิดแท็บนี้จริงๆ
+      if (tab.dataset.tab === "new-plot") maybeShowTutorial();
+    });
+  });
+
+  // ─── ป๊อปอัพสอนวิธีวาดแปลง (ครั้งแรกที่ใช้งานเท่านั้น) ──────────
+  // ผู้ใช้ขอ "เอาข้อความสอนออกจากแถบพิกัดถาวร ย้ายไปเป็นป๊อปอัพครั้งแรก กดปุ่ม ?
+  // มุมขวาบนแผนที่ (ที่เดิมเป็นปุ่มสลับดาวเทียม) เพื่อดูซ้ำได้"
+  const TUTORIAL_SEEN_KEY = "geoai_seen_draw_tutorial";
+  function openTutorial() {
+    document.getElementById("tutorial-modal").classList.add("show");
+  }
+  function closeTutorial() {
+    document.getElementById("tutorial-modal").classList.remove("show");
+  }
+  function maybeShowTutorial() {
+    let seen = false;
+    try { seen = !!localStorage.getItem(TUTORIAL_SEEN_KEY); } catch {}
+    if (!seen) openTutorial();
+  }
+  document.getElementById("help-btn").addEventListener("click", openTutorial);
+  document.getElementById("tutorial-close-btn").addEventListener("click", () => {
+    closeTutorial();
+    try { localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); } catch {}
+  });
+  document.getElementById("tutorial-modal").addEventListener("click", e => {
+    if (e.target === document.getElementById("tutorial-modal")) closeTutorial();
   });
 
   // แสดงวันที่สร้างแปลงแบบอ่านง่าย (ให้ทั้งการ์ดที่มีรูปย่อ/ไม่มี ยังแยกแปลงได้จาก
@@ -795,12 +885,19 @@
     });
   }
 
+  // แถบพิกัด/สถานะ — ซ่อนไว้เป็นค่าเริ่มต้น (ดูคอมเมนต์ตรง #coords-display ใน
+  // HTML) โผล่มาก็ต่อเมื่อมีพิกัด/สถานะจริงให้โชว์ครั้งแรกเท่านั้น
+  function showCoordsDisplay(html) {
+    const el = document.getElementById("coords-display");
+    el.innerHTML = html;
+    el.style.display = "";
+  }
+
   function setPin(lat, lon) {
     selLat = lat; selLng = lon;
     clearDrawing();
 
-    document.getElementById("coords-display").innerHTML =
-      `📍 <b>${lat.toFixed(5)}</b> , <b>${lon.toFixed(5)}</b>`;
+    showCoordsDisplay(`📍 <b>${lat.toFixed(5)}</b> , <b>${lon.toFixed(5)}</b>`);
     document.getElementById("submit-btn").disabled = false;
 
     if (pinMarker) { try { map.Overlays.remove(pinMarker); } catch {} }
@@ -843,8 +940,7 @@
     drawLine = null;
     drawBtn.textContent = "✅ จบการวาด";
     drawBtn.classList.add("drawing");
-    document.getElementById("coords-display").innerHTML =
-      "🔷 จิ้มบนแผนที่เพื่อวาดจุดมุม แล้วกด <b>จบการวาด</b>";
+    showCoordsDisplay("🔷 จิ้มบนแผนที่เพื่อวาดจุดมุม แล้วกด <b>จบการวาด</b>");
     // ระหว่างวาด "ตรวจสอบแปลงนี้" ยังกดไม่ได้อยู่แล้ว (ยังไม่มีขอบเขต) — สลับมาโชว์
     // ปุ่ม "ย้อนกลับ" ในช่องเดียวกันแทน เพื่อไม่ให้แถวปุ่มแน่นเกิน (เดิมพลาดจุดแล้ว
     // แก้ไม่ได้เลย ต้องกด "จบการวาด" แล้วลบทั้งแปลงวาดใหม่)
@@ -884,9 +980,9 @@
   }
 
   function updateDrawCoordsDisplay() {
-    document.getElementById("coords-display").innerHTML = drawPoints.length > 0
+    showCoordsDisplay(drawPoints.length > 0
       ? `🔷 วาดแล้ว <b>${drawPoints.length}</b> จุด — จิ้มเพิ่มหรือกด <b>จบการวาด</b> (ต้อง ≥ 3)`
-      : "🔷 จิ้มบนแผนที่เพื่อวาดจุดมุม แล้วกด <b>จบการวาด</b>";
+      : "🔷 จิ้มบนแผนที่เพื่อวาดจุดมุม แล้วกด <b>จบการวาด</b>");
   }
 
   function finishDrawing() {
@@ -917,8 +1013,7 @@
     selLat = sumLat / drawPoints.length;
     selLng = sumLon / drawPoints.length;
 
-    document.getElementById("coords-display").innerHTML =
-      `🔷 วาดขอบเขตแล้ว (${drawPoints.length} จุด) — ศูนย์กลาง <b>${selLat.toFixed(4)}</b>, <b>${selLng.toFixed(4)}</b>`;
+    showCoordsDisplay(`🔷 วาดขอบเขตแล้ว (${drawPoints.length} จุด) — ศูนย์กลาง <b>${selLat.toFixed(4)}</b>, <b>${selLng.toFixed(4)}</b>`);
     document.getElementById("submit-btn").disabled = false;
     document.getElementById("grid-btn").disabled = false;
   }
