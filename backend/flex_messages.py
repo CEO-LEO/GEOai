@@ -105,7 +105,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                 "type": "box",
                 "layout": "vertical",
                 "backgroundColor": colors["header"],
-                "paddingAll": "16px",
+                "paddingAll": "10px",
                 "contents": [
                     {
                         "type": "box",
@@ -149,11 +149,14 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
             },
 
             # ── Body ────────────────────────────────────
+            # v6 (ผู้ใช้ขอ "การ์ดใหญ่เกิน อยากให้เล็กลงสักครึ่งหนึ่ง"): ลด
+            # padding/spacing ทั่วทั้งการ์ดลงราวครึ่งหนึ่ง (ฟอนต์เหลือ "xxs" อยู่
+            # แล้วหลายจุด ลดต่อไม่ได้ — ตัวที่ลดได้จริงคือช่องว่างรอบๆ)
             "body": {
                 "type": "box",
                 "layout": "vertical",
-                "paddingAll": "16px",
-                "spacing": "md",
+                "paddingAll": "10px",
+                "spacing": "sm",
                 "contents": [
 
                     # NDVI section
@@ -224,7 +227,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     {
                         "type": "box",
                         "layout": "horizontal",
-                        "spacing": "md",
+                        "spacing": "sm",
                         "contents": [
                             _stat_box("💧 ความชื้นดิน", moist_str,
                                       "#E53935" if moisture > -10 else "#2E7D32",
@@ -242,7 +245,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     {
                         "type": "box",
                         "layout": "horizontal",
-                        "spacing": "md",
+                        "spacing": "sm",
                         "contents": [
                             _stat_box("🌍 สภาพพื้นดิน", f"{disp_str} ({stability_pct}%)", disp_color,
                                       caption="ดินทรุด/เคลื่อนตัวหรือไม่ % ยิ่งสูงยิ่งมั่นคง"),
@@ -283,7 +286,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
             "footer": {
                 "type": "box",
                 "layout": "vertical",
-                "paddingAll": "12px",
+                "paddingAll": "8px",
                 "backgroundColor": "#F5F5F5",
                 "contents": [
                     {
@@ -332,7 +335,7 @@ def _stat_box(label: str, value: str, color: str, caption: str = "") -> dict:
         "flex": 1,
         "backgroundColor": "#F5F5F5",
         "cornerRadius": "8px",
-        "paddingAll": "10px",
+        "paddingAll": "7px",
         "contents": contents,
     }
 
@@ -421,7 +424,7 @@ def _build_impact_section(land_impact: dict) -> list[dict]:
         {
             "type": "box", "layout": "vertical",
             "backgroundColor": bg_color, "cornerRadius": "8px",
-            "paddingAll": "10px", "margin": "sm",
+            "paddingAll": "7px", "margin": "sm",
             "contents": impact_items if impact_items else [
                 {"type": "text", "text": "✅ ไม่พบผลกระทบ", "size": "sm", "color": "#2E7D32"}
             ]
@@ -468,7 +471,7 @@ def _build_topsoil_section(bsi, topsoil_risk: str) -> list[dict]:
         contents.append({
             "type": "box", "layout": "horizontal",
             "backgroundColor": "#FFEBEE", "cornerRadius": "8px",
-            "paddingAll": "8px", "margin": "sm",
+            "paddingAll": "6px", "margin": "sm",
             "contents": [
                 {"type": "text",
                  "text": "💡 คำแนะนำ: หน้าดินเปิดโล่งมาก แนะนำให้ปลูกพืชคลุมดิน (เช่น หญ้าแฝก) เพื่อป้องกันปุ๋ยไหลทิ้งช่วงหน้าฝน",
@@ -482,7 +485,7 @@ def _build_topsoil_section(bsi, topsoil_risk: str) -> list[dict]:
         {
             "type": "box", "layout": "vertical",
             "backgroundColor": bg_color, "cornerRadius": "8px",
-            "paddingAll": "10px", "margin": "sm",
+            "paddingAll": "7px", "margin": "sm",
             "contents": contents,
         },
         {"type": "separator"},
@@ -648,7 +651,7 @@ def _build_problem_points_section(problem_points: list[dict]) -> dict:
     return {
         "type": "box", "layout": "vertical",
         "backgroundColor": "#F6F4EC", "cornerRadius": "8px",
-        "paddingAll": "9px", "margin": "sm",
+        "paddingAll": "7px", "margin": "sm",
         "contents": [
             {"type": "text", "text": f"📍 จุดที่พบปัญหาในแปลง ({len(problem_points)} จุด)",
              "size": "xxs", "weight": "bold", "color": "#555555"},
@@ -727,7 +730,7 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None,
 
     gauge = {
         "type": "box", "layout": "vertical",
-        "height": "38px", "margin": "sm",
+        "height": "32px", "margin": "sm",
         "contents": [
             {
                 "type": "text", "text": level_text,
@@ -783,7 +786,7 @@ def _build_swab_section(swab: dict, swab_trend: str | None = None,
         {
             "type": "box", "layout": "vertical",
             "backgroundColor": bg_color, "cornerRadius": "8px",
-            "paddingAll": "10px", "margin": "sm",
+            "paddingAll": "7px", "margin": "sm",
             "contents": [
                 {"type": "text", "text": status_icon,
                  "size": "sm", "color": txt_color, "weight": "bold"},
@@ -807,8 +810,8 @@ def _build_topsoil_high_warning() -> list[dict]:
             "layout": "horizontal",
             "backgroundColor": "#FFEBEE",
             "cornerRadius": "8px",
-            "paddingAll": "12px",
-            "margin": "md",
+            "paddingAll": "8px",
+            "margin": "sm",
             "contents": [
                 {
                     "type": "text",
