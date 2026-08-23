@@ -19,7 +19,7 @@ from database import (get_all_reports, save_analysis, get_user_plots,
                       get_digest_users, get_users_by_hour,
                       delete_old_grid_snapshots, get_swab_level_days_ago,
                       get_scheduler_last_run, set_scheduler_last_run,
-                      PRESET_NOTIFY_HOURS)
+                      PRESET_NOTIFY_HOURS, get_plot_analysis_since)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex, build_escalation_flex,
@@ -84,14 +84,32 @@ def _count_consecutive_high_risk(analyses: list[dict]) -> int:
 # ─────────────────────────────────────────────────
 # Main job
 # ─────────────────────────────────────────────────
+def _bangkok_day_start_utc() -> str:
+    """เที่ยงคืนของวันนี้ตามเวลาไทย แปลงเป็น UTC ISO string — ใช้เป็นเส้นแบ่ง
+    "คำนวณไปแล้ววันนี้หรือยัง" ใน get_plot_analysis_since()"""
+    now_bkk = datetime.now(_BANGKOK_TZ)
+    midnight_bkk = now_bkk.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight_bkk.astimezone(timezone.utc).isoformat()
+
+
 async def daily_scan_job(hour: int | None = None):
     """
     วิเคราะห์ทุกแปลงของทุกราย — ส่งเตือนเฉพาะกรณีเสี่ยง + สรุปประจำวัน
 
-    hour: ชั่วโมง (เวลาไทย) ที่ถูกทริกเกอร์มา — ถ้าระบุ จะประมวลผลเฉพาะผู้ใช้ที่ตั้ง
-    notify_hour ตรงกับค่านี้เท่านั้น (ผู้ใช้เลือกเวลาแจ้งเตือนเองได้ ดู migrate_v8.sql)
-    ถ้าไม่ระบุ (None) — เดิม/legacy behavior คือประมวลผลทุกคนไม่กรอง (ใช้ตอนสั่งรัน
-    ผ่าน /admin/trigger/daily-scan โดยไม่ใส่ ?hour= เช่นตอนทดสอบด้วยมือ)
+    hour: ชั่วโมง (เวลาไทย) ที่ถูกทริกเกอร์มา — ใช้กรองเฉพาะขั้นตอน "ส่ง" (แจ้งเตือน/
+    สรุปประจำวัน) เท่านั้น ผู้ใช้ที่ notify_hour ไม่ตรงกับค่านี้จะไม่ได้รับอะไรในรอบนี้
+    ถ้าไม่ระบุ (None) — ส่งให้ทุกคนไม่กรอง (ใช้ตอนสั่งรันผ่าน /admin/trigger/daily-scan
+    โดยไม่ใส่ ?hour= เช่นตอนทดสอบด้วยมือ)
+
+    v6 (ผู้ใช้ขอ "อยากให้ส่งเร็วกว่านี้ อาจต้องเริ่มทำตั้งแต่ตี 5 แล้วค่อยส่งตอน
+    6-7 โมง"): เดิมขั้นตอน "คำนวณ" (เรียก GEE) ก็ถูกกรองด้วย notify_hour เหมือนกัน
+    — user ที่ตั้งเวลาไว้ 9 โมง กว่าจะเริ่มยิง GEE ก็ตอน 9 โมงพอดี ผลวิเคราะห์เลยมาถึง
+    ช้ากว่าที่ควร (ต้องรอ GEE คำนวณเสร็จก่อนถึงส่งได้จริง) ตอนนี้แยกสองขั้นตอนออกจากกัน:
+    "คำนวณ" ทำให้ทุกคนทุกรอบที่ trigger เข้ามา แต่ข้ามแปลงที่คำนวณไปแล้ววันนี้ (ดู
+    get_plot_analysis_since) ทำให้รอบแรกสุดของวัน (ปกติคือ 05:00 น.) คำนวณให้ทุกคน
+    รวดเดียว รอบถัดๆ ไปของคนอื่นแค่ "อ่าน" ผลที่มีอยู่แล้วมาส่ง ไม่ต้องรอ GEE อีกเลย —
+    ส่วน "ส่ง" (escalation/weekly-alert/digest) ยังกรองตาม notify_hour เหมือนเดิม
+    ทุกประการ ไม่เปลี่ยนพฤติกรรมฝั่งนี้เลย
     """
     logger.info(f"🕐 Daily scan started (hour={hour})")
 
@@ -112,17 +130,22 @@ async def daily_scan_job(hour: int | None = None):
     for r in all_reports:
         seen_users.add(r["user_id"])
 
+    # หา user ที่ notify_hour ตรงกับรอบนี้ — ใช้กรองแค่ขั้นตอน "ส่ง" ด้านล่าง
+    # (ขั้นตอน "คำนวณ" ทำให้ทุกคนเสมอ ไม่กรองด้วยตัวนี้ — ดู docstring ด้านบน)
+    hour_users: set[str] | None = None
     if hour is not None:
-        hour_users = await get_users_by_hour(hour)
-        if hour_users is not None:  # None = คอลัมน์ยังไม่มี (ยัง migrate ไม่เสร็จ) → ไม่กรอง
-            seen_users &= hour_users
+        hour_users = await get_users_by_hour(hour)  # None = คอลัมน์ยังไม่มี (ยัง migrate ไม่เสร็จ)
 
     notifiable   = await get_notifiable_users()
     digest_users = await get_digest_users()
-    counters = {"total_plots": 0, "alerted": 0, "escalated": 0, "digested": 0}
+    counters = {"computed": 0, "reused": 0, "alerted": 0, "escalated": 0, "digested": 0}
     semaphore = asyncio.Semaphore(GEE_CONCURRENCY)
+    day_start_utc = _bangkok_day_start_utc()
 
     async def _process_user(user_id: str):
+        # None หรือ hour_users เป็น None (คอลัมน์ยังไม่มี) = ไม่กรอง ส่งให้ทุกคน
+        should_notify = hour is None or hour_users is None or user_id in hour_users
+
         async with semaphore:
             try:
                 plots = await get_user_plots(user_id)
@@ -134,18 +157,39 @@ async def daily_scan_job(hour: int | None = None):
                 plot_summaries: list[dict] = []
 
                 for plot in plots:
-                    counters["total_plots"] += 1
                     lat = float(plot["lat"])
                     lng = float(plot["lng"])
                     plot_id = plot.get("id")
                     polygon = plot.get("polygon")
 
-                    # เรียกผ่าน threadpool กัน GEE call (blocking) ค้าง event loop ทั้งตัว
-                    # ระหว่างสแกน — เหมือน fix เดิมที่ทำกับ /analyze
-                    data    = await run_in_threadpool(analyze_durian_plot, lat, lng)
+                    # ── คำนวณ (ถ้ายังไม่เคยทำวันนี้) หรือใช้ผลที่มีอยู่แล้ว ──
+                    cached = await get_plot_analysis_since(plot_id, day_start_utc) if plot_id else None
+                    if cached is not None:
+                        data = cached
+                        counters["reused"] += 1
+                    else:
+                        # เรียกผ่าน threadpool กัน GEE call (blocking) ค้าง event loop
+                        # ทั้งตัวระหว่างสแกน — เหมือน fix เดิมที่ทำกับ /analyze
+                        data = await run_in_threadpool(analyze_durian_plot, lat, lng)
+                        await save_analysis(user_id, data, format_message(data, lat, lng),
+                                            plot_id=plot_id)
+                        counters["computed"] += 1
+
+                        # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ── เฉพาะแปลง
+                        # ที่วาดขอบเขตไว้ (polygon) เท่านั้น ถึงจะมีตาราง grid ให้เก็บ
+                        # แยก try/except ต่างหาก ไม่ให้ grid ล้มเหลวกระทบการแจ้งเตือน
+                        # เสี่ยงหลักของแปลงนี้ — ทำครั้งเดียวตอนคำนวณสด ไม่ทำซ้ำตอนอ่าน cache
+                        if polygon and plot_id and len(polygon) >= 3:
+                            try:
+                                points = await asyncio.wait_for(
+                                    run_in_threadpool(get_moisture_grid, polygon),
+                                    timeout=GRID_SNAPSHOT_TIMEOUT_S,
+                                )
+                                await save_grid_snapshot(plot_id, points)
+                            except Exception as e:
+                                logger.warning(f"Grid snapshot failed for plot {plot_id}: {e}")
+
                     message = format_message(data, lat, lng)
-                    await save_analysis(user_id, data, message,
-                                        plot_id=plot_id)
                     plot_summaries.append({
                         "name": plot.get("name") or "แปลงของคุณ",
                         "data": data,
@@ -156,20 +200,25 @@ async def daily_scan_job(hour: int | None = None):
                         "plot_id": plot_id,
                     })
 
-                    # ── จุดชื้นสะสม (สำหรับหาแนวโน้มทางน้ำใต้ผิวดิน) ──
-                    # เฉพาะแปลงที่วาดขอบเขตไว้ (polygon) เท่านั้น ถึงจะมีตาราง grid ให้เก็บ
-                    # แยก try/except ต่างหาก ไม่ให้ grid ล้มเหลวกระทบการแจ้งเตือนเสี่ยงหลักของแปลงนี้
-                    if polygon and plot_id and len(polygon) >= 3:
-                        try:
-                            points = await asyncio.wait_for(
-                                run_in_threadpool(get_moisture_grid, polygon),
-                                timeout=GRID_SNAPSHOT_TIMEOUT_S,
-                            )
-                            await save_grid_snapshot(plot_id, points)
-                        except Exception as e:
-                            logger.warning(f"Grid snapshot failed for plot {plot_id}: {e}")
+                    if not should_notify:
+                        continue  # ยังไม่ถึงเวลาแจ้งเตือนของ user คนนี้ในรอบนี้
 
                     if _is_high_risk(data) and user_id in notifiable:
+                        # ── รูปแผนที่ + จุดที่พบปัญหา (ถ้ามีขอบเขตแปลง) ── ผู้ใช้ขอ
+                        # "ทุกคนได้รับภาพในการแจ้งตอนเช้าทุกคน" — เดิมมีแค่สรุปประจำวัน
+                        # (opt-in, มีแค่ 1 ใน 8 คนเปิด) เท่านั้นที่แนบรูป escalation/
+                        # weekly-alert (ที่คนส่วนใหญ่ได้รับจริง) ไม่เคยแนบเลย คำนวณครั้ง
+                        # เดียวตรงนี้ใช้ร่วมกันทั้งสองแบบ (exclusive กันผ่าน continue
+                        # ด้านล่างอยู่แล้ว) แปลงที่ไม่มีขอบเขต (จุดเดียว) ยังไม่มีตาราง
+                        # ให้ทำรูปได้ — เป็นข้อจำกัดเดียวกับสรุปประจำวันเป๊ะ ไม่ใช่บั๊กใหม่
+                        alert_img_url = None
+                        alert_problem_points: list[dict] = []
+                        if polygon and len(polygon) >= 3:
+                            img_result = await build_plot_grid_image_url(
+                                polygon, plot.get("name") or "แปลงของคุณ", plot_id=plot_id)
+                            alert_img_url = img_result["url"]
+                            alert_problem_points = img_result["problem_points"]
+
                         # ── Check escalation: ติดต่อกัน ≥ ESCALATION_DAYS วัน ──
                         if plot_id:
                             recent = await get_recent_analyses(
@@ -179,9 +228,11 @@ async def daily_scan_job(hour: int | None = None):
                             if consec >= ESCALATION_DAYS:
                                 flex = build_escalation_flex(
                                     data, lat, lng, message, consec,
-                                    plot_name=plot.get("name") or ""
+                                    plot_name=plot.get("name") or "",
+                                    problem_points=alert_problem_points,
                                 )
-                                await send_line_message(user_id, message, flex=flex)
+                                await send_line_message(user_id, message, flex=flex,
+                                                        image_url=alert_img_url)
                                 counters["escalated"] += 1
                                 logger.warning(
                                     f"🚨 Escalation alert: {user_id} plot {plot_id} "
@@ -190,8 +241,9 @@ async def daily_scan_job(hour: int | None = None):
                                 continue
 
                         flex = build_weekly_alert_flex(data, lat, lng, message,
-                                                       plot_name=plot.get("name") or "")
-                        await send_line_message(user_id, message, flex=flex)
+                                                       plot_name=plot.get("name") or "",
+                                                       problem_points=alert_problem_points)
+                        await send_line_message(user_id, message, flex=flex, image_url=alert_img_url)
                         counters["alerted"] += 1
 
                 # ── สรุปแปลงประจำวัน — ส่งการ์ดเต็มรูปแบบ (เหมือนกดตรวจสอบแปลงเอง)
@@ -201,7 +253,7 @@ async def daily_scan_job(hour: int | None = None):
                 # แล้วตามด้วยการ์ดเต็ม + รูปของทุกแปลง ทีละใบเหมือนผลตรวจสอบปกติทุกประการ
                 # (ใช้ build_result_flex ตัวเดียวกับ /analyze ตรงๆ ไม่ทำการ์ดแยกใหม่ —
                 # กันสองจุดสร้างการ์ดหน้าตาต่างกันแล้วหลุดซิงก์กันในอนาคต)
-                if user_id in digest_users and plot_summaries:
+                if should_notify and user_id in digest_users and plot_summaries:
                     intro = build_daily_digest_message(plot_summaries)
                     await send_line_message(user_id, intro)
                     for p in plot_summaries:
@@ -239,8 +291,9 @@ async def daily_scan_job(hour: int | None = None):
     await asyncio.gather(*(_process_user(u) for u in seen_users))
 
     logger.info(
-        f"✅ Daily scan done — {len(seen_users)} users, "
-        f"{counters['total_plots']} plots scanned, {counters['alerted']} alerts sent, "
+        f"✅ Daily scan done (hour={hour}) — {len(seen_users)} users, "
+        f"{counters['computed']} plots freshly computed, {counters['reused']} reused "
+        f"from earlier today, {counters['alerted']} alerts sent, "
         f"{counters['escalated']} escalations, {counters['digested']} daily digests"
     )
 
@@ -373,6 +426,7 @@ async def rain_alert_job(hour: int | None = None):
                     lng     = float(plot["lng"])
                     name    = plot.get("name", "แปลงของคุณ")
                     plot_id = plot.get("id")
+                    polygon = plot.get("polygon")
 
                     forecast = await get_7day_rain(lat, lng)
 
@@ -398,13 +452,22 @@ async def rain_alert_job(hour: int | None = None):
                             )
 
                         if alert["should_notify"]:
+                            # ผู้ใช้ขอ "ทุกคนได้รับภาพในการแจ้งตอนเช้าทุกคน" — แนบรูป
+                            # แผนที่เหมือนกับที่ทำใน daily_scan_job (เฉพาะแปลงที่มี
+                            # ขอบเขต ถึงจะมีตารางจุดให้ทำรูปได้)
+                            rain_img_url = None
+                            if polygon and len(polygon) >= 3:
+                                img_result = await build_plot_grid_image_url(
+                                    polygon, name, plot_id=plot_id)
+                                rain_img_url = img_result["url"]
+
                             flex = build_combined_alert_flex(
                                 forecast, soil_risk, alert,
                                 lat, lng, plot_name=name)
                             msg = build_combined_alert_message(
                                 forecast, soil_risk, alert,
                                 lat, lng, plot_name=name)
-                            await send_line_message(user_id, msg, flex=flex)
+                            await send_line_message(user_id, msg, flex=flex, image_url=rain_img_url)
                             counters["combined_alerts"] += 1
                             logger.info(
                                 f"{alert['alert_title']} → {user_id} plot '{name}' "
@@ -415,11 +478,17 @@ async def rain_alert_job(hour: int | None = None):
                     else:
                         # ── Fallback: ไม่มีข้อมูลดิน → ใช้ rain-only alert ──
                         if forecast["is_heavy_rain"]:
+                            rain_img_url = None
+                            if polygon and len(polygon) >= 3:
+                                img_result = await build_plot_grid_image_url(
+                                    polygon, name, plot_id=plot_id)
+                                rain_img_url = img_result["url"]
+
                             flex = build_rain_alert_flex(
                                 forecast, lat, lng, plot_name=name)
                             msg = build_rain_alert_message(
                                 forecast, lat, lng, plot_name=name)
-                            await send_line_message(user_id, msg, flex=flex)
+                            await send_line_message(user_id, msg, flex=flex, image_url=rain_img_url)
                             counters["alerted"] += 1
                             logger.info(
                                 f"🌧️ Rain-only alert → {user_id} plot '{name}' "

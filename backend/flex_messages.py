@@ -822,9 +822,10 @@ def _build_topsoil_high_warning() -> list[dict]:
 
 
 def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str,
-                            plot_name: str = "") -> dict:
+                            plot_name: str = "", problem_points: list[dict] | None = None) -> dict:
     """Flex สำหรับแจ้งเตือนรายวัน — มี header สีส้มบอกว่าเป็น alert"""
-    base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name)
+    base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name,
+                             problem_points=problem_points)
     # Prepend alert banner ใน body
     base["altText"] = f"⚠️ แจ้งเตือนประจำวัน — {plot_name}" if plot_name else "⚠️ แจ้งเตือนประจำวัน — GEOai"
     base["contents"]["body"]["contents"].insert(0, {
@@ -844,12 +845,13 @@ def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str,
 
 def build_escalation_flex(data: dict, lat: float, lng: float,
                           plain_text: str, consecutive_days: int,
-                          plot_name: str = "") -> dict:
+                          plot_name: str = "", problem_points: list[dict] | None = None) -> dict:
     """
     Flex สำหรับ escalation alert — เสี่ยงสูงต่อเนื่อง 2+ วัน
     เน้นสีแดง + เตือนซ้ำรุนแรงขึ้น
     """
-    base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name)
+    base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name,
+                             problem_points=problem_points)
     banner_name = f" — {plot_name}" if plot_name else ""
     base["altText"] = f"🚨 แจ้งเตือนฉุกเฉิน{banner_name} — เสี่ยงสูงต่อเนื่อง {consecutive_days} วัน"
 

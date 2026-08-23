@@ -292,6 +292,40 @@ async def get_latest_report_by_plot(plot_id: int) -> dict | None:
     return _reconstruct_full_report(rows[0])
 
 
+async def get_plot_analysis_since(plot_id: int, since_iso: str) -> dict | None:
+    """
+    ดึงผลวิเคราะห์ของแปลงนี้ที่คำนวณไปแล้วตั้งแต่ since_iso (ISO timestamp, UTC) —
+    ใช้ตัดสินใจว่าต้องยิง GEE ใหม่มั้ย หรือมีผลที่คำนวณไปแล้ว "วันนี้" (ผู้เรียกส่ง
+    เวลาเที่ยงคืนตามเขตเวลาไทยของวันนี้มาเป็น since_iso) ให้ใช้ซ้ำได้เลย — ผู้ใช้ขอ
+    "เริ่มคำนวณตั้งแต่ตี 5 แล้วค่อยส่งตอน 6-7 โมง" (ดู scheduler.py::daily_scan_job)
+    คืน None ถ้ายังไม่เคยคำนวณตั้งแต่เวลานั้น (ต้องคำนวณใหม่)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/analyses",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "plot_id":     f"eq.{plot_id}",
+                "created_at":  f"gte.{since_iso}",
+                "order":       "created_at.desc",
+                "limit":       "1",
+                "select":      "*",
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.error(f"Supabase get_plot_analysis_since failed: {resp.status_code}")
+        return None
+
+    rows = resp.json()
+    if not rows:
+        return None
+    return _reconstruct_full_report(rows[0])
+
+
 def _reconstruct_full_report(row: dict) -> dict:
     """
     build_result_flex()/format_message() ต้องการ dict รูปแบบ nested เหมือนผลวิเคราะห์สด
