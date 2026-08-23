@@ -866,24 +866,30 @@ async def save_feedback(req: FieldObservation):
 
 
 @app.post("/admin/richmenu/setup", dependencies=[Depends(verify_admin)])
-async def setup_richmenu():
+async def setup_richmenu(test_user_id: str | None = None, publish_all: bool = False):
     """
-    สร้าง + อัปโหลดรูป + ตั้งเป็นเมนูเริ่มต้นให้ Rich Menu หลัก (ตั้งค่า/วาดแปลง/
-    ตรวจสอบ/ติดต่อเจ้าหน้าที่) ผ่าน LINE Messaging API ตรงๆ
+    สร้าง + อัปโหลดรูป Rich Menu หลัก (ตั้งค่า/วาดแปลง/ตรวจสอบ/ติดต่อเจ้าหน้าที่)
+    ผ่าน LINE Messaging API ตรงๆ — ใช้รูปจริงที่ผู้ใช้ออกแบบเอง (backend/assets/
+    richmenu_main.png, 919x624 — ขนาดตามไฟล์ที่ export มาจริง ไม่ upscale เพื่อ
+    กันภาพเบลอ) พิกัดพื้นที่กดทั้ง 4 วัดจากไฟล์จริงด้วย pixel analysis
+    (หาขอบกล่องขาวของแต่ละการ์ด) ไม่ใช่ค่ากะคร่าวๆ แล้ว
 
     เหตุผลที่ต้องยิง API เอง แทนที่จะใช้ LINE Official Account Manager (หน้าเว็บ):
     OA Manager ตั้ง action ต่อช่องได้แค่ "ลิงก์ / ข้อความ / คูปอง" เท่านั้น ไม่มี
     "postback" ให้เลือก — แต่ผู้ใช้ต้องการให้กด "ตั้งค่า"/"ตรวจสอบ" แล้วบอทตอบ
     ในแชททันที (ไม่เปิดเว็บ ไม่ต้องพิมพ์ข้อความเอง) ซึ่งทำได้เฉพาะด้วย postback
-    action จริง — ตั้งค่าแบบนี้ได้เฉพาะผ่าน API เท่านั้น
+    action จริง
 
-    ผัง 4 ช่อง (ตามดีไซน์ที่ผู้ใช้ทำ — hero+ตั้งค่าแถวบน, วาดแปลง/ตรวจสอบ/
-    ติดต่อเจ้าหน้าที่แถวล่าง) พิกัด x/y เป็นค่าประมาณจากภาพตัวอย่างที่ส่งมา
-    (สมมติ export ที่ 2500x1686px) — ถ้าพิกัดจริงต่างจากนี้ แก้ที่ตัวแปร AREAS
-    ด้านล่างแล้วเรียก endpoint นี้ซ้ำได้ (ริชเมนูเก่าจะไม่ถูกลบอัตโนมัติ ต้องไปลบ
-    เองใน OA Manager หรือยิง DELETE /v2/bot/richmenu/{id} ถ้าไม่ต้องการอันเก่าซ้อน)
+    ค่าเริ่มต้น "ไม่กระทบผู้ใช้จริงคนไหนเลย": สร้าง+อัปโหลดริชเมนูไว้เฉยๆ
+    (ยังไม่ผูกกับใคร) ต้องส่งพารามิเตอร์อย่างใดอย่างหนึ่งเพิ่มถึงจะมีผล:
+      - test_user_id=<LINE userId>  → ผูกกับบัญชีเดียวนั้นเพื่อทดสอบ
+        (ไม่กระทบผู้ใช้คนอื่น) ใช้ POST /v2/bot/user/{userId}/richmenu/{id}
+      - publish_all=true            → ตั้งเป็นเมนูเริ่มต้นให้ผู้ใช้จริงทุกคนทันที
+        (แทนที่เมนูเดิมของทุกคน) — ใช้เมื่อพร้อมเผยแพร่จริงเท่านั้น
 
-    รันครั้งเดียวพอ ไม่ต้องรันซ้ำถ้าไม่ได้แก้ผัง/action
+    เรียกซ้ำได้เรื่อยๆ ตอนแก้ดีไซน์ — ริชเมนูเก่าจะไม่ถูกลบอัตโนมัติ (สร้างใหม่
+    ทุกครั้ง) ถ้าไม่ต้องการอันเก่าซ้อนให้ลบเองใน OA Manager หรือยิง
+    DELETE /v2/bot/richmenu/{id}
     """
     import httpx as _httpx
 
@@ -899,30 +905,32 @@ async def setup_richmenu():
     if not image_path.exists():
         raise HTTPException(status_code=500, detail=f"ไม่พบรูปเมนูที่ {image_path}")
 
+    # พิกัดวัดจากไฟล์จริง (919x624) ด้วย connected-component analysis หา bbox
+    # ของกล่องขาวแต่ละใบ — ดู scratchpad/gen_richmenu.py ไม่เกี่ยว, ทำแยกครั้งเดียว
     AREAS = [
         {  # ขวาบน — ตั้งค่า
-            "bounds": {"x": 1725, "y": 0, "width": 775, "height": 927},
+            "bounds": {"x": 636, "y": 30, "width": 908 - 636, "height": 312 - 30},
             "action": {"type": "postback", "label": "ตั้งค่า", "data": "action=settings",
                        "displayText": "⚙️ เมนูตั้งค่าการแจ้งเตือน"},
         },
         {  # ล่างซ้าย — วาดแปลง
-            "bounds": {"x": 0, "y": 927, "width": 833, "height": 759},
+            "bounds": {"x": 18, "y": 327, "width": 288 - 18, "height": 610 - 327},
             "action": {"type": "uri", "label": "วาดแปลง", "uri": f"{liff_url}?tab=new-plot"},
         },
         {  # ล่างกลาง — ตรวจสอบ
-            "bounds": {"x": 833, "y": 927, "width": 834, "height": 759},
+            "bounds": {"x": 327, "y": 327, "width": 598 - 327, "height": 609 - 327},
             "action": {"type": "postback", "label": "ตรวจสอบ", "data": "action=history",
                        "displayText": "📋 แปลงของฉัน"},
         },
         {  # ล่างขวา — ติดต่อเจ้าหน้าที่
-            "bounds": {"x": 1667, "y": 927, "width": 833, "height": 759},
+            "bounds": {"x": 636, "y": 329, "width": 908 - 636, "height": 610 - 329},
             "action": {"type": "uri", "label": "ติดต่อเจ้าหน้าที่", "uri": "tel:0829151870"},
         },
     ]
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body = {
-        "size": {"width": 2500, "height": 1686},
+        "size": {"width": 919, "height": 624},
         "selected": True,
         "name": "IAM ROOT เมนูหลัก",
         "chatBarText": "เมนู",
@@ -945,16 +953,28 @@ async def setup_richmenu():
             raise HTTPException(status_code=502,
                                 detail=f"upload image failed: {r2.status_code} {r2.text[:300]} (richMenuId={rich_menu_id} — ลบทิ้งเองถ้าจำเป็น)")
 
-        r3 = await client.post(
-            f"https://api.line.me/v2/bot/user/all/richmenu/{rich_menu_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        if r3.status_code != 200:
-            raise HTTPException(status_code=502,
-                                detail=f"set default failed: {r3.status_code} {r3.text[:300]} (richMenuId={rich_menu_id})")
+        linked_to = None
+        if test_user_id:
+            r3 = await client.post(
+                f"https://api.line.me/v2/bot/user/{test_user_id}/richmenu/{rich_menu_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if r3.status_code != 200:
+                raise HTTPException(status_code=502,
+                                    detail=f"link to test user failed: {r3.status_code} {r3.text[:300]} (richMenuId={rich_menu_id})")
+            linked_to = f"test_user:{test_user_id}"
+        elif publish_all:
+            r3 = await client.post(
+                f"https://api.line.me/v2/bot/user/all/richmenu/{rich_menu_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if r3.status_code != 200:
+                raise HTTPException(status_code=502,
+                                    detail=f"set default failed: {r3.status_code} {r3.text[:300]} (richMenuId={rich_menu_id})")
+            linked_to = "all_users"
 
-    logger.info(f"Rich menu created & published: {rich_menu_id}")
-    return {"status": "ok", "richMenuId": rich_menu_id}
+    logger.info(f"Rich menu created: {rich_menu_id} (linked_to={linked_to})")
+    return {"status": "ok", "richMenuId": rich_menu_id, "linked_to": linked_to}
 
 
 # ── Static file mounts (MUST be after all API routes) ────
