@@ -865,6 +865,98 @@ async def save_feedback(req: FieldObservation):
     return {"status": "ok", "observation_id": obs_id, "plot_id": req.plot_id}
 
 
+@app.post("/admin/richmenu/setup", dependencies=[Depends(verify_admin)])
+async def setup_richmenu():
+    """
+    สร้าง + อัปโหลดรูป + ตั้งเป็นเมนูเริ่มต้นให้ Rich Menu หลัก (ตั้งค่า/วาดแปลง/
+    ตรวจสอบ/ติดต่อเจ้าหน้าที่) ผ่าน LINE Messaging API ตรงๆ
+
+    เหตุผลที่ต้องยิง API เอง แทนที่จะใช้ LINE Official Account Manager (หน้าเว็บ):
+    OA Manager ตั้ง action ต่อช่องได้แค่ "ลิงก์ / ข้อความ / คูปอง" เท่านั้น ไม่มี
+    "postback" ให้เลือก — แต่ผู้ใช้ต้องการให้กด "ตั้งค่า"/"ตรวจสอบ" แล้วบอทตอบ
+    ในแชททันที (ไม่เปิดเว็บ ไม่ต้องพิมพ์ข้อความเอง) ซึ่งทำได้เฉพาะด้วย postback
+    action จริง — ตั้งค่าแบบนี้ได้เฉพาะผ่าน API เท่านั้น
+
+    ผัง 4 ช่อง (ตามดีไซน์ที่ผู้ใช้ทำ — hero+ตั้งค่าแถวบน, วาดแปลง/ตรวจสอบ/
+    ติดต่อเจ้าหน้าที่แถวล่าง) พิกัด x/y เป็นค่าประมาณจากภาพตัวอย่างที่ส่งมา
+    (สมมติ export ที่ 2500x1686px) — ถ้าพิกัดจริงต่างจากนี้ แก้ที่ตัวแปร AREAS
+    ด้านล่างแล้วเรียก endpoint นี้ซ้ำได้ (ริชเมนูเก่าจะไม่ถูกลบอัตโนมัติ ต้องไปลบ
+    เองใน OA Manager หรือยิง DELETE /v2/bot/richmenu/{id} ถ้าไม่ต้องการอันเก่าซ้อน)
+
+    รันครั้งเดียวพอ ไม่ต้องรันซ้ำถ้าไม่ได้แก้ผัง/action
+    """
+    import httpx as _httpx
+
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=503, detail="LINE_CHANNEL_ACCESS_TOKEN not set")
+
+    liff_url = os.environ.get("LIFF_URL") or "https://liff.line.me/2010580115-di08GvXS"
+
+    image_path = _BASE_DIR / "backend" / "assets" / "richmenu_main.png"
+    if not image_path.exists():
+        image_path = Path(__file__).resolve().parent / "assets" / "richmenu_main.png"
+    if not image_path.exists():
+        raise HTTPException(status_code=500, detail=f"ไม่พบรูปเมนูที่ {image_path}")
+
+    AREAS = [
+        {  # ขวาบน — ตั้งค่า
+            "bounds": {"x": 1725, "y": 0, "width": 775, "height": 927},
+            "action": {"type": "postback", "label": "ตั้งค่า", "data": "action=settings",
+                       "displayText": "⚙️ เมนูตั้งค่าการแจ้งเตือน"},
+        },
+        {  # ล่างซ้าย — วาดแปลง
+            "bounds": {"x": 0, "y": 927, "width": 833, "height": 759},
+            "action": {"type": "uri", "label": "วาดแปลง", "uri": f"{liff_url}?tab=new-plot"},
+        },
+        {  # ล่างกลาง — ตรวจสอบ
+            "bounds": {"x": 833, "y": 927, "width": 834, "height": 759},
+            "action": {"type": "postback", "label": "ตรวจสอบ", "data": "action=history",
+                       "displayText": "📋 แปลงของฉัน"},
+        },
+        {  # ล่างขวา — ติดต่อเจ้าหน้าที่
+            "bounds": {"x": 1667, "y": 927, "width": 833, "height": 759},
+            "action": {"type": "uri", "label": "ติดต่อเจ้าหน้าที่", "uri": "tel:0829151870"},
+        },
+    ]
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {
+        "size": {"width": 2500, "height": 1686},
+        "selected": True,
+        "name": "IAM ROOT เมนูหลัก",
+        "chatBarText": "เมนู",
+        "areas": AREAS,
+    }
+
+    async with _httpx.AsyncClient(timeout=30) as client:
+        r = await client.post("https://api.line.me/v2/bot/richmenu", headers=headers, json=body)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502,
+                                detail=f"create richmenu failed: {r.status_code} {r.text[:300]}")
+        rich_menu_id = r.json()["richMenuId"]
+
+        r2 = await client.post(
+            f"https://api-data.line.me/v2/bot/richmenu/{rich_menu_id}/content",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "image/png"},
+            content=image_path.read_bytes(),
+        )
+        if r2.status_code != 200:
+            raise HTTPException(status_code=502,
+                                detail=f"upload image failed: {r2.status_code} {r2.text[:300]} (richMenuId={rich_menu_id} — ลบทิ้งเองถ้าจำเป็น)")
+
+        r3 = await client.post(
+            f"https://api.line.me/v2/bot/user/all/richmenu/{rich_menu_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if r3.status_code != 200:
+            raise HTTPException(status_code=502,
+                                detail=f"set default failed: {r3.status_code} {r3.text[:300]} (richMenuId={rich_menu_id})")
+
+    logger.info(f"Rich menu created & published: {rich_menu_id}")
+    return {"status": "ok", "richMenuId": rich_menu_id}
+
+
 # ── Static file mounts (MUST be after all API routes) ────
 app.mount("/liff", StaticFiles(directory=str(_BASE_DIR / "liff"), html=True), name="liff")
 app.mount("/dashboard", StaticFiles(directory=str(_BASE_DIR / "dashboard"), html=True), name="dashboard")
