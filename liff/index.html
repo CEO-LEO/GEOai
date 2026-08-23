@@ -90,6 +90,15 @@
     .plot-coords { font-size: 11.5px; color: var(--soft); margin-top: 3px; }
     .plot-area { font-size: 11.5px; color: var(--green); font-weight:600; margin-top: 2px; }
     .plot-created { font-size: 11.5px; color: var(--soft); margin-top: 2px; }
+    /* v2 (ผู้ใช้ขอ "บอกความสดของข้อมูล"): ระบบคำนวณล่วงหน้าตั้งแต่ตี 5 แล้วใช้ซ้ำ
+       ได้ทั้งวัน (compute-early, ดู scheduler.py::daily_scan_job) — การ์ดเดิม
+       ไม่บอกผู้ใช้เลยว่าตรวจเมื่อไหร่ ป้ายนี้บอกให้ชัด + เปลี่ยนสีถ้าเก่าเกิน 1 วัน */
+    .fresh-badge {
+      display: inline-flex; align-items: center; gap: 4px; margin-top: 4px;
+      font-size: 11px; font-weight: 600; color: #2e7d32; background: #e8f5e9;
+      padding: 2px 8px; border-radius: 999px;
+    }
+    .fresh-badge.stale { color: #e65100; background: #fff3e0; }
     .plot-check-btn {
       background: var(--line-green); color: white; border: none;
       padding: 9px 15px; border-radius: 11px; font-size: 13.5px;
@@ -123,6 +132,16 @@
       display: none; font-size: 14px; line-height: 1.7;
     }
     #no-plots .emoji { font-size: 54px; display: block; margin-bottom: 14px; }
+    /* v2 (ผู้ใช้ขอ "ปุ่มลัดตรงจุด"): เดิมมีแค่ข้อความบอกให้ไปกดแท็บเอง —
+       เพิ่มปุ่มกดสลับแท็บให้ตรงนั้นเลย ลดขั้นตอนเหลือแตะเดียว */
+    #no-plots-cta {
+      display: inline-block; margin-top: 6px;
+      background: linear-gradient(135deg, #07d95e, var(--line-green)); color: #fff;
+      font-size: 13.5px; font-weight: 700; padding: 12px 22px; border-radius: 12px;
+      box-shadow: 0 4px 14px rgba(6,199,85,.34); border: none; cursor: pointer;
+      font-family: inherit;
+    }
+    #no-plots-cta:active { transform: scale(.97); }
 
     /* ── New plot panel ── */
     #map { flex: 1; min-height: 0; }
@@ -446,7 +465,7 @@
     <div id="no-plots">
       <span class="emoji">🌱</span>
       ยังไม่มีแปลงที่บันทึกไว้<br>
-      กด "เพิ่มแปลงใหม่" เพื่อเริ่มต้น
+      <button type="button" id="no-plots-cta">➕ เพิ่มแปลงใหม่</button>
     </div>
     <div id="plot-list"></div>
   </div>
@@ -648,15 +667,24 @@
     }
   }
 
+  // สลับไปแท็บ "เพิ่มแปลงใหม่" + เช็คป๊อปอัพสอน — แยกเป็นฟังก์ชันเดียวใช้ร่วมกัน
+  // ทั้งปุ่มแท็บด้านบนและปุ่มลัดใน #no-plots (ผู้ใช้ขอ "ปุ่มลัดตรงจุด")
+  function goToNewPlotTab() {
+    switchTab("new-plot");
+    // เช็คตรงนี้ (ไม่ใช่ใน switchTab เอง) เพราะ switchTab ยังถูกเรียกตอน init
+    // เพื่อ warm-up ขนาดแผนที่ชั่วคราวด้วย (สลับไปแล้วสลับกลับใน 500ms) — ถ้าเช็ค
+    // ในนั้นป๊อปอัพจะโผล่วาบแล้วหายไปเองโดยผู้ใช้ไม่ได้ตั้งใจเปิดแท็บนี้จริงๆ
+    maybeShowTutorial();
+  }
+
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
-      switchTab(tab.dataset.tab);
-      // เช็คตรงนี้ (ไม่ใช่ใน switchTab เอง) เพราะ switchTab ยังถูกเรียกตอน init
-      // เพื่อ warm-up ขนาดแผนที่ชั่วคราวด้วย (สลับไปแล้วสลับกลับใน 500ms) — ถ้าเช็ค
-      // ในนั้นป๊อปอัพจะโผล่วาบแล้วหายไปเองโดยผู้ใช้ไม่ได้ตั้งใจเปิดแท็บนี้จริงๆ
-      if (tab.dataset.tab === "new-plot") maybeShowTutorial();
+      if (tab.dataset.tab === "new-plot") { goToNewPlotTab(); }
+      else { switchTab(tab.dataset.tab); }
     });
   });
+
+  document.getElementById("no-plots-cta").addEventListener("click", goToNewPlotTab);
 
   // ─── ป๊อปอัพสอนวิธีวาดแปลง (ครั้งแรกที่ใช้งานเท่านั้น) ──────────
   // ผู้ใช้ขอ "เอาข้อความสอนออกจากแถบพิกัดถาวร ย้ายไปเป็นป๊อปอัพครั้งแรก กดปุ่ม ?
@@ -697,6 +725,21 @@
     return `<div class="plot-created">🕐 สร้างเมื่อ ${text}</div>`;
   }
 
+  function formatFreshness(analyzedAt) {
+    if (!analyzedAt) return "";
+    const d = new Date(analyzedAt);
+    if (isNaN(d)) return "";
+    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (mins < 0) return "";
+    let text;
+    if (mins < 1) text = "เมื่อสักครู่";
+    else if (mins < 60) text = `${mins} นาทีที่แล้ว`;
+    else if (mins < 1440) text = `${Math.floor(mins / 60)} ชม.ที่แล้ว`;
+    else text = `${Math.floor(mins / 1440)} วันที่แล้ว`;
+    const stale = mins >= 1440;  // เก่ากว่า 1 วัน — เตือนด้วยสีส้มแทนเขียว
+    return `<div class="fresh-badge${stale ? " stale" : ""}">${stale ? "🕐" : "🟢"} อัปเดต ${text}</div>`;
+  }
+
   // ─── Load user plots ──────────────────────────────
   async function loadUserPlots() {
     try {
@@ -731,6 +774,7 @@
         ${thumbHtml}
         <div class="plot-info">
           <div class="plot-name">${escHtml(plot.name || "แปลงที่ไม่มีชื่อ")}</div>
+          ${formatFreshness(plot.latest_analyzed_at)}
           <div class="plot-coords">📍 ${plot.lat.toFixed(4)}, ${plot.lng.toFixed(4)}</div>
           ${plot.area_rai ? `<div class="plot-area">📐 ${plot.area_rai} ไร่</div>` : ""}
           ${formatPlotCreated(plot.created_at)}
@@ -859,17 +903,30 @@
     document.head.appendChild(script);
   }
 
+  // v2 (ผู้ใช้ขอ "สีขอบเขตตามความเสี่ยง"): เดิมทุกแปลงในแผนที่ใช้สีเขียวเดียวกัน
+  // หมด ไม่ว่าจะเสี่ยงหรือไม่ — สีตรงนี้ต้องตรงกับ _COLORS ใน flex_messages.py
+  // เป๊ะ (high/medium/ok) ให้สื่อความหมายเดียวกันทั้งในแชทและในแผนที่
+  const RISK_FILL_LINE = {
+    high:   { line: "rgba(198, 40, 40, 0.9)", fill: "rgba(198, 40, 40, 0.15)" },
+    medium: { line: "rgba(230, 81, 0, 0.9)",  fill: "rgba(230, 81, 0, 0.15)" },
+    ok:     { line: "rgba(26, 122, 60, 0.9)", fill: "rgba(26, 122, 60, 0.15)" },
+  };
+  const RISK_HEX = { high: "#C62828", medium: "#E65100", ok: "#1a7a3c" };
+  function riskStyle(level) { return RISK_FILL_LINE[level] || RISK_FILL_LINE.ok; }
+  function riskHex(level)   { return RISK_HEX[level] || RISK_HEX.ok; }
+
   function addPlotOverlays() {
     plotOverlays.forEach(o => { try { map.Overlays.remove(o); } catch {} });
     plotOverlays = [];
 
     userPlots.forEach(p => {
+      const style = riskStyle(p.latest_risk_level);
       if (p.polygon && p.polygon.length >= 3) {
         const locs = p.polygon.map(c => ({ lon: c[0], lat: c[1] }));
         const poly = new sphere.Polygon(locs, {
           lineWidth: 2,
-          lineColor: "rgba(26, 122, 60, 0.9)",
-          fillColor: "rgba(26, 122, 60, 0.15)",
+          lineColor: style.line,
+          fillColor: style.fill,
           label: p.name || "แปลง"
         });
         map.Overlays.add(poly);
@@ -877,7 +934,7 @@
       } else {
         const mk = new sphere.Marker(
           { lon: p.lng, lat: p.lat },
-          { title: p.name || "แปลง", detail: `📐 ${p.area_rai || '-'} ไร่`, color: "#1a7a3c" }
+          { title: p.name || "แปลง", detail: `📐 ${p.area_rai || '-'} ไร่`, color: riskHex(p.latest_risk_level) }
         );
         map.Overlays.add(mk);
         plotOverlays.push(mk);

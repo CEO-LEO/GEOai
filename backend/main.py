@@ -49,7 +49,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       delete_plot, find_nearby_plot, seed_demo_data,
                       upsert_user, save_iot_reading, get_plot_by_id,
                       save_field_observation, get_persistent_wet_points,
-                      set_notify_digest)
+                      set_notify_digest, get_latest_risk_by_plots, get_user)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware
@@ -621,8 +621,18 @@ async def admin_plot_detail(lat: float, lng: float, months: int = 24):
 
 @app.get("/plots/{user_id}")
 async def list_plots(user_id: str):
-    """ดึงแปลงทั้งหมดของเกษตรกร"""
+    """
+    ดึงแปลงทั้งหมดของเกษตรกร — เติม latest_risk_level/latest_analyzed_at ต่อแปลง
+    (ผู้ใช้ขอ: ป้ายความสดของข้อมูลบนการ์ด + ย้อมสีขอบเขตแปลงบนแผนที่ตามความเสี่ยง)
+    ยิง query เดียวรวมทุกแปลง ไม่วนยิงทีละแปลง (ดู get_latest_risk_by_plots)
+    """
     plots = await get_user_plots(user_id)
+    plot_ids = [p["id"] for p in plots if p.get("id") is not None]
+    risk_by_plot = await get_latest_risk_by_plots(plot_ids)
+    for p in plots:
+        info = risk_by_plot.get(p.get("id"))
+        p["latest_risk_level"] = info["risk_level"] if info else None
+        p["latest_analyzed_at"] = info["analyzed_at"] if info else None
     return {"count": len(plots), "plots": plots}
 
 

@@ -19,7 +19,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from database import (get_latest_report_by_plot, get_user_plots,
                       upsert_user, set_notify, set_notify_digest,
-                      set_notify_hour, PRESET_NOTIFY_HOURS)
+                      set_notify_hour, PRESET_NOTIFY_HOURS, get_user)
 from flex_messages import build_result_flex
 
 logger = logging.getLogger(__name__)
@@ -242,7 +242,16 @@ async def _handle_postback(event: dict):
                 await send_line_message(user_id, caption, image_url=result["url"])
 
     elif data == "action=settings":
-        await _reply(reply_token, [_settings_menu()])
+        # _safe() คืนแค่ True/False (ไม่ใช่ผลลัพธ์จริง) — ตรงนี้ต้องการ dict ผู้ใช้
+        # จริงมาสร้างกล่องสรุป เลย try/except เองแทน ไม่ใช้ _safe (เหมือนที่
+        # action=history ทำกับ get_user_plots ด้านบน) — พังก็ตกกลับไปไม่โชว์กล่อง
+        # สรุป (_settings_menu(None)) ไม่ทำให้ทั้งเมนูพังไปด้วย
+        try:
+            user = await get_user(user_id)
+        except Exception:
+            logger.exception("get_user failed for settings menu")
+            user = None
+        await _reply(reply_token, [_settings_menu(user)])
 
     elif data == "action=notify_on":
         ok = await _safe(set_notify, user_id, True)
@@ -409,7 +418,86 @@ def _liff_button() -> dict:
     }
 
 
-def _settings_menu() -> dict:
+def _settings_menu(user: dict | None = None) -> dict:
+    """
+    user (ถ้ามี — ดึงจาก database.get_user ก่อนเรียก): ใช้สร้างกล่องสรุป
+    "ตอนนี้ของคุณ" ไว้บนสุด (ผู้ใช้ขอ "เดิมมีแต่คำอธิบายทั่วไป ไม่บอกค่าที่ตั้งไว้
+    จริง") — ไม่ส่งมา (เช่น query DB ไม่สำเร็จ) จะไม่โชว์กล่องนี้ ไม่ใช่ error
+    """
+    body_contents = []
+    if user:
+        hour = user.get("notify_hour") or 7
+        risk_on   = user.get("notify_weekly", True)
+        digest_on = user.get("notify_daily_digest", False)
+        summary_line = (
+            f"⏰ {hour:02d}:00 น.  ·  แจ้งเฉพาะเสี่ยง {'เปิดอยู่ ✅' if risk_on else 'ปิดอยู่'}"
+            f"  ·  สรุปรายวัน {'เปิดอยู่ ✅' if digest_on else 'ปิดอยู่'}"
+        )
+        body_contents.append({
+            "type": "box", "layout": "vertical",
+            "backgroundColor": "#eef9f1", "cornerRadius": "8px", "paddingAll": "10px",
+            "contents": [
+                {"type": "text", "text": "ตอนนี้ของคุณ",
+                 "size": "xs", "weight": "bold", "color": "#1a7a3c"},
+                {"type": "text", "text": summary_line,
+                 "size": "xs", "weight": "bold", "color": "#14532d",
+                 "wrap": True, "margin": "xs"},
+            ],
+        })
+        body_contents.append({"type": "separator", "margin": "lg"})
+
+    body_contents += [
+        {
+            "type": "text",
+            "text": "🔔 แจ้งเตือนเฉพาะตอนเสี่ยง",
+            "weight": "bold",
+            "size": "sm",
+            "color": "#333333"
+        },
+        {
+            "type": "text",
+            "text": "ระบบสแกนแปลงของคุณตามเวลาที่ตั้งไว้ (ค่าเริ่มต้น 07:00 น.)\n— ส่งข้อความเฉพาะเมื่อพบความเสี่ยงหรือฝนหนักกำลังจะมา",
+            "wrap": True,
+            "size": "sm",
+            "color": "#666666",
+            "margin": "sm"
+        },
+        {"type": "separator", "margin": "lg"},
+        {
+            "type": "text",
+            "text": "📋 สรุปแปลงประจำวัน",
+            "weight": "bold",
+            "size": "sm",
+            "color": "#333333",
+            "margin": "lg"
+        },
+        {
+            "type": "text",
+            "text": "สรุปสถานะทุกแปลงของคุณตามเวลาที่ตั้งไว้\nไม่ว่าจะเสี่ยงหรือไม่ก็ได้รับทุกวัน",
+            "wrap": True,
+            "size": "sm",
+            "color": "#666666",
+            "margin": "sm"
+        },
+        {"type": "separator", "margin": "lg"},
+        {
+            "type": "text",
+            "text": "⏰ เวลาแจ้งเตือน",
+            "weight": "bold",
+            "size": "sm",
+            "color": "#333333",
+            "margin": "lg"
+        },
+        {
+            "type": "text",
+            "text": "ใช้เวลาเดียวกันทั้งสองแบบด้านบน — เลือกได้ที่ปุ่ม\n\"⏰ ตั้งเวลาแจ้งเตือน\" ด้านล่าง",
+            "wrap": True,
+            "size": "sm",
+            "color": "#666666",
+            "margin": "sm"
+        }
+    ]
+
     return {
         "type": "flex",
         "altText": "⚙️ ตั้งค่าการแจ้งเตือน GEOai",
@@ -432,57 +520,8 @@ def _settings_menu() -> dict:
                 "type": "box",
                 "layout": "vertical",
                 "paddingAll": "14px",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": "🔔 แจ้งเตือนเฉพาะตอนเสี่ยง",
-                        "weight": "bold",
-                        "size": "sm",
-                        "color": "#333333"
-                    },
-                    {
-                        "type": "text",
-                        "text": "ระบบสแกนแปลงของคุณตามเวลาที่ตั้งไว้ (ค่าเริ่มต้น 07:00 น.)\n— ส่งข้อความเฉพาะเมื่อพบความเสี่ยงหรือฝนหนักกำลังจะมา",
-                        "wrap": True,
-                        "size": "sm",
-                        "color": "#666666",
-                        "margin": "sm"
-                    },
-                    {"type": "separator", "margin": "lg"},
-                    {
-                        "type": "text",
-                        "text": "📋 สรุปแปลงประจำวัน",
-                        "weight": "bold",
-                        "size": "sm",
-                        "color": "#333333",
-                        "margin": "lg"
-                    },
-                    {
-                        "type": "text",
-                        "text": "สรุปสถานะทุกแปลงของคุณตามเวลาที่ตั้งไว้\nไม่ว่าจะเสี่ยงหรือไม่ก็ได้รับทุกวัน",
-                        "wrap": True,
-                        "size": "sm",
-                        "color": "#666666",
-                        "margin": "sm"
-                    },
-                    {"type": "separator", "margin": "lg"},
-                    {
-                        "type": "text",
-                        "text": "⏰ เวลาแจ้งเตือน",
-                        "weight": "bold",
-                        "size": "sm",
-                        "color": "#333333",
-                        "margin": "lg"
-                    },
-                    {
-                        "type": "text",
-                        "text": "ใช้เวลาเดียวกันทั้งสองแบบด้านบน — เลือกได้ที่ปุ่ม\n\"⏰ ตั้งเวลาแจ้งเตือน\" ด้านล่าง",
-                        "wrap": True,
-                        "size": "sm",
-                        "color": "#666666",
-                        "margin": "sm"
-                    }
-                ]
+                "spacing": "none",
+                "contents": body_contents
             },
             "footer": {
                 "type": "box",

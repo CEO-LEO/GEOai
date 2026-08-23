@@ -29,6 +29,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from rule_engine import compute_risk_level
+
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -166,7 +168,15 @@ async def save_analysis(user_id: str, data: dict, message: str,
         "elevation":        data["elevation"],
         "elevation_diff":   data["elevation_diff"],
         "bsi_score":        data.get("bsi"),
-        "risk_level":       data.get("topsoil_risk_level"),
+        # บั๊กที่เจอระหว่างทำฟีเจอร์สีขอบเขตแปลงตามความเสี่ยง (LIFF map): เดิมใช้
+        # topsoil_risk_level (ความเสี่ยงเฉพาะหน้าดินโล่ง, ค่าดีคือ "low") มาเก็บใน
+        # คอลัมน์ risk_level ทั้งที่ทุกจุดอื่น (การ์ด LINE, LIFF history modal,
+        # scheduler) คาดหวัง overall_risk_level (ความเสี่ยงรวมทั้งแปลง ค่าดีคือ
+        # "ok") ตามที่ rule_engine.compute_risk_level() ระบุไว้ — ทำให้ history
+        # modal ใน LIFF โชว์สีป้ายผิด (ไล่สีตามหน้าดินโล่ง ไม่ใช่ความเสี่ยงรวมจริง)
+        # มาตลอด แก้ให้ตรงคอลัมน์แล้ว (ข้อมูลเก่าที่บันทึกไปแล้วยังผิดอยู่ ต้อง
+        # backfill แยกถ้าต้องการ)
+        "risk_level":       data.get("overall_risk_level") or compute_risk_level(data),
         "predicted_yield_kg_per_rai": data.get("predicted_yield_kg_per_rai"),
         "message":          message,
         "created_at":       datetime.now(timezone.utc).isoformat(),
@@ -326,6 +336,43 @@ async def get_plot_analysis_since(plot_id: int, since_iso: str) -> dict | None:
     return _reconstruct_full_report(rows[0])
 
 
+async def get_latest_risk_by_plots(plot_ids: list[int]) -> dict[int, dict]:
+    """
+    ดึง risk_level + เวลาที่วิเคราะห์ล่าสุดของหลายแปลงพร้อมกันในคำขอเดียว (ไม่ใช่
+    วนยิงทีละแปลง) — ใช้เติมข้อมูลให้ /plots/{user_id} สำหรับ:
+      - ป้าย "อัปเดตล่าสุด X ชม.ที่แล้ว" บนการ์ดแปลงใน LIFF
+      - ย้อมสีขอบเขตแปลงบนแผนที่ตามระดับเสี่ยง (แดง/ส้ม/เขียว)
+    คืน {plot_id: {"risk_level": ..., "analyzed_at": ...}} เฉพาะแปลงที่มีผลวิเคราะห์
+    แล้วเท่านั้น (แปลงที่ยังไม่เคยวิเคราะห์จะไม่มี key นี้)
+    """
+    if not plot_ids or not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+
+    ids_csv = ",".join(str(pid) for pid in plot_ids)
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/analyses",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "plot_id": f"in.({ids_csv})",
+                "order":   "created_at.desc",
+                "select":  "plot_id,risk_level,created_at",
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.error(f"Supabase get_latest_risk_by_plots failed: {resp.status_code}")
+        return {}
+
+    result: dict[int, dict] = {}
+    for row in resp.json():
+        pid = row.get("plot_id")
+        # เรียง created_at.desc มาแล้ว — เจอ plot_id ครั้งแรกคือแถวล่าสุดของแปลงนั้น
+        if pid is not None and pid not in result:
+            result[pid] = {"risk_level": row.get("risk_level"), "analyzed_at": row.get("created_at")}
+    return result
+
+
 def _reconstruct_full_report(row: dict) -> dict:
     """
     build_result_flex()/format_message() ต้องการ dict รูปแบบ nested เหมือนผลวิเคราะห์สด
@@ -391,6 +438,30 @@ async def upsert_user(user_id: str, display_name: str = "") -> None:
 
     if resp.status_code not in (200, 201):
         logger.error(f"Supabase upsert user failed: {resp.status_code} — {resp.text}")
+
+
+async def get_user(user_id: str) -> dict | None:
+    """
+    ดึงข้อมูล user แถวเดียว (notify_hour/notify_daily_digest/notify_weekly ฯลฯ) —
+    ใช้โชว์ "ตอนนี้ของคุณ: ..." สรุปการตั้งค่าจริงบนการ์ด ⚙️ ตั้งค่าการแจ้งเตือน
+    (ผู้ใช้ขอ — เดิมการ์ดนั้นมีแต่คำอธิบายทั่วไป ไม่บอกค่าที่ตั้งไว้จริง)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/users",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={"user_id": f"eq.{user_id}", "select": "*", "limit": "1"},
+        )
+
+    if resp.status_code != 200:
+        logger.error(f"Supabase get_user failed: {resp.status_code}")
+        return None
+
+    rows = resp.json()
+    return rows[0] if rows else None
 
 
 async def find_nearby_plot(user_id: str, lat: float, lng: float,
