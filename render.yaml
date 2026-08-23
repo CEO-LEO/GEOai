@@ -2,7 +2,9 @@ services:
   - type: web
     name: geoai
     runtime: python
-    plan: free
+    plan: starter  # อัพเกรดจาก free เป็น always-on แล้ว (2026-08-23) — เหมือนกับ
+    # buildCommand ด้านล่าง ค่านี้อาจไม่ synced กับที่ตั้งจริงใน Dashboard เช่นกัน
+    # (Settings → Instance Type) แก้ตรงนี้ไว้เพื่อให้เอกสารตรงกับความจริงเท่านั้น
     branch: master
     repo: https://github.com/CEO-LEO/GEOai.git
     # ⚠️ Render's actual live build command is set in the Dashboard
