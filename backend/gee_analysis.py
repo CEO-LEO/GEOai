@@ -750,14 +750,18 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
     spacing_m = max(GRID_MIN_SPACING_M, spacing_m)
     ee_polygon = ee.Geometry.Polygon([polygon])
 
-    # ประเมินขนาดแปลงก่อน กันแปลงใหญ่ผิดปกติสร้างจุดเป็นพัน (safety cap)
+    # v2 (ผู้ใช้ขอ "ตารางไม่ควรปรับขนาดช่องได้ เพราะเราใช้ 10x10 ตายตัว"): เดิม
+    # แปลงใหญ่ผิดปกติจะขยาย spacing_m ขึ้นเงียบๆ (แม้จะแจ้ง frontend แล้วก็ตาม)
+    # ทำให้ขนาดกระเบื้องไม่คงที่ ผู้ใช้เทียบขนาดจุดข้ามแปลงไม่ได้ — เปลี่ยนเป็น
+    # "ปฏิเสธตรงๆ" แทนถ้าแปลงใหญ่เกินจะยิง GEE ไหวที่ spacing คงที่นี้ ให้ผู้ใช้
+    # แบ่งวาดเป็นแปลงย่อยแทน ไม่ใช่ได้กระเบื้องขนาดเพี้ยนแบบไม่รู้ตัว
     area_sqm = _safe_getInfo(ee_polygon.area(1), default=0.0)
     est_points = area_sqm / (spacing_m ** 2)
     if est_points > GRID_MAX_POINTS:
-        spacing_m = max(GRID_MIN_SPACING_M, int((area_sqm / GRID_MAX_POINTS) ** 0.5) + 1)
-        logger.warning(
-            f"Grid too dense (~{est_points:.0f} pts at {GRID_MIN_SPACING_M}m) — "
-            f"widened spacing to {spacing_m}m to stay under {GRID_MAX_POINTS} points"
+        max_area_rai = (GRID_MAX_POINTS * spacing_m ** 2) / 1600  # 1 ไร่ = 1600 ตร.ม.
+        raise ValueError(
+            f"แปลงใหญ่เกินไปสำหรับตารางจุดความชื้นที่ระยะห่างคงที่ {spacing_m}ม./ช่อง "
+            f"(รองรับได้ไม่เกินประมาณ {max_area_rai:.0f} ไร่) — กรุณาแบ่งวาดเป็นแปลงย่อยแทน"
         )
 
     today = datetime.now(timezone.utc)

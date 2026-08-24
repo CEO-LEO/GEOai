@@ -520,7 +520,6 @@
         <span>🔵 จุดแฉะสุด</span>
       </div>
       <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
-      <span class="legend-item legend-note" id="grid-spacing-note" style="display:none"></span>
     </div>
   </div>
 </div>
@@ -1070,9 +1069,50 @@
     selLat = sumLat / drawPoints.length;
     selLng = sumLon / drawPoints.length;
 
-    showCoordsDisplay(`🔷 วาดขอบเขตแล้ว (${drawPoints.length} จุด) — ศูนย์กลาง <b>${selLat.toFixed(4)}</b>, <b>${selLng.toFixed(4)}</b>`);
     document.getElementById("submit-btn").disabled = false;
-    document.getElementById("grid-btn").disabled = false;
+    applyGridSizeLimit();
+
+    showCoordsDisplay(`🔷 วาดขอบเขตแล้ว (${drawPoints.length} จุด) — ศูนย์กลาง <b>${selLat.toFixed(4)}</b>, <b>${selLng.toFixed(4)}</b>`);
+  }
+
+  // v2 (ผู้ใช้ขอ "ต้องมีข้อจำกัดในการวาดแปลงให้ด้วย"): เดิมกด "จุดน้ำขังในแปลง"
+  // ได้เสมอหลังวาดขอบเขตจบ ไม่ว่าแปลงจะใหญ่แค่ไหน ต้องรอ backend ปฏิเสธทีหลัง
+  // (ดู gee_analysis.py::get_moisture_grid) ผู้ใช้ถึงจะรู้ว่าใช้ไม่ได้ — เช็คขนาด
+  // ตรงนี้เลยหลังวาดจบ ให้รู้ทันทีโดยไม่ต้องกดรอ ปุ่ม "ตรวจสอบแปลงนี้" ปกติไม่กระทบ
+  // (จำกัดเฉพาะฟีเจอร์กริดที่สุ่มจุดละเอียดเท่านั้น ไม่ใช่ทั้งแอป)
+  //
+  // ค่า GRID_MAX_AREA_RAI ต้องตรงกับ GRID_MAX_POINTS(1600) × spacing คงที่ 10ม.
+  // ฝั่ง backend เป๊ะ (1600 × 10² ÷ 1600 ตร.ม./ไร่ = 100 ไร่) — แก้ค่าใดค่าหนึ่ง
+  // ต้องแก้อีกฝั่งด้วยกันไม่ตรงกัน
+  const GRID_MAX_AREA_RAI = 100;
+
+  function polygonAreaSqm(coordsLngLat) {
+    if (!coordsLngLat || coordsLngLat.length < 4) return 0;
+    const lat0 = coordsLngLat[0][1] * Math.PI / 180;
+    const mPerDegLat = 111320;
+    const mPerDegLng = 111320 * Math.cos(lat0);
+    const pts = coordsLngLat.map(([lng, lat]) => [
+      (lng - coordsLngLat[0][0]) * mPerDegLng,
+      (lat - coordsLngLat[0][1]) * mPerDegLat,
+    ]);
+    let twiceArea = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      twiceArea += pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1];
+    }
+    return Math.abs(twiceArea) / 2;
+  }
+
+  function applyGridSizeLimit() {
+    const gridBtn = document.getElementById("grid-btn");
+    const areaRai = polygonAreaSqm(polygonCoords) / 1600;   // 1 ไร่ = 1600 ตร.ม.
+    if (areaRai > GRID_MAX_AREA_RAI) {
+      gridBtn.disabled = true;
+      gridBtn.title = `แปลงใหญ่ ~${areaRai.toFixed(0)} ไร่ (เกิน ${GRID_MAX_AREA_RAI} ไร่) — ฟีเจอร์นี้วิเคราะห์ไม่ไหว กรุณาแบ่งวาดเป็นแปลงย่อย`;
+      showToast(`⚠️ แปลงนี้ใหญ่ ~${areaRai.toFixed(0)} ไร่ เกิน ${GRID_MAX_AREA_RAI} ไร่ — ปุ่ม "จุดน้ำขังในแปลง" ใช้ไม่ได้กับแปลงนี้ (ตรวจสอบแปลงปกติยังใช้ได้ตามเดิม)`);
+    } else {
+      gridBtn.disabled = false;
+      gridBtn.title = "";
+    }
   }
 
   function clearDrawing() {
@@ -1211,11 +1251,39 @@
     });
   }
 
+  // v2 (ผู้ใช้ขอ "สี่เหลี่ยมพวกนี้ไม่ควรทับซ้อนกันได้เลย"): เดิมเชื่อ spacing_m
+  // ที่ backend บอกมาตรงๆ (สมมติทุกจุดห่างกันเท่ากันเป๊ะทุกทิศ) แล้วคูณ 1.12 ให้
+  // กระเบื้องใหญ่กว่าระยะจริงเล็กน้อยเพื่อไม่ให้มีร่องว่าง — แต่ระยะห่าง "จริง"
+  // ระหว่างจุดที่ได้จาก GEE .sample() ไม่ได้เท่ากันเป๊ะทุกคู่เสมอไป (โดยเฉพาะแปลง
+  // แคบ/เบี้ยว จุดข้างเคียงตามแนวทแยงอาจใกล้กว่าจุดข้างเคียงแนวตรงเล็กน้อย) การคูณ
+  // 1.12 แบบเดิมเลยทำให้บางคู่ทับซ้อนกันได้จริง — เปลี่ยนมาวัดระยะห่างที่ใกล้ที่สุด
+  // จริงจากข้อมูลจุดที่ได้มา แล้วคูณด้วยค่าน้อยกว่า 1 แทน รับประกันไม่ทับซ้อนกันเลย
+  // ไม่ว่ารูปแปลงจะเป็นแบบไหน (ยอมมีร่องว่างเล็กน้อยระหว่างกระเบื้องแทน)
+  function nearestNeighborDistM(points) {
+    // O(n²) — ปลอดภัยสำหรับจำนวนจุดต่อแปลงจริง (GRID_MAX_POINTS ฝั่ง backend
+    // จำกัดไว้ที่ 1600 อยู่แล้ว แต่แปลงส่วนใหญ่มีจุดหลักสิบถึงหลักร้อยเท่านั้น)
+    let minDist = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        const d = haversineM(points[i].lat, points[i].lng, points[j].lat, points[j].lng);
+        if (d > 0 && d < minDist) minDist = d;
+      }
+    }
+    return minDist;
+  }
+  function haversineM(lat1, lng1, lat2, lng2) {
+    const R = 6378137.0;
+    const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+    const dp = (lat2 - lat1) * Math.PI / 180;
+    const dl = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
   // ── กระเบื้องสี่เหลี่ยม สำหรับปูเป็น "แผนที่ความร้อน" (heatmap) ────────
   // จุดตารางแต่ละจุดห่างกัน ~spacing_m เมตรสม่ำเสมออยู่แล้ว (มาจาก GEE .sample ที่
   // scale เดียวกัน) แทนที่จะปักหมุด/หยดแยกกันทีละจุดแบบเดิม (รกมากตอนแปลงหนาแน่น —
   // ผู้ใช้จริงบอกว่าดูยาก โดยเฉพาะคนไม่ถนัดเทคโนโลยี) วาดเป็น "กระเบื้อง" สี่เหลี่ยม
-  // ขนาดเท่า spacing_m ชนกันพอดี (ใหญ่กว่าจริงเล็กน้อยกันมีร่องว่างจากการปัดเศษ)
   // ให้เห็นเป็นภาพสีต่อเนื่องเดียว อ่านง่ายแค่มองแล้วรู้เลยว่าโซนไหนแฉะ/แห้ง
   function buildTileSquare(lat, lng, sizeM) {
     const r = (sizeM / 2) * Math.SQRT2;
@@ -1277,7 +1345,6 @@
     gridPointsData = [];
     gridSinkPoints = new Set();
     document.getElementById("grid-legend").classList.remove("show");
-    document.getElementById("grid-spacing-note").style.display = "none";
     clearPersistentOverlay();   // จุดชื้นสะสมของแปลงก่อนหน้าไม่ควรค้างเวลาดูแปลงอื่น
   }
 
@@ -1328,7 +1395,10 @@
       runAfterModalClosed(() => {
         gridPointsData = json.points;
         const spacingM = json.spacing_m || 10;
-        const tileSizeM = spacingM * 1.12;   // ใหญ่กว่าระยะห่างจริงเล็กน้อย กันร่องว่างจากการปัดเศษ
+        // วัดระยะห่างจริงที่ใกล้ที่สุดในข้อมูลชุดนี้ แทนที่จะเชื่อ spacingM เฉยๆ —
+        // กันกระเบื้องทับกันแม้จุดบางคู่จะห่างกันน้อยกว่าระยะห่างที่ตั้งใจไว้จริง
+        const actualMinDist = json.points.length >= 2 ? nearestNeighborDistM(json.points) : spacingM;
+        const tileSizeM = Math.min(spacingM, actualMinDist) * 0.96;
         const normalizeSwab = buildSwabNormalizer(json.points);   // ยืดสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้
         const { inDegree } = computeFlowGraph(json.points, spacingM);
         // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีจุดเด่น
@@ -1385,29 +1455,22 @@
         });
 
         document.getElementById("grid-legend").classList.add("show");
-
-        // แปลงใหญ่มาก backend จะขยายระยะห่างจุดขึ้นจาก 10ม. อัตโนมัติกันยิง GEE
-        // หนักเกิน (ดู GRID_MAX_POINTS ใน gee_analysis.py) — เดิมทำเงียบๆ ผู้ใช้ไม่รู้
-        // ว่าระยะห่างจริงเปลี่ยนไปแล้ว จนเอาไปวัดระยะจริงไม่ได้ — ปักไว้ใน legend
-        // ให้เห็นตลอดตอนดูแผนที่ (ไม่ใช่แค่ toast ที่หายไปไม่กี่วินาที)
-        const spacingNoteEl = document.getElementById("grid-spacing-note");
-        if (spacingM > 10) {
-          spacingNoteEl.textContent = `📏 แปลงใหญ่ — ปรับระยะห่างจริงเป็น ${spacingM}ม./ช่อง (ไม่ใช่ 10ม.)`;
-          spacingNoteEl.style.display = "";
-        } else {
-          spacingNoteEl.style.display = "none";
-        }
       });
 
+      // บั๊กที่เจอตอนแก้เรื่องกระเบื้องทับกัน: spacingM ถูกประกาศด้วย const ใน
+      // callback ของ runAfterModalClosed ด้านบน (block scope) แต่ตรงนี้อยู่นอก
+      // callback นั้น — อ้างถึงแล้วจะ throw ReferenceError ทุกครั้งที่ตรวจสำเร็จ
+      // (โยนไปเข้า catch ด้านล่างแทน ผู้ใช้เลยไม่เคยเห็น toast สำเร็จตัวนี้เลย)
+      // ตอนนี้ spacing คงที่ 10ม. เสมอแล้ว (ไม่มีการ widen อีกต่อไป) เลยตัดข้อความ
+      // "แปลงใหญ่ ปรับระยะห่าง..." ที่พังอยู่ออกไปด้วย ไม่จำเป็นต้องมีแล้ว
       const waterlogged = json.points.filter(p => p.status === "waterlogged" || p.status === "drought").length;
       const sinkCount = gridSinkPoints.size;
-      const spacingNote = spacingM > 10 ? ` (แปลงใหญ่ ปรับระยะห่างจริงเป็น ${spacingM}ม./ช่อง)` : "";
       showToast(
-        (waterlogged > 0
+        waterlogged > 0
           ? `🌊 ตรวจแล้ว พบจุดเสี่ยงน้ำขัง/แล้งจัด ${waterlogged} จุด` +
             (sinkCount ? ` — 🎯 ${sinkCount} จุดควรขุดร่องน้ำก่อน` : "") +
             ` · ดูสีบนแผนที่ได้เลย`
-          : `✅ ตรวจแล้ว ไม่พบจุดเสี่ยงในแปลงนี้ · ดูสีบนแผนที่ได้เลย`) + spacingNote
+          : `✅ ตรวจแล้ว ไม่พบจุดเสี่ยงในแปลงนี้ · ดูสีบนแผนที่ได้เลย`
       );
     } catch (e) {
       showToast(`❌ ${e.message || "วิเคราะห์จุดน้ำขังไม่สำเร็จ"}`);
