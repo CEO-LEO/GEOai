@@ -46,9 +46,9 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
     สร้าง LINE Flex Message bubble พร้อมกราฟ meter และคำแนะนำ
     คืน dict สำหรับใส่ใน messages array ของ LINE API
 
-    plot_name (ถ้ามี): ผู้ใช้ขอเปลี่ยนหัวการ์ดจากคำว่า "GEOai" คงที่ เป็นชื่อแปลง
+    plot_name (ถ้ามี): ผู้ใช้ขอเปลี่ยนหัวการ์ดจากคำว่า "IAM ROOT" คงที่ เป็นชื่อแปลง
     ของเขาเอง (มีหลายแปลง อยากรู้ทันทีว่าการ์ดนี้คือแปลงไหนโดยไม่ต้องเปิดดูพิกัด)
-    — fallback กลับไปที่ "GEOai" ถ้าไม่ได้ส่งมา (เช่น ผลวิเคราะห์เก่าที่ไม่มีชื่อ
+    — fallback กลับไปที่ "IAM ROOT" ถ้าไม่ได้ส่งมา (เช่น ผลวิเคราะห์เก่าที่ไม่มีชื่อ
     แปลงติดมาด้วย)
 
     swab_trend (ถ้ามี): ข้อความเทียบ "ระดับ" ความชื้นกับผลวิเคราะห์ก่อนหน้า (เช่น
@@ -88,12 +88,12 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
     disp_str = {"high": "⚠️ ไม่เสถียร", "medium": "🔶 ปานกลาง", "low": "✅ เสถียร"}.get(disp_level, "✅ เสถียร")
     disp_color = {"high": "#C62828", "medium": "#E65100", "low": "#2E7D32"}.get(disp_level, "#2E7D32")
 
-    header_title = f"🌿 {plot_name}" if plot_name else "🌿 GEOai"
+    header_title = f"🌿 {plot_name}" if plot_name else "🌿 IAM ROOT"
 
     return {
         "type": "flex",
         "altText": (f"{colors['icon']} ผลวิเคราะห์ {plot_name} — {colors['label']}" if plot_name
-                    else f"{colors['icon']} ผลวิเคราะห์แปลงทุเรียน — {colors['label']}"),
+                    else f"{colors['icon']} ผลวิเคราะห์แปลงต้นไม้ — {colors['label']}"),
         "contents": {
             "type": "bubble",
             # "giga" = การ์ดกว้างเกือบเต็มจอมือถือ — ตอนอยู่ใน carousel (หลายแปลง)
@@ -170,7 +170,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                                 "contents": [
                                     {
                                         "type": "text",
-                                        "text": "🌿 ความสมบูรณ์ต้นทุเรียน",
+                                        "text": "🌿 ความสมบูรณ์ต้นไม้",
                                         "size": "sm",
                                         "color": "#555555",
                                         "weight": "bold",
@@ -302,7 +302,7 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     },
                     {
                         "type": "text",
-                        "text": "🛡️ Sentinel-1/2 | SRTM | SWAB | GEOai v3.0",
+                        "text": "🛡️ Sentinel-1/2 | SRTM | SWAB | IAM ROOT v3.0",
                         "size": "xxs",
                         "color": "#AAAAAA",
                         "align": "center",
@@ -598,11 +598,11 @@ _PROBLEM_POINT_COLOR = {
 # ผู้ใช้ขอ "ไม่ต้องแนะนำวิธีแก้ ช่วยอธิบายว่าแต่ละระดับหมายความว่ายังไง" — บอก
 # สถานการณ์/ผลกระทบที่กำลังเกิดกับดิน-ราก ไม่ใช่ขั้นตอนแก้ปัญหา
 _SWAB_LEVEL_EXPLANATION = {
-    "drought":     "ดินแห้งจัด เกินกว่าที่รากทุเรียนจะทนไหว รากฝอยขาดน้ำรุนแรง "
+    "drought":     "ดินแห้งจัด เกินกว่าที่รากต้นไม้จะทนไหว รากฝอยขาดน้ำรุนแรง "
                     "ใบมีโอกาสเหี่ยวและร่วงถ้าปล่อยไว้",
     "dry":         "ดินแห้งกว่าระดับที่เหมาะสม รากเริ่มขาดน้ำ ต้นอาจแสดงอาการใบ "
                     "เหี่ยวในช่วงกลางวันได้ ยังไม่ถึงขั้นวิกฤต",
-    "optimal":     "น้ำและอากาศในดินอยู่ในสัดส่วนที่เหมาะกับรากทุเรียน (รากตื้น "
+    "optimal":     "น้ำและอากาศในดินอยู่ในสัดส่วนที่เหมาะกับรากต้นไม้ (รากตื้น "
                     "30-50 ซม. ไวต่อทั้งน้ำท่วมและแล้ง) ต้นดูดซึมน้ำ/อาหารได้ดี",
     "wet":         "ดินเริ่มชื้นเกินสมดุล อากาศในรูพรุนดินลดลง ถ้าฝนตกต่อเนื่อง "
                     "อาจเริ่มกระทบการหายใจของราก",
@@ -832,7 +832,7 @@ def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str,
     base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name,
                              problem_points=problem_points)
     # Prepend alert banner ใน body
-    base["altText"] = f"⚠️ แจ้งเตือนประจำวัน — {plot_name}" if plot_name else "⚠️ แจ้งเตือนประจำวัน — GEOai"
+    base["altText"] = f"⚠️ แจ้งเตือนประจำวัน — {plot_name}" if plot_name else "⚠️ แจ้งเตือนประจำวัน — IAM ROOT"
     base["contents"]["body"]["contents"].insert(0, {
         "type": "box",
         "layout": "horizontal",

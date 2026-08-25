@@ -4,13 +4,13 @@ Rule Engine
 สำหรับส่งกลับเกษตรกรทาง LINE
 
 v2: เพิ่ม land displacement, fertilizer, yield estimation
-v3: เพิ่ม Root-Zone Risk (SWAB) สำหรับ อ.นายายอาม จ.จันทบุรี
-    — รากทุเรียนตื้น 30–50 ซม. ต้องการสมดุลน้ำ-อากาศในดินสูง
+v3: เพิ่ม Root-Zone Risk (SWAB) สำหรับพืชรากตื้น
+    — รากตื้น 30–50 ซม. ต้องการสมดุลน้ำ-อากาศในดินสูง
 """
 
 
 # ─────────────────────────────────────────────────
-# Thresholds (ปรับตามลักษณะพื้นที่ อ.นายายอาม)
+# Thresholds (ปรับตามลักษณะพื้นที่ฝนสูง/พืชรากตื้น)
 # ─────────────────────────────────────────────────
 NDVI_DECLINE_THRESHOLD      = -0.10   # ลดลง 10% = น่ากังวล
 NDVI_SEVERE_THRESHOLD       = -0.20   # ลดลง 20% = วิกฤต
@@ -18,7 +18,7 @@ MOISTURE_WET_THRESHOLD      = -10.0   # dB : สูงกว่านี้ = �
 ELEVATION_LOW_THRESHOLD     = -1.5    # เมตร: ต่ำกว่ารอบข้างเกิน 1.5 ม. = แอ่ง
 
 # ── Root-Zone Thresholds (v3) ─────────────────────
-# รากทุเรียน อ.นายายอาม: ตื้น 30–50 ซม. ไวต่อน้ำขังมาก
+# พืชรากตื้น: ตื้น 30–50 ซม. ไวต่อน้ำขังมาก
 # ต้องตรงกับ breakpoint จริงใน gee_analysis.py::_calc_swab() เป๊ะ — นั่นคือจุดที่
 # กำหนด data["swab"]["status"]/["severity"] จริง ค่าที่นี่แค่ใช้ประกอบข้อความ LINE
 # (เคยเพี้ยนไป −0.25/−0.40 มาก่อน ทำให้ข้อความบอก "ดินแห้งเกิน" ทั้งที่การ์ดบอก
@@ -29,7 +29,7 @@ SWAB_DRY_THRESHOLD          = -0.15   # แห้งเกิน (เนิน�
 SWAB_DROUGHT_THRESHOLD      = -0.30   # แล้งวิกฤต
 NDWI_SURFACE_WATER          =  0.10   # MNDWI > นี้ = มีน้ำบนผิวดิน/ใกล้ผิวดิน
 
-PREDICT_BASE_YIELD_KG       = 1500    # กก./ไร่ — ผลผลิตฐานทุเรียนหมอนทองอายุ 8+ ปี
+PREDICT_BASE_YIELD_KG       = 1500    # กก./ไร่ — ผลผลิตฐานต้นไม้อายุ 8+ ปี
 
 
 # ─────────────────────────────────────────────────
@@ -143,7 +143,7 @@ def calculate_root_rot_risk(data: dict) -> dict:
 def predict_yield(ndvi_now: float, topsoil_risk_level: str,
                   elevation_diff: float) -> int:
     """
-    พยากรณ์ผลผลิตทุเรียน (Mock ML Logic) กก./ไร่
+    พยากรณ์ผลผลิตต้นไม้ (Mock ML Logic) กก./ไร่
     ใช้ปัจจัย NDVI, BSI/Topsoil Risk, และความลาดชันของพื้นที่
     """
     base = float(PREDICT_BASE_YIELD_KG)
@@ -186,7 +186,7 @@ def format_message(data: dict, lat: float, lng: float) -> str:
     if elev_diff < ELEVATION_LOW_THRESHOLD and moisture > MOISTURE_WET_THRESHOLD:
         risks.append("🔴 เสี่ยงสูง: พื้นที่ต่ำกว่ารอบข้างและมีความชื้นสูง น้ำอาจขังบริเวณโคนต้น")
         advices.append("ขุดร่องระบายน้ำรอบแปลง ลึกอย่างน้อย 30 ซม. ก่อนฤดูฝนเข้า")
-        advices.append("ยกแปลงปลูกให้สูงขึ้น และตรวจรากต้นทุเรียนสัปดาห์นี้")
+        advices.append("ยกแปลงปลูกให้สูงขึ้น และตรวจรากต้นไม้สัปดาห์นี้")
         status_icon = "🔴"
 
     # ─── กฎที่ 2: น้ำขังในพื้นที่ต่ำ (แม้ไม่ชื้นมากตอนนี้) ───
@@ -197,7 +197,7 @@ def format_message(data: dict, lat: float, lng: float) -> str:
 
     # ─── กฎที่ 3: ต้นโทรมวิกฤต ───
     if ndvi_change < NDVI_SEVERE_THRESHOLD:
-        risks.append("🔴 วิกฤต: ต้นทุเรียนโทรมมากผิดปกติ ค่าสุขภาพพืชลดลง {:.0f}% จากปีก่อน".format(abs(ndvi_change) * 100))
+        risks.append("🔴 วิกฤต: ต้นไม้โทรมมากผิดปกติ ค่าสุขภาพพืชลดลง {:.0f}% จากปีก่อน".format(abs(ndvi_change) * 100))
         advices.append("ตรวจโรครากเน่าและโรคราต่างๆ ทันที ควรปรึกษาเกษตรกรจังหวัดหรือผู้เชี่ยวชาญ")
         advices.append("ฉีดสารป้องกันโรค เช่น เมทาแลกซิล และเพิ่มธาตุแคลเซียม (Ca) + โพแทสเซียม (K)")
         status_icon = "🔴"
@@ -214,7 +214,7 @@ def format_message(data: dict, lat: float, lng: float) -> str:
     if displacement.get("change_level") == "high":
         risks.append("🔴 พื้นดินเปลี่ยนแปลงมาก: ค่าเสถียรภาพ {:.0f}% — ดินอาจทรุดหรือเคลื่อนตัว".format(
             displacement.get("surface_stability", 0) * 100))
-        advices.append("ตรวจสอบรากต้นทุเรียนและฐานต้น อาจต้องพยุงลำต้นเพิ่มเติม")
+        advices.append("ตรวจสอบรากต้นไม้และฐานต้น อาจต้องพยุงลำต้นเพิ่มเติม")
         if status_icon == "🟢":
             status_icon = "🔴"
     elif displacement.get("change_level") == "medium":
@@ -236,7 +236,7 @@ def format_message(data: dict, lat: float, lng: float) -> str:
             status_icon = "🟠"
 
     # ─── กฎที่ 7: ความสมดุลน้ำ-อากาศในดิน (Root-Zone SWAB — v3) ───
-    # เฉพาะสำหรับ อ.นายายอาม: รากตื้น 30-50 ซม. ไวต่อสมดุลน้ำ-อากาศมาก
+    # สำหรับพืชรากตื้น 30-50 ซม. ไวต่อสมดุลน้ำ-อากาศมาก
     swab = data.get("swab", {})
     swab_idx  = swab.get("swab_index", 0.0)
     swab_stat = swab.get("status", "optimal")
@@ -308,7 +308,7 @@ def format_message(data: dict, lat: float, lng: float) -> str:
     }.get(displacement.get("change_level", "low"), "✅ เสถียร")
 
     lines = [
-        f"{status_icon} *ผลวิเคราะห์แปลงทุเรียน — GEOai v3 (นายายอาม)*",
+        f"{status_icon} *ผลวิเคราะห์แปลงต้นไม้ — IAM ROOT v3*",
         f"📍 ({lat:.4f}, {lng:.4f})",
         "━━━━━━━━━━━━━━━━━━━━",
         f"🌿 สุขภาพพืช (NDVI):  {ndvi_now:.2f}  ({ndvi_trend} จากปีก่อน)",
@@ -356,6 +356,6 @@ def format_message(data: dict, lat: float, lng: float) -> str:
         lines.append(f"  📈 ช่วง: {yield_est.get('range_low', '-')}–{yield_est.get('range_high', '-')} กก./ไร่")
 
     lines.append("")
-    lines.append("🛰️ ข้อมูล: Sentinel-1/2 | SRTM | SWAB | GEOai v3.0 — อ.นายายอาม")
+    lines.append("🛰️ ข้อมูล: Sentinel-1/2 | SRTM | SWAB | IAM ROOT v3.0")
 
     return "\n".join(lines)

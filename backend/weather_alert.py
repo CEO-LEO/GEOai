@@ -24,7 +24,7 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 # Open-Meteo อัตโนมัติ ไม่ต้องแก้โค้ด/deploy ใหม่เมื่อได้รับอนุมัติแล้ว
 WEATHERNEXT_TIMEOUT_S = 25
 
-# ─── Thresholds (ปรับสำหรับ อ.นายายอาม จ.จันทบุรี — ฝนสูงตลอดปี) ──────────────
+# ─── Thresholds (ปรับสำหรับพื้นที่ฝนสูงตลอดปี) ──────────────
 # ฝนสะสม 7 วัน (มม.) ที่ถือว่า "หนัก" — ลดจาก 80 เหลือ 60 (เพราะดินชื้นอยู่แล้ว)
 RAIN_THRESHOLD_MM   = 60.0
 # ฝนสูงสุดต่อวัน (มม.) ที่ถือว่าหนักมาก
@@ -39,7 +39,7 @@ STABILITY_CRITICAL  = 0.3
 # VV backscatter change สูง → สัญญาณดินทรุด/เปลี่ยน
 VV_CHANGE_WARN      = 1.5
 VV_CHANGE_CRITICAL  = 3.0
-# SWAB thresholds สำหรับ อ.นายายอาม (รากตื้น 30-50 ซม.)
+# SWAB thresholds สำหรับพืชรากตื้น (30-50 ซม.)
 SWAB_WARN_THRESHOLD = 0.10   # SWAB index > 0.10 = น้ำสูงเกินพอ (เตือนไวขึ้น)
 
 
@@ -122,7 +122,7 @@ def build_rain_alert_message(forecast: WeatherForecast,
     """สร้างข้อความแจ้งเตือนฝนล่วงหน้า"""
     level = "🔴 หนักมาก" if forecast["max_daily_mm"] >= 40 else "🟠 หนัก"
     lines = [
-        f"🌧️ *แจ้งเตือนฝน 7 วันข้างหน้า — GEOai (อ.นายายอาม)*",
+        f"🌧️ *แจ้งเตือนฝน 7 วันข้างหน้า — IAM ROOT*",
         f"📍 {plot_name} ({lat:.4f}, {lng:.4f})",
         "━━━━━━━━━━━━━━━━━━━━",
         f"🌧️ ฝนสะสม 7 วัน:    {forecast['total_rain_mm']} มม.",
@@ -130,13 +130,13 @@ def build_rain_alert_message(forecast: WeatherForecast,
         f"📅 จำนวนวันที่ฝนตก: {forecast['rainy_days']} วัน",
         "━━━━━━━━━━━━━━━━━━━━",
         "",
-        "⚠️ *ข้อแนะนำด่วนสำหรับทุเรียน อ.นายายอาม:*",
-        "  • ตรวจร่องระบายน้ำให้เปิดโล่งก่อนฝนมา (รากทุเรียนตื้น 30-50 ซม.)",
+        "⚠️ *ข้อแนะนำด่วนสำหรับต้นไม้:*",
+        "  • ตรวจร่องระบายน้ำให้เปิดโล่งก่อนฝนมา (รากตื้น 30-50 ซม.)",
         "  • ห้ามใส่ปุ๋ยหรือฉีดยาก่อน 24 ชม. ที่ฝนจะตก",
         "  • หากแปลงต่ำกว่ารอบข้าง ให้สูบน้ำออกไว้ล่วงหน้า",
         "  • พื้นที่ลาดชัน: น้ำไหลสะสมลงหุบโคนต้นได้เร็ว ตรวจร่องก่อน-หลังฝน",
         "",
-        "🛡️ ข้อมูลอากาศ: Open-Meteo.com | GEOai v3.0 — อ.นายายอาม",
+        "🛡️ ข้อมูลอากาศ: Open-Meteo.com | IAM ROOT v3.0",
     ]
     return "\n".join(lines)
 
@@ -217,7 +217,7 @@ def build_rain_alert_flex(forecast: WeatherForecast,
                     },
                     {"type": "separator"},
                     {
-                        "type": "text", "text": "📋 ข้อแนะนำสำหรับทุเรียน",
+                        "type": "text", "text": "📋 ข้อแนะนำสำหรับต้นไม้",
                         "weight": "bold", "size": "sm", "color": "#333"
                     },
                     *[{"type": "box", "layout": "horizontal", "spacing": "sm",
@@ -245,7 +245,7 @@ def build_rain_alert_flex(forecast: WeatherForecast,
                         "style": "primary", "color": "#1a7a3c", "height": "sm"
                     },
                     {"type": "text",
-                     "text": "🌤️ ข้อมูล: Open-Meteo.com | GEOai v1.0",
+                     "text": "🌤️ ข้อมูล: Open-Meteo.com | IAM ROOT v1.0",
                      "size": "xxs", "color": "#AAAAAA", "align": "center",
                      "margin": "sm"}
                 ]
@@ -324,7 +324,7 @@ def assess_soil_waterlog_risk(analysis: dict) -> SoilRiskProfile:
         score += 15
         factors.append(f"ดินชื้นเกินปกติ (VV {moisture_vv:.1f} dB)")
 
-    # ── 5. SWAB: สมดุลน้ำ-อากาศในดิน (การากตื้น อ.นายายอาม) ──
+    # ── 5. SWAB: สมดุลน้ำ-อากาศในดิน (พืชรากตื้น) ──
     swab       = analysis.get("swab") or {}
     swab_idx   = float(swab.get("swab_index") or 0.0)
     water_pct  = float(swab.get("soil_water_pct") or 45.0)
@@ -383,13 +383,13 @@ def evaluate_combined_risk(
     moderate_rain = forecast["total_rain_mm"] >= RAIN_MODERATE_MM
     soil_bad      = soil["soil_risk_score"] >= 30
     soil_critical = soil["soil_risk_score"] >= 50
-    # SWAB pre-condition: รากตื้น อ.นายายอาม — ถ้าดินชื้นสูงอยู่แล้ว → เร่งระดับเตือน
+    # SWAB pre-condition: พืชรากตื้น — ถ้าดินชื้นสูงอยู่แล้ว → เร่งระดับเตือน
     swab_already_wet = any(
         "รากเล็กๆ เสี่ยง" in f or "ดินชื้นเกิน" in f
         for f in soil.get("risk_factors", [])
     )
 
-    # ── CRITICAL: SWAB น้ำขัง + ฝนใดๆ (อ.นายายอาม: รากตื้น → เสี่ยงรากเน่าทันที) ──
+    # ── CRITICAL: SWAB น้ำขัง + ฝนใดๆ (พืชรากตื้น → เสี่ยงรากเน่าทันที) ──
     if swab_already_wet and moderate_rain:
         score = min(100, 60 + soil["soil_risk_score"] // 2)
         waterlog = True
@@ -424,7 +424,7 @@ def evaluate_combined_risk(
             advisories.append("⛰️ ดินทรุดทำให้น้ำไหลมาขังเพิ่ม ควรถมดินรอบโคนต้น")
         if soil["is_waterlogged"]:
             advisories.append("💦 ดินชื้นเกินอยู่แล้ว สูบน้ำออกก่อนฝนมา")
-        advisories.append("🔍 ตรวจรากทุเรียน หากรากน้ำตาลเข้ม→อาจเริ่มเน่า")
+        advisories.append("🔍 ตรวจรากต้นไม้ หากรากน้ำตาลเข้ม→อาจเริ่มเน่า")
 
         return CombinedAlert(
             alert_level="critical",
@@ -542,7 +542,7 @@ def build_combined_alert_message(
         lines.append("⛔ สรุป: งดใส่ปุ๋ยชั่วคราว จนกว่าดินจะแห้งและระบายน้ำได้ดี")
 
     lines.append("")
-    lines.append("🛰️ GEOai v2.0 — ข้อมูลอากาศ: Open-Meteo | ดิน: Sentinel-1/2")
+    lines.append("🛰️ IAM ROOT v2.0 — ข้อมูลอากาศ: Open-Meteo | ดิน: Sentinel-1/2")
 
     return "\n".join(lines)
 
@@ -622,7 +622,7 @@ def build_combined_alert_flex(
     # ── Body: advisories ──
     adv_items: list[dict] = [
         {"type": "separator"},
-        {"type": "text", "text": "📋 คำแนะนำสำหรับทุเรียน",
+        {"type": "text", "text": "📋 คำแนะนำสำหรับต้นไม้",
          "weight": "bold", "size": "sm", "color": "#333"},
     ]
     for adv in alert["advisories"][:5]:
@@ -693,7 +693,7 @@ def build_combined_alert_flex(
                         "data": "action=check"},
              "style": "primary", "color": "#1a7a3c", "height": "sm"},
             {"type": "text",
-             "text": "🛰️ GEOai v2.0 | Open-Meteo + Sentinel-1/2",
+             "text": "🛰️ IAM ROOT v2.0 | Open-Meteo + Sentinel-1/2",
              "size": "xxs", "color": "#AAAAAA", "align": "center",
              "margin": "sm"}
         ]

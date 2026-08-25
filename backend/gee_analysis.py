@@ -1,7 +1,7 @@
 """
 GEE Analysis Module
 ดึงข้อมูลดาวเทียม Sentinel-1, Sentinel-2, และ SRTM DEM
-สำหรับวิเคราะห์สวนทุเรียนจากพิกัด Lat/Long ที่รับมา
+สำหรับวิเคราะห์สวนต้นไม้จากพิกัด Lat/Long ที่รับมา
 
 v2: เพิ่ม Land Displacement Detection, Fertilizer Recommendation, Yield Estimation
 """
@@ -33,10 +33,12 @@ BACKOFF_BASE_S = 2  # exponential: 2s, 4s, 8s
 PLOT_BUFFER_M       = 100   # พื้นที่แปลง
 SURROUNDING_BUFFER_M = 500  # รอบข้างสำหรับเปรียบเทียบ elevation
 
-# ─── ค่าอ้างอิงสำหรับทุเรียน ─────────────────────────
-# ผลผลิตฐาน (กก./ไร่/ปี) — ทุเรียนหมอนทองอายุ 8+ ปี สภาพดี
+# ─── ค่าอ้างอิงสำหรับต้นไม้ ─────────────────────────
+# ผลผลิตฐาน (กก./ไร่/ปี) — ต้นไม้อายุ 8+ ปี สภาพดี
+# (ชื่อตัวแปร DURIAN_* คงไว้ตามเดิม — เปลี่ยนแล้วต้องตามแก้ทุกจุดที่ใช้ เสี่ยงพลาด
+# โดยไม่ได้ประโยชน์กับผู้ใช้จริง คำอธิบาย/ข้อความที่ผู้ใช้เห็นแก้ให้แล้ว)
 DURIAN_BASE_YIELD_KG_PER_RAI = 1500
-# NDVI อ้างอิง (ทุเรียนสุขภาพดีเต็มที่)
+# NDVI อ้างอิง (ต้นไม้สุขภาพดีเต็มที่)
 DURIAN_OPTIMAL_NDVI = 0.70
 # จำนวนต้นโดยเฉลี่ยต่อไร่ (ระยะ 8×8 ม.)
 DURIAN_TREES_PER_RAI = 25
@@ -319,7 +321,7 @@ def _safe_getInfo(computation, default=None):
 def analyze_durian_plot(lat: float, lng: float,
                         polygon: list[list[float]] | None = None) -> dict:
     """
-    วิเคราะห์สวนทุเรียนจากพิกัดที่ให้มา
+    วิเคราะห์สวนต้นไม้จากพิกัดที่ให้มา
     ถ้ามี polygon → ใช้ ee.Geometry.Polygon แทน buffer รอบจุด
     ตรวจ cache ก่อน — ถ้า hit คืนค่าทันที ไม่เรียก GEE
     ถ้า GEE ยังไม่ init → ใช้ mock data
@@ -575,11 +577,11 @@ def swab_index_to_level(swab_index: float, level_range: int = SWAB_LEVEL_RANGE) 
 def _calc_swab(moisture_vv: float, bsi: float,
                elevation_diff: float, ndwi: float) -> dict:
     """
-    Soil Water-Air Balance (SWAB) Index สำหรับสวนทุเรียน  (v3)
+    Soil Water-Air Balance (SWAB) Index สำหรับสวนต้นไม้  (v3)
 
-    สมดุลที่เหมาะสม — ดินร่วนปนทราย เนินเขา อ.นายายอาม จ.จันทบุรี:
+    สมดุลที่เหมาะสม — ดินร่วนปนทราย พื้นที่ลาดเนิน:
       น้ำ ≈ 35-55%  |  อากาศ ≈ 20-35%  |  วัสดุดิน ~50% (คงที่)
-      หมายเหตุ: รากทุเรียนตื้น 30-50 ซม. ไวต่อน้ำขังมากกว่าพืชอื่น
+      หมายเหตุ: รากตื้น 30-50 ซม. ไวต่อน้ำขังมากกว่าพืชอื่น
 
     ที่มาของข้อมูล:
       moisture_vv   : Sentinel-1 VV backscatter (dB) → proxy volumetric water
@@ -596,7 +598,7 @@ def _calc_swab(moisture_vv: float, bsi: float,
         water_raw += ndwi * 15.0
 
     # ปรับด้วยระดับพื้นที่ (ต่ำกว่ารอบข้าง → น้ำขังสะสม)
-    # อ.นายายอาม: พื้นที่ลาดชัน → น้ำไหลสะสมในที่ต่ำได้เร็ว เพิ่ม weight
+    # พื้นที่ลาดชัน → น้ำไหลสะสมในที่ต่ำได้เร็ว เพิ่ม weight
     if elevation_diff < 0:
         water_raw += min(15.0, abs(elevation_diff) * 5.0)  # เพิ่มจาก 4.0 → 5.0
 
@@ -606,7 +608,7 @@ def _calc_swab(moisture_vv: float, bsi: float,
     soil_water_raw = round(max(5.0, min(90.0, water_raw)), 1)
 
     # 2. แบ่งพื้นที่รูพรุน (pore space) เป็นน้ำ/อากาศ + วัสดุดินที่เหลือ
-    #    ดินร่วนปนทราย อ.นายายอาม: รูพรุนรวม ≈ 48%
+    #    ดินร่วนปนทราย: รูพรุนรวม ≈ 48%
     #    BSI สูง → อัดแน่นจากการเข้มงวดการใช้ที่ดิน → รูพรุนลด
     #
     #    เดิม (รอบแรก) soil_air_pct = total_pore - min(soil_water_pct, total_pore) โดยที่
@@ -639,10 +641,10 @@ def _calc_swab(moisture_vv: float, bsi: float,
     soil_air_pct    = round(max(0.0, total_pore - soil_water_pct), 1)
 
     # 3. SWAB Index  — 0 = สมดุล, +1 = น้ำสูงสุด, −1 = แห้งสุด
-    # อ.นายายอาม: ค่าเหมาะสม 42% (เนินเขา+ดินระบายน้ำดีกว่าที่ราบ)
+    # ค่าเหมาะสม 42% (พื้นที่ลาดเนิน+ดินระบายน้ำดีกว่าที่ราบ)
     # ใช้ soil_water_raw (ไม่ cap) ไม่ใช่ soil_water_pct ที่แสดงผล — กันสถานะ
     # "น้ำขังวิกฤต" ไม่ไวพอตอนน้ำท่วมผิวดินเกินความจุรูพรุนไปมากๆ
-    OPTIMAL = 42.0  # % น้ำที่เหมาะสมสำหรับทุเรียนบนเนิน อ.นายายอาม
+    OPTIMAL = 42.0  # % น้ำที่เหมาะสมสำหรับต้นไม้บนพื้นที่ลาดเนิน
     swab_index = round(max(-1.0, min(1.0,
                     (soil_water_raw - OPTIMAL) / OPTIMAL)), 3)
 
@@ -663,8 +665,8 @@ def _calc_swab(moisture_vv: float, bsi: float,
         advice = "ปรับปรุงร่องระบายน้ำ ลดการให้น้ำ สังเกตใบร่วง/เหลืองที่โคนต้น (สัญญาณรากเน่าระยะแรก)"
     elif swab_index >= -0.15:
         status, status_th, severity = (
-            "optimal", "สมดุลดี ✅ — เหมาะกับทุเรียน", "low")
-        advice = "รักษาระดับน้ำในดินตามนี้ต่อไป สัดส่วนน้ำ/อากาศเหมาะสมกับรากตื้นของทุเรียน"
+            "optimal", "สมดุลดี ✅ — เหมาะกับต้นไม้", "low")
+        advice = "รักษาระดับน้ำในดินตามนี้ต่อไป สัดส่วนน้ำ/อากาศเหมาะสมกับรากตื้นของต้นไม้"
     elif swab_index >= -0.30:  # เตือนเร็วขึ้น (เดิม -0.35) เพราะเนินระบายน้ำเร็ว
         status, status_th, severity = (
             "dry", "แห้งเกิน 🏜️ — ควรเพิ่มน้ำ", "medium")
@@ -1210,7 +1212,7 @@ def _get_land_displacement(area, start_now, end_now, start_prev, end_prev) -> di
 def _recommend_fertilizer(ndvi_now: float, ndvi_change: float,
                           moisture_vv: float, elev_diff: float) -> dict:
     """
-    คำนวณคำแนะนำปุ๋ยสำหรับทุเรียน (กก./ต้น/ปี)
+    คำนวณคำแนะนำปุ๋ยสำหรับต้นไม้ (กก./ต้น/ปี)
     อ้างอิงจากคู่มือกรมวิชาการเกษตร + ปรับตามข้อมูลดาวเทียม
 
     สูตรปุ๋ย: N-P-K + ธาตุรอง (Ca, Mg, Zn)
@@ -1278,10 +1280,10 @@ def _estimate_yield(ndvi_now: float, ndvi_change: float,
                     moisture_vv: float, elev_diff: float,
                     bsi: float = 0.0) -> dict:
     """
-    ประเมินผลผลิตเบื้องต้น (กก./ไร่/ปี) สำหรับทุเรียนหมอนทอง — โมเดลหลัก (v4)
+    ประเมินผลผลิตเบื้องต้น (กก./ไร่/ปี) สำหรับต้นไม้ — โมเดลหลัก (v4)
 
     สมมติฐาน:
-    - ทุเรียนอายุ 8+ ปี (ให้ผลผลิตเต็มที่)
+    - ต้นไม้อายุ 8+ ปี (ให้ผลผลิตเต็มที่)
     - ผลผลิตฐาน ~1,500 กก./ไร่/ปี ที่ NDVI 0.70 (สวนสมบูรณ์)
     - ปรับด้วย factor จากสุขภาพพืช, ความชื้น, ระดับพื้นที่, แนวโน้ม, หน้าดินเปิดโล่ง (BSI)
 
@@ -1443,7 +1445,7 @@ def _assess_land_impact(displacement: dict, elev_diff: float,
         impacts.append({
             "type": "crop_decline",
             "icon": "🍂",
-            "title": "ผลกระทบต่อต้นทุเรียน",
+            "title": "ผลกระทบต่อต้นไม้",
             "detail": f"สุขภาพพืชลดลง {abs(ndvi_change)*100:.0f}% ร่วมกับดินเปลี่ยนแปลง "
                       "สาเหตุอาจมาจากรากถูกกระทบ ควรตรวจสอบทั้งรากและดินรอบโคนต้น",
         })

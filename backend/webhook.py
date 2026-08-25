@@ -315,7 +315,7 @@ async def _handle_postback(event: dict):
 def _welcome_message() -> dict:
     return {
         "type": "flex",
-        "altText": "ยินดีต้อนรับสู่ GEOai 🌿",
+        "altText": "ยินดีต้อนรับสู่ IAM ROOT 🌿",
         "contents": {
             "type": "bubble",
             "hero": {
@@ -334,14 +334,14 @@ def _welcome_message() -> dict:
                 "contents": [
                     {
                         "type": "text",
-                        "text": "🌿 ยินดีต้อนรับสู่ GEOai",
+                        "text": "🌿 ยินดีต้อนรับสู่ IAM ROOT",
                         "weight": "bold",
                         "size": "xl",
                         "color": "#1a7a3c"
                     },
                     {
                         "type": "text",
-                        "text": "ระบบตรวจวิเคราะห์สวนทุเรียนด้วยดาวเทียม\nเพียงปักหมุดแปลงของคุณ เราวิเคราะห์ให้ทันที",
+                        "text": "ระบบตรวจวิเคราะห์สวนต้นไม้ด้วยดาวเทียม\nเพียงปักหมุดแปลงของคุณ เราวิเคราะห์ให้ทันที",
                         "wrap": True,
                         "margin": "md",
                         "size": "sm",
@@ -383,7 +383,7 @@ def _liff_button() -> dict:
                 "contents": [
                     {
                         "type": "text",
-                        "text": "📍 ปักหมุดแปลงทุเรียน",
+                        "text": "📍 ปักหมุดแปลงต้นไม้",
                         "weight": "bold",
                         "size": "lg",
                         "color": "#1a7a3c"
@@ -500,7 +500,7 @@ def _settings_menu(user: dict | None = None) -> dict:
 
     return {
         "type": "flex",
-        "altText": "⚙️ ตั้งค่าการแจ้งเตือน GEOai",
+        "altText": "⚙️ ตั้งค่าการแจ้งเตือน IAM ROOT",
         "contents": {
             "type": "bubble",
             "header": {
@@ -620,7 +620,7 @@ def _time_picker_menu() -> dict:
     ]
     return {
         "type": "flex",
-        "altText": "⏰ ตั้งเวลาแจ้งเตือน GEOai",
+        "altText": "⏰ ตั้งเวลาแจ้งเตือน IAM ROOT",
         "contents": {
             "type": "bubble",
             "header": {
@@ -665,11 +665,11 @@ def _help_message() -> dict:
     return {
         "type": "text",
         "text": (
-            "❓ วิธีใช้งาน GEOai v2\n"
+            "❓ วิธีใช้งาน IAM ROOT\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "1️⃣  กด 'ตรวจสอบแปลงใหม่'\n"
             "2️⃣  แผนที่จะเปิดขึ้นมา\n"
-            "3️⃣  จิ้มตำแหน่งแปลงทุเรียนของคุณ หรือกด 'ใช้ตำแหน่งของฉัน'\n"
+            "3️⃣  จิ้มตำแหน่งแปลงต้นไม้ของคุณ หรือกด 'ใช้ตำแหน่งของฉัน'\n"
             "4️⃣  กด 'ตรวจสอบแปลงนี้'\n"
             "5️⃣  รอรับผลวิเคราะห์ใน 1-2 นาที\n\n"
             "🛰️ ระบบใช้ข้อมูลดาวเทียม Sentinel-1/2 ย้อนหลัง 1 ปี\n"

@@ -31,8 +31,8 @@ HEADERS   = lambda: {"Authorization": f"Bearer {TOKEN}",
 RICH_MENU_BODY = {
     "size": {"width": 2500, "height": 843},
     "selected": True,
-    "name": "GEOai Main Menu",
-    "chatBarText": "🌿 เมนู GEOai",
+    "name": "IAM ROOT Main Menu",
+    "chatBarText": "🌿 เมนู IAM ROOT",
     "areas": [
         # ── ซ้าย: ตรวจสอบแปลง ──────────────────────────
         {

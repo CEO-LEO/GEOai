@@ -45,7 +45,7 @@ N_ESTIMATORS   = 100
 
 def make_mock_dataset(n: int = N_SAMPLES, seed: int = RANDOM_STATE):
     """
-    สร้างชุดข้อมูลสวนทุเรียนจำลอง n แถว
+    สร้างชุดข้อมูลสวนต้นไม้จำลอง n แถว
     ใช้ logic เดียวกับ predict_yield() ใน rule_engine.py
     แต่เพิ่ม noise เพื่อให้โมเดล ML ต้องเรียนรู้ pattern
 
@@ -228,7 +228,7 @@ if __name__ == "__main__":
         format="%(asctime)s  %(levelname)-8s  %(message)s",
     )
 
-    parser = argparse.ArgumentParser(description="GEOai — Durian Yield ML Model")
+    parser = argparse.ArgumentParser(description="IAM ROOT — Plant Yield ML Model")
     parser.add_argument(
         "--predict", action="store_true",
         help="ทดสอบพยากรณ์จากโมเดลที่บันทึกไว้ (ต้องเทรนก่อน)"
