@@ -99,6 +99,10 @@
       padding: 2px 8px; border-radius: 999px;
     }
     .fresh-badge.stale { color: #e65100; background: #fff3e0; }
+    .oversize-warn {
+      margin-top: 5px; font-size: 11px; font-weight: 600; color: #c62828;
+      background: #fdecea; border-radius: 8px; padding: 6px 9px; line-height: 1.5;
+    }
     .plot-check-btn {
       background: var(--line-green); color: white; border: none;
       padding: 9px 15px; border-radius: 11px; font-size: 13.5px;
@@ -546,6 +550,10 @@
       <div class="tut-icon">🔷</div>
       <div class="tut-text">หรือกด <b>"วาดขอบเขต"</b> แล้วจิ้มไล่ตามมุมแปลงทีละจุด (อย่างน้อย 3 จุด) เพื่อวาดขอบเขตแปลงให้แม่นยำขึ้น</div>
     </div>
+    <div class="tut-step">
+      <div class="tut-icon">🔍</div>
+      <div class="tut-text"><b>ซูมแผนที่ให้เห็นแนวรั้ว/คูน้ำชัดก่อนวาด</b> — วาดตามขอบเขตสวนจริงเท่านั้น ถ้าลากกว้างเกินสวนจริงไปมาก ระบบจะเตือนให้วาดใหม่</div>
+    </div>
     <button class="close-modal-btn" id="tutorial-close-btn">เข้าใจแล้ว</button>
   </div>
 </div>
@@ -739,6 +747,17 @@
     return `<div class="fresh-badge${stale ? " stale" : ""}">${stale ? "🕐" : "🟢"} อัปเดต ${text}</div>`;
   }
 
+  // v2 (ผู้ใช้เจอจริง — แปลงที่วาดผิดพลาดตั้งแต่ก่อนมีเช็คขนาดตอนวาด ยังค้างอยู่ใน
+  // ระบบ ไม่มีทางรู้ตัวว่าใหญ่ผิดปกติ): เตือนตรงในรายการแปลงของตัวเอง ให้เจ้าของ
+  // เห็นเองครั้งถัดไปที่เปิดแอป ไม่ต้องให้แอดมินทักไปบอกทีละคน — เกณฑ์เดียวกับ
+  // PLOT_MAX_AREA_RAI ที่กันตอนวาดแปลงใหม่ (ดู applyPlotSizeGuard ด้านล่าง)
+  function formatOversizedWarning(polygon) {
+    if (!polygon || polygon.length < 4) return "";
+    const areaRai = polygonAreaSqm(polygon) / 1600;
+    if (areaRai <= PLOT_MAX_AREA_RAI) return "";
+    return `<div class="oversize-warn">⚠️ ใหญ่ผิดปกติ ~${areaRai.toFixed(0)} ไร่ — น่าจะวาดคลาดเคลื่อน แนะนำกด "🗑️ ลบ" แล้ววาดใหม่ให้ตรงกับสวนจริง</div>`;
+  }
+
   // ─── Load user plots ──────────────────────────────
   async function loadUserPlots() {
     try {
@@ -777,6 +796,7 @@
           <div class="plot-coords">📍 ${plot.lat.toFixed(4)}, ${plot.lng.toFixed(4)}</div>
           ${plot.area_rai ? `<div class="plot-area">📐 ${plot.area_rai} ไร่</div>` : ""}
           ${formatPlotCreated(plot.created_at)}
+          ${formatOversizedWarning(plot.polygon)}
         </div>
         <div class="plot-btn-col">
           <button class="plot-check-btn" data-lat="${plot.lat}" data-lng="${plot.lng}"
@@ -1071,6 +1091,7 @@
 
     document.getElementById("submit-btn").disabled = false;
     applyGridSizeLimit();
+    applyPlotSizeGuard();
 
     showCoordsDisplay(`🔷 วาดขอบเขตแล้ว (${drawPoints.length} จุด) — ศูนย์กลาง <b>${selLat.toFixed(4)}</b>, <b>${selLng.toFixed(4)}</b>`);
   }
@@ -1100,6 +1121,25 @@
       twiceArea += pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1];
     }
     return Math.abs(twiceArea) / 2;
+  }
+
+  // v3 (ผู้ใช้เจอจริง: แปลงหนึ่งวาดผิดพลาดใหญ่ ~22,000 ไร่ ทำให้ทั้งวิเคราะห์หลัก
+  // และรูปแผนที่ล้มเหลว/หายไปเงียบๆ — GEE ประมวลผลพื้นที่ขนาดนั้นไม่ทันจริงๆ ไม่ใช่
+  // แค่ฟีเจอร์กริดที่มีขีดจำกัดอยู่แล้ว) — เพิ่มเพดานกว้างๆ ให้ปุ่ม "ตรวจสอบแปลงนี้"
+  // ด้วย สวนทุเรียนจริงไม่มีทางใหญ่ระดับพันไร่ ค่านี้กันเฉพาะแปลงที่ผิดพลาดชัดเจน
+  // ไม่กระทบแปลงใหญ่ที่สมเหตุสมผลจริงๆ
+  const PLOT_MAX_AREA_RAI = 1000;
+
+  function applyPlotSizeGuard() {
+    const submitBtn = document.getElementById("submit-btn");
+    const areaRai = polygonAreaSqm(polygonCoords) / 1600;
+    if (areaRai > PLOT_MAX_AREA_RAI) {
+      submitBtn.disabled = true;
+      submitBtn.title = `แปลงใหญ่ผิดปกติ ~${areaRai.toFixed(0)} ไร่ — วิเคราะห์ไม่ได้ กรุณาวาดใหม่`;
+      showToast(`⚠️ พื้นที่ใหญ่ผิดปกติ ประมาณ ${areaRai.toFixed(0)} ไร่ — เกิน ${PLOT_MAX_AREA_RAI} ไร่ที่ระบบรองรับ น่าจะวาดคลาดเคลื่อน กรุณาวาดใหม่ให้ตรงกับขอบเขตสวนจริง`);
+    } else {
+      submitBtn.title = "";
+    }
   }
 
   function applyGridSizeLimit() {
