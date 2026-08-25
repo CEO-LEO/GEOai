@@ -732,13 +732,25 @@ def _offset_latlng(lat: float, lng: float, bearing_deg: float, distance_m: float
     return math.degrees(lat2), math.degrees(lng2)
 
 
-def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[dict]:
+def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10,
+                      allow_widen: bool = False) -> tuple[list[dict], int]:
     """
     สุ่มจุดตาราง (grid) ภายในขอบเขตแปลงที่ผู้ใช้วาด แล้วดึงค่าความชื้น/น้ำขัง
     ทีละจุดแบบ batched — ยิง GEE ครั้งเดียว (image.sample) แทนที่จะวนยิงทีละจุด
 
-    คืน list ของ {"lat","lng","soil_moisture_vv","ndwi","bsi",
-                  "swab_index","status","status_th","severity"}
+    คืน (points, actual_spacing_m) — points เป็น list ของ {"lat","lng",
+    "soil_moisture_vv","ndwi","bsi","swab_index","status","status_th","severity"}
+    actual_spacing_m คือระยะห่างที่ใช้จริง (อาจต่างจาก spacing_m ที่ส่งมาถ้า
+    allow_widen=True และแปลงใหญ่เกิน) — ผู้เรียกต้องใช้ค่านี้ต่อ ไม่ใช่ spacing_m
+    เดิมที่ส่งเข้ามา เผื่อถูก widen ไปแล้ว
+
+    allow_widen (ค่าเริ่มต้น False = พฤติกรรมเดิม "ปฏิเสธถ้าใหญ่เกิน" — ผู้ใช้ขอไว้
+    สำหรับฟีเจอร์ "จุดน้ำขังในแปลง" แบบ interactive ใน LIFF ที่ต้องการ 10x10 คงที่
+    เป๊ะเสมอ): เมื่อ True (ใช้กับงานพื้นหลังอัตโนมัติอย่างรูปแผนที่แนบการแจ้งเตือน/
+    snapshot จุดชื้นสะสม — plot_image_service.py, scheduler.py) จะขยาย spacing_m
+    ขึ้นแทนการปฏิเสธ เพราะงานพวกนี้ผู้ใช้ไม่ได้กดขอ interactive และการไม่มีรูปเลย
+    แย่กว่ารูปหยาบกว่าเดิม (บั๊กที่เจอจริง: แปลงที่ผู้ใช้วาดผิดพลาดขนาด ~22,000 ไร่
+    ทำให้รูปแผนที่ในการแจ้งเตือนหายไปเงียบๆ ตั้งแต่เปลี่ยนเป็น reject เมื่อวันก่อน)
 
     หมายเหตุ: ใช้ elevation_diff ของทั้งแปลง (ค่าเดียว ไม่ได้คำนวณต่อจุด) เพราะ
     เป็นค่าที่วัดระดับ "แปลงเทียบรอบข้าง" ไม่ใช่ตัวแปรที่ต่างกันมากภายในแปลง
@@ -752,19 +764,21 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
     spacing_m = max(GRID_MIN_SPACING_M, spacing_m)
     ee_polygon = ee.Geometry.Polygon([polygon])
 
-    # v2 (ผู้ใช้ขอ "ตารางไม่ควรปรับขนาดช่องได้ เพราะเราใช้ 10x10 ตายตัว"): เดิม
-    # แปลงใหญ่ผิดปกติจะขยาย spacing_m ขึ้นเงียบๆ (แม้จะแจ้ง frontend แล้วก็ตาม)
-    # ทำให้ขนาดกระเบื้องไม่คงที่ ผู้ใช้เทียบขนาดจุดข้ามแปลงไม่ได้ — เปลี่ยนเป็น
-    # "ปฏิเสธตรงๆ" แทนถ้าแปลงใหญ่เกินจะยิง GEE ไหวที่ spacing คงที่นี้ ให้ผู้ใช้
-    # แบ่งวาดเป็นแปลงย่อยแทน ไม่ใช่ได้กระเบื้องขนาดเพี้ยนแบบไม่รู้ตัว
     area_sqm = _safe_getInfo(ee_polygon.area(1), default=0.0)
     est_points = area_sqm / (spacing_m ** 2)
     if est_points > GRID_MAX_POINTS:
-        max_area_rai = (GRID_MAX_POINTS * spacing_m ** 2) / 1600  # 1 ไร่ = 1600 ตร.ม.
-        raise ValueError(
-            f"แปลงใหญ่เกินไปสำหรับตารางจุดความชื้นที่ระยะห่างคงที่ {spacing_m}ม./ช่อง "
-            f"(รองรับได้ไม่เกินประมาณ {max_area_rai:.0f} ไร่) — กรุณาแบ่งวาดเป็นแปลงย่อยแทน"
-        )
+        if allow_widen:
+            spacing_m = max(GRID_MIN_SPACING_M, int((area_sqm / GRID_MAX_POINTS) ** 0.5) + 1)
+            logger.warning(
+                f"Grid too dense (~{est_points:.0f} pts) — widened spacing to "
+                f"{spacing_m}m to stay under {GRID_MAX_POINTS} points (allow_widen=True)"
+            )
+        else:
+            max_area_rai = (GRID_MAX_POINTS * spacing_m ** 2) / 1600  # 1 ไร่ = 1600 ตร.ม.
+            raise ValueError(
+                f"แปลงใหญ่เกินไปสำหรับตารางจุดความชื้นที่ระยะห่างคงที่ {spacing_m}ม./ช่อง "
+                f"(รองรับได้ไม่เกินประมาณ {max_area_rai:.0f} ไร่) — กรุณาแบ่งวาดเป็นแปลงย่อยแทน"
+            )
 
     today = datetime.now(timezone.utc)
     # VV (SAR) ไม่โดนเมฆบัง ใช้ช่วงสั้นให้ค่าความชื้นเป็นปัจจุบันที่สุด
@@ -862,7 +876,7 @@ def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10) -> list[d
     if not points:
         raise RuntimeError("Grid sample returned no points — polygon may be too small for the grid spacing")
 
-    return points
+    return points, spacing_m
 
 
 # ─────────────────────────────────────────────────────────

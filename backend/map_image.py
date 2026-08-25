@@ -144,6 +144,30 @@ def _bearing_between(lat1: float, lng1: float, lat2: float, lng2: float) -> floa
     return (math.degrees(math.atan2(y, x)) + 360) % 360
 
 
+def _nearest_neighbor_dist_m(points: list[dict]) -> float:
+    """
+    ระยะห่างที่ใกล้ที่สุดระหว่างจุดคู่ใดๆ ในชุดข้อมูล (เมตร) — พอร์ตจาก
+    nearestNeighborDistM() ฝั่ง liff/index.html ใช้กะขนาดกระเบื้องแบบปลอดภัย
+    (กันทับซ้อน) แทนการเชื่อ spacing_m ที่ตั้งใจไว้เฉยๆ — O(n²) ปลอดภัยสำหรับ
+    จำนวนจุดต่อแปลงจริง (GRID_MAX_POINTS ฝั่ง gee_analysis.py จำกัดไว้ที่ 1600)
+    """
+    min_dist = float("inf")
+    n = len(points)
+    for i in range(n):
+        lat1, lng1 = points[i]["lat"], points[i]["lng"]
+        phi1 = math.radians(lat1)
+        for j in range(i + 1, n):
+            lat2, lng2 = points[j]["lat"], points[j]["lng"]
+            phi2 = math.radians(lat2)
+            d_phi = math.radians(lat2 - lat1)
+            d_lambda = math.radians(lng2 - lng1)
+            a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+            d = 2 * 6378137.0 * math.asin(math.sqrt(a))
+            if 0 < d < min_dist:
+                min_dist = d
+    return min_dist if min_dist != float("inf") else 10.0
+
+
 def _compute_flow_graph(points: list[dict], spacing_m: float) -> dict[int, int]:
     """
     คืน dict id(point) → in_degree (จำนวนจุดอื่นที่มีทิศทางน้ำไหลมารวมที่จุดนี้)
@@ -273,7 +297,13 @@ def render_plot_grid_image(
     mid_lat = (min_lat + max_lat) / 2
     lng_span_m = (max_lng - min_lng) * 111320 * math.cos(math.radians(mid_lat))
     px_per_m = (w / lng_span_m) if lng_span_m > 1e-6 else 1.0
-    tile_half_px = max(2.0, (spacing_m * 1.15 / 2) * px_per_m)
+    # v2 (พอร์ตจากบั๊กที่เจอฝั่ง LIFF — กระเบื้องทับกันจริงเมื่อจุดบางคู่ห่างกันน้อย
+    # กว่า spacing_m ที่ตั้งใจไว้ เช่น ตรงขอบแปลงแคบ/เบี้ยว): วัดระยะห่างจริงที่
+    # ใกล้ที่สุดจากจุดที่ได้มา แทนการเชื่อ spacing_m เฉยๆ — ดู liff/index.html
+    # nearestNeighborDistM สำหรับตรรกะเดียวกันฝั่ง JS
+    actual_min_dist_m = _nearest_neighbor_dist_m(grid_points) if len(grid_points) >= 2 else spacing_m
+    safe_tile_m = min(spacing_m, actual_min_dist_m) * 0.96
+    tile_half_px = max(2.0, (safe_tile_m / 2) * px_per_m)
 
     # เส้นตารางบางๆ คั่นระหว่างกระเบื้อง — ผู้ใช้ฟีดแบ็กว่าตอนกระเบื้องสีติดกัน
     # (โดยเฉพาะโซนสีเดียวกันเป็นแพ) มันเบลอเป็นก้อนสีเดียว มองไม่ออกว่าจริงๆ คือ

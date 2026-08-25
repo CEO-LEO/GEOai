@@ -165,8 +165,13 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
     if not _MAP_IMAGE_AVAILABLE:
         return empty
     try:
-        grid_points, thumbnail = await asyncio.gather(
-            run_in_threadpool(gee_analysis.get_moisture_grid, polygon, 10),
+        # allow_widen=True: งานนี้เป็นการสร้างรูปแนบอัตโนมัติ (ผู้ใช้ไม่ได้กดขอ
+        # แบบ interactive) ไม่มีรูปเลยแย่กว่ารูปหยาบกว่าเดิม — บั๊กที่เจอจริง:
+        # แปลงที่วาดผิดพลาดขนาดหลายหมื่นไร่ ทำให้รูปแผนที่หายไปเงียบๆ ตั้งแต่
+        # get_moisture_grid เปลี่ยนเป็น reject แปลงใหญ่แทนการ widen (ดู
+        # gee_analysis.get_moisture_grid สำหรับเหตุผลเต็ม)
+        (grid_points, actual_spacing_m), thumbnail = await asyncio.gather(
+            run_in_threadpool(gee_analysis.get_moisture_grid, polygon, 10, True),
             run_in_threadpool(gee_analysis.get_plot_satellite_thumbnail, polygon),
         )
         png_bytes, bounds = thumbnail
@@ -182,8 +187,8 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
             logger.warning(f"Problem-point selection failed (non-fatal): {e}")
 
         composed = await run_in_threadpool(
-            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, 10, plot_name,
-            problem_points,
+            render_plot_grid_image, png_bytes, bounds, grid_points, polygon, actual_spacing_m,
+            plot_name, problem_points,
         )
         url = await upload_plot_image(composed)
         if url:

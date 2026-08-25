@@ -373,11 +373,13 @@ async def analyze_grid(req: GridRequest):
     สำหรับวาดเป็น heatmap ทับแปลงในแอป
     """
     try:
-        points = await asyncio.wait_for(
+        # allow_widen=False (ค่าเริ่มต้น) — ฟีเจอร์นี้ interactive ผู้ใช้กดเองใน LIFF
+        # ต้องการระยะห่างคงที่เป๊ะ ไม่ใช่ปรับขนาดช่องเงียบๆ (ผู้ใช้ยืนยันไว้)
+        points, actual_spacing_m = await asyncio.wait_for(
             run_in_threadpool(gee_analysis.get_moisture_grid, req.polygon, req.spacing_m),
             timeout=GRID_TIMEOUT_S,
         )
-        return {"status": "ok", "count": len(points), "spacing_m": req.spacing_m, "points": points}
+        return {"status": "ok", "count": len(points), "spacing_m": actual_spacing_m, "points": points}
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="วิเคราะห์ตารางความชื้นใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง")
     except ValueError as e:

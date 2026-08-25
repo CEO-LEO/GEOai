@@ -181,8 +181,12 @@ async def daily_scan_job(hour: int | None = None):
                         # เสี่ยงหลักของแปลงนี้ — ทำครั้งเดียวตอนคำนวณสด ไม่ทำซ้ำตอนอ่าน cache
                         if polygon and plot_id and len(polygon) >= 3:
                             try:
-                                points = await asyncio.wait_for(
-                                    run_in_threadpool(get_moisture_grid, polygon),
+                                # allow_widen=True — งานพื้นหลังอัตโนมัติ ไม่ใช่
+                                # ผู้ใช้กด interactive เอง (เหตุผลเดียวกับ
+                                # plot_image_service.py) กันแปลงใหญ่ผิดปกติทำให้
+                                # snapshot หายไปเงียบๆ แทนที่จะได้ค่าหยาบกว่าเดิม
+                                points, _ = await asyncio.wait_for(
+                                    run_in_threadpool(get_moisture_grid, polygon, 10, True),
                                     timeout=GRID_SNAPSHOT_TIMEOUT_S,
                                 )
                                 await save_grid_snapshot(plot_id, points)
