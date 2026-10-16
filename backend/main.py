@@ -6,6 +6,7 @@ import logging
 import tempfile
 import io
 import secrets
+from datetime import datetime, timedelta, timezone
 import traceback
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -45,15 +46,16 @@ except Exception as _ml_model_err:
     logger.warning(f"ml_model unavailable — ML yield model disabled: {_ml_model_err}")
     _get_model_meta = None
 from rule_engine import format_message, compute_risk_level
-from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
+import line_quota
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
                       upsert_user, save_iot_reading, get_plot_by_id,
                       save_field_observation, get_persistent_wet_points,
-                      set_notify_digest, get_latest_risk_by_plots, get_user)
+                      set_notify_digest, get_latest_risk_by_plots, get_user,
+                      get_recent_message_failures)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit
@@ -334,8 +336,11 @@ async def liff_config():
 @app.post("/analyze")
 async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
     """
-    วิเคราะห์แปลงแล้ว push การ์ดผลเข้าแชท LINE ของ "ผู้ใช้ที่ยืนยันตัวตนแล้วเท่านั้น"
-    (เดิมส่งไปหา user_id อะไรก็ได้ที่ client ใส่มา — ใช้ OA เราส่งข้อความหาคนอื่นได้)
+    วิเคราะห์แปลงของผู้ใช้ที่ยืนยันตัวตนแล้ว (user จาก LINE token เท่านั้น)
+
+    Phase 1b: ไม่ push การ์ดผลเข้าแชท LINE แล้ว — ผู้ใช้กดเองในแอปและเห็นผลบนหน้าจอ
+    อยู่แล้ว push นี้กินโควตา LINE OA 1 ข้อความทุกครั้งที่กดตรวจ (แพลน Free มีแค่ 300/เดือน)
+    ผู้ใช้ยังดูการ์ดในแชทได้จากปุ่ม "ตรวจสอบ" ใน Rich Menu (ส่งแบบ reply ไม่นับโควตา)
     """
     req.user_id = user_id
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
@@ -351,10 +356,9 @@ async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
                                   req.plot_name, req.area_rai,
                                   polygon=req.polygon)
 
-        # แปลงที่วาดขอบเขตไว้ (polygon) เท่านั้นถึงจะมีตารางความชื้นให้ทำภาพ —
-        # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
-        # ต้องเรียกก่อนสร้าง flex การ์ด (ย้ายลงมาด้านล่างแล้ว) เพราะการ์ดต้องใช้
-        # problem_points ที่ได้จากตรงนี้ (ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้")
+        # แปลงที่วาดขอบเขตไว้ (polygon) — สร้างรูปแผนที่ + รูปย่อของแปลง (รูปย่อใช้ในหน้า
+        # "แปลงของฉัน") ล้มเหลวได้โดยไม่กระทบคำขอหลัก ส่ง image_url/problem_points
+        # กลับไปใน response ให้หน้าแอปใช้ได้ (ไม่ push เข้า LINE แล้ว — ดู docstring)
         image_url = None
         problem_points = []
         if req.polygon and len(req.polygon) >= 3:
@@ -362,12 +366,9 @@ async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
             image_url = img_result["url"]
             problem_points = img_result["problem_points"]
 
-        flex = build_result_flex(data, req.lat, req.lng, message,
-                                 problem_points=problem_points, plot_name=req.plot_name)
-
-        await send_line_message(req.user_id, message, flex=flex, image_url=image_url)
         await save_analysis(req.user_id, data, message, plot_id=plot_id)
-        return {"status": "ok", "plot_id": plot_id, "data": data}
+        return {"status": "ok", "plot_id": plot_id, "data": data,
+                "image_url": image_url, "problem_points": problem_points}
     except (asyncio.TimeoutError, ee.EEException, NoSatelliteDataError) as e:
         logger.error(f"GEE failure: lat={req.lat} lng={req.lng}: {e}")
         status_code, detail = _gee_failure_detail(e)
@@ -567,6 +568,19 @@ async def admin_logs(level: str | None = None, limit: int = 50):
         "stats":   log_buffer.get_stats(),
         "entries": log_buffer.get_entries(level=level, limit=limit),
     }
+
+
+@app.get("/admin/messaging/status", dependencies=[Depends(verify_admin)])
+async def admin_messaging_status():
+    """
+    สถานะการส่งข้อความ LINE: โควตาคงเหลือ, จำนวนที่ส่งไม่สำเร็จ/ถูกข้ามใน 24 ชม.
+    health = ok / warn / critical — GitHub Actions (keep-alive.yml) เรียกทุกชั่วโมง ถ้าไม่
+    ok งานจะล้มและ GitHub อีเมลแจ้งเจ้าของ repo (เดิมโควตาหมด 8 วันโดยไม่มีใครรู้)
+    """
+    await line_quota.refresh(force=True)
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    return {**line_quota.health(),
+            "recent_failures": await get_recent_message_failures(since, limit=20)}
 
 
 @app.get("/admin/failed-messages", dependencies=[Depends(verify_admin)])

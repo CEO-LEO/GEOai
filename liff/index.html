@@ -1738,24 +1738,11 @@
       if (!res.ok) throw new Error(friendlyErrorMessage(await res.text(), "ส่งข้อมูลไม่สำเร็จ"));
       const json = await res.json();
 
-      if (liff.isInClient()) {
-        // sendMessages ต้องการ scope "chat_message.write" — ถ้า LIFF app ยังไม่ได้เปิด scope
-        // นี้ไว้ใน LINE Developers Console จะโยน "The permission is not in LIFF app scope"
-        // การส่งข้อความยืนยันนี้เป็นแค่ของแถม (ผลวิเคราะห์จริงถูก push เข้าแชทจาก backend
-        // อยู่แล้วไม่ว่ากรณีนี้จะสำเร็จหรือไม่) จึงห้ามให้ error ตรงนี้ทำให้ทั้งฟังก์ชันหยุด
-        // ทำงานก่อนถึงส่วนแสดงแผนที่/จุดน้ำขังด้านล่าง — ครอบ try/catch แยกไว้ต่างหาก
-        try {
-          await liff.sendMessages([{
-            type: "text",
-            text: `📍 ส่งพิกัดแปลง "${plotName}" เรียบร้อย\nกำลังวิเคราะห์ข้อมูลดาวเทียม รอผลใน LINE 🛰️`
-          }]);
-        } catch (sendErr) {
-          console.warn("liff.sendMessages failed (non-fatal):", sendErr);
-        }
-      } else {
-        await loadUserPlots();
-        if (map) addPlotOverlays();
-      }
+      // Phase 1b: ผลวิเคราะห์แสดงบนหน้าจอนี้เท่านั้น ไม่ส่งการ์ดเข้าแชท LINE แล้ว (กินโควตา
+      // LINE OA) — เลิกส่งข้อความ "รอผลใน LINE" ด้วย และโหลดรายการแปลงใหม่ทั้งในและนอก
+      // แอป LINE (เดิมในแอปไม่โหลดเพราะไปดูผลในแชทแทน)
+      await loadUserPlots();
+      if (map) addPlotOverlays();
 
       const hasPolygon = polyCoords && polyCoords.length >= 3;
 
