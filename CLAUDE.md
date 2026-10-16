@@ -4,8 +4,13 @@
 กำลังอัปเกรดเป็น **v2** เพื่อใช้กับเครือข่ายเกษตรจังหวัดราชบุรี (B2G)
 
 - **Spec ฉบับเต็ม:** [docs/IAMROOT_V2_PROMPT.md](docs/IAMROOT_V2_PROMPT.md) — อ่านก่อนเริ่มงาน v2 ทุกครั้ง
-- **สถานะล่าสุด:** Phase 0 เสร็จ (2026-10-15) รายงานอยู่ที่ [docs/v2/phase0-report.md](docs/v2/phase0-report.md)
-  — **รอเจ้าของโปรเจกต์อนุมัติแผนก่อนแก้โค้ด**
+- **สถานะล่าสุด (2026-10-16):** Phase 0 อนุมัติแล้ว ([รายงาน](docs/v2/phase0-report.md))
+  · **Phase 1a (ปิดช่องโหว่) โค้ดเสร็จบน branch `feat/v2-phase1a-security`** ([รายงาน](docs/v2/phase1a-report.md))
+  — ยังไม่ push/merge: รอเจ้าของยืนยันว่าเปลี่ยน `ADMIN_API_KEY` แล้ว · ลำดับถัดไป 1b → 1c → 1d แล้วค่อย 1e/1f/1g
+- **คำตอบที่เจ้าของให้ไว้แล้ว (Phase 0 ข้อ 7):** ความเร็วเลือกทาง A · migration ได้เฉพาะแบบเพิ่ม (ตาราง/คอลัมน์ nullable)
+  ต้อง pg_dump + rollback และแจ้งก่อนรัน production ทุกครั้ง · ปุ๋ย/ผลผลิตซ่อนหลัง feature flag (ปิด) และเปลี่ยนคำ NDVI/BSI
+  · สรุปประจำวันปิดเป็นค่าเริ่มต้น · สวนยกร่อง (`plot_type=raised_bed`) ซ่อนลูกศร/วงม่วง/คำเตือนน้ำขังจากร่อง + บอกข้อจำกัด
+  · ข้ออื่นใช้ค่าเริ่มต้นในรายงาน Phase 0
 - โค้ดเก่าเรียกตัวเองว่า "GEOai" และตั้งชื่อฟังก์ชันว่า `*_durian_*` — ชื่อที่ผู้ใช้เห็นคือ "IAM ROOT" และ "ต้นไม้"
 
 ## Stack
@@ -23,8 +28,8 @@
 | งานตามเวลา | GitHub Actions [.github/workflows/keep-alive.yml](.github/workflows/keep-alive.yml) ยิง `/admin/trigger/*` ทุกชั่วโมง 05–10 น. |
 | Hosting | **Render** service `geoai` แพลน starter (ไม่หลับ) branch `master` → `https://iamroot.onrender.com` |
 
-ไฟล์ deploy อื่น (`railway.toml`, `vercel.json`, `Dockerfile`, `docker-compose.yml`, `nginx/`, `.github/workflows/deploy.yml`) **ไม่ได้ใช้งานจริง**
-และ `deploy.yml` ทริกเกอร์บน branch `main` ซึ่งไม่มีอยู่ → CI ไม่เคยรัน
+ไฟล์ deploy อื่น (`railway.toml`, `vercel.json`, `Dockerfile`, `docker-compose.yml`, `nginx/`) **ไม่ได้ใช้งานจริง**
+CI = `.github/workflows/deploy.yml` รัน test อย่างเดียวบน `master` และ `feat/**` (ตั้งแต่ Phase 1a)
 
 ## คำสั่ง
 
@@ -34,12 +39,11 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-# test — ใส่ env ปลอมเสมอ (main.py เรียก load_dotenv() จะดึง backend/.env ตัวจริงมาใช้ถ้าไม่ override)
-ADMIN_API_KEY= LINE_CHANNEL_ACCESS_TOKEN=test LINE_CHANNEL_SECRET=test \
-GEE_SERVICE_ACCOUNT=t@x.iam.gserviceaccount.com GEE_KEY_JSON='{"type":"service_account"}' \
-SUPABASE_URL=https://example.supabase.co SUPABASE_SERVICE_ROLE_KEY=test \
-LIFF_URL=https://liff.line.me/0000000000-AAAAAAAA \
-pytest test_system.py -q                  # 80 tests (2026-10-15: ผ่านครบเมื่อ ADMIN_API_KEY ว่าง)
+pytest -q                                 # 125 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+                                          # pytest.ini เก็บแค่ test_system.py + test_auth.py
+
+# รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
+IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
 ```
 
 - **Deploy:** push `master` → Render auto-deploy. Build command จริงตั้งใน Render Dashboard (ไม่ sync กับ `render.yaml`)
@@ -50,12 +54,24 @@ pytest test_system.py -q                  # 80 tests (2026-10-15: ผ่าน�
 
 `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEE_SERVICE_ACCOUNT`, `GEE_KEY_JSON`, `SUPABASE_URL`,
 `SUPABASE_SERVICE_ROLE_KEY`, `LIFF_URL`, `API_BASE_URL`, `ADMIN_API_KEY`, `SPHERE_KEY` — ดู [backend/.env.example](backend/.env.example)
+ไม่บังคับ: `LINE_LOGIN_CHANNEL_ID` (ค่าเริ่มต้น = ส่วนหน้าของ LIFF ID), `RATE_LIMIT_IP_PER_MIN`, `CORS_ALLOW_ORIGINS`,
+`IAMROOT_DEV_AUTH_USER` (dev เท่านั้น), `IAMROOT_DISABLE_DOTENV` (test)
+Migration: ก่อนรันทุกครั้ง `SUPABASE_DB_URL=... bash scripts/backup_db.sh` + มีไฟล์ `supabase/rollback_vN.sql` คู่กัน
 
 ## Data model ปัจจุบัน (Supabase)
 
 `users` (user_id = LINE userId, notify_weekly, notify_daily_digest, notify_hour) · `plots` (lat/lng, polygon JSONB `[[lng,lat],...]`, thumbnail_url)
 · `analyses` (คอลัมน์ flat + `full_data` JSONB) · `grid_snapshots` · `iot_readings` · `field_observations` · `scheduler_runs`
 — schema: [supabase/schema.sql](supabase/schema.sql) + migrate_v3…v11
+
+## Auth และสิทธิ์ (ตั้งแต่ Phase 1a)
+
+- endpoint ฝั่งผู้ใช้ต้อง `Depends(_api_user | _analyze_user | _grid_user)` ใน main.py — ตรวจ LINE token ผ่าน
+  [backend/auth.py](backend/auth.py) (`Authorization: Bearer` + `X-Line-Token-Type: id_token|access_token`) แล้วจำกัดคำขอต่อผู้ใช้
+- user_id ใน path ต้องผ่าน `_require_self()` และ plot_id ต้องผ่าน `_require_own_plot()` — **endpoint ใหม่ทุกตัวต้องทำแบบเดียวกัน**
+- endpoint ที่ push ข้อความ LINE ไปหาคนอื่นได้ หรือเป็นงานดูแลระบบ → `Depends(verify_admin)` (fail-closed)
+- LIFF เรียก API ผ่าน `apiFetch()` เท่านั้น (แนบ token ให้เอง)
+- test ใช้ `auth_as("U...")` / `ADMIN_HEADERS` จาก conftest.py
 
 ## จุดที่ต้องรู้ก่อนแก้
 
@@ -65,7 +81,11 @@ pytest test_system.py -q                  # 80 tests (2026-10-15: ผ่าน�
 - สีบนแผนที่เป็น **สีเทียบกันเองภายในแปลง** (contrast stretch) ไม่ใช่ค่าสัมบูรณ์
 - ทิศทางน้ำมาจาก SRTM 30 m (`slope >= 1.5°`) — ใช้ไม่ได้กับพื้นที่ราบ/สวนยกร่องภาคกลาง (ดูรายงาน Phase 0)
 - Cache ผลวิเคราะห์ ([backend/cache.py](backend/cache.py)) อยู่ในแรม key = lat/lng ปัด 3 ตำแหน่ง ไม่รวม polygon
-- Rate limit ([backend/middleware.py](backend/middleware.py)) ในแรม 10 req/นาที/IP **รวมไฟล์ static ด้วย**
+- Rate limit ([backend/middleware.py](backend/middleware.py)) ในแรม: เพดาน IP 600/นาที เฉพาะ API (ไม่นับ static) + จำกัดต่อ LINE userId
+  — ต้องรองรับอบรม 30–50 คนใน Wi-Fi เดียว (มี test)
+- LINE OA อยู่แพลน Free 300 ข้อความ/เดือน และใช้หมดตั้งแต่ราววันที่ 7 ของเดือน (2026-10) — งานที่เพิ่ม push ต้องคิดโควตาเสมอ
+  ดูประมาณการใน phase1a-report หัวข้อ 4 · ผลวิเคราะห์ 82% เป็น "เสี่ยงสูง" → คำเตือนส่งแทบทุกวัน
+- `daily_scan_job`/`rain_alert_job` หารายชื่อผู้ใช้จากรายงาน 1,000 แถวล่าสุด — หลุดเมื่อแปลงเกิน ~1,000 (ต้องแก้ใน 1b)
 - โค้ดเดิมนิยม "ปิดไว้ไม่ลบ" (เช่น ML yield, `_build_fertilizer_section`) — ตรวจก่อนว่าฟังก์ชันยังถูกเรียกจริงไหม
 
 ## กติกาการทำงาน (สรุปจาก spec หัวข้อ 2 — ต้องทำตามทุกข้อ)
