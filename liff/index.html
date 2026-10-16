@@ -445,6 +445,9 @@
       border:4px solid #d7e6db; border-top-color:var(--green2); animation: spin .8s linear infinite; }
     @keyframes spin { to{ transform: rotate(360deg) } }
     #spinner.show { display: flex; }
+    /* ข้อความผิดพลาดที่ไปต่อไม่ได้ (เช่น ยืนยันตัวตนไม่สำเร็จ) — ไม่หมุน ให้รู้ว่าไม่ได้กำลังโหลด */
+    #spinner.error { padding: 0 24px; text-align: center; font-size: 17px; line-height: 1.6; }
+    #spinner.error::before { display: none; }
   </style>
 </head>
 <body>
@@ -610,36 +613,96 @@
     }
   }
 
-  // ─── Init ─────────────────────────────────────────
-  // บั๊กที่เจอ (ผู้ใช้รายงาน "หาแปลงตัวเองไม่เจอทั้งที่เคยวาดแล้ว"): เดิมถ้า
-  // liff.getContext().userId ไม่มีค่า (เช่น เปิด URL นี้ตรงๆ ใน browser ปกติ
-  // แทนที่จะเปิดผ่านปุ่มในแอป LINE) โค้ดจะ fallback ไปใช้ userId = "test-user"
-  // ตัวเดียวที่ทุกคนที่หลุดมาทางนี้ใช้ร่วมกันหมด — ไม่ใช่แค่มองไม่เห็นแปลงตัวเอง
-  // (ซึ่งยังอยู่ในฐานข้อมูลปกติ ผูกกับ LINE user id จริง) แต่เสี่ยงเห็น/บันทึกทับ
-  // ข้อมูลของคนอื่นที่หลุดมาทางเดียวกันด้วย
-  //
-  // แก้ด้วยการเช็ค liff.isInClient() (true = เปิดผ่าน LIFF browser ในแอป LINE จริง
-  // ซึ่ง login ให้อัตโนมัติอยู่แล้ว) — ถ้าไม่ใช่ และยังไม่ login (isLoggedIn()===false)
-  // ให้สั่ง liff.login() บังคับ login ผ่าน LINE จริงก่อน (redirect กลับมาหน้านี้เอง
-  // หลัง login เสร็จ) แทนที่จะเงียบๆ ใช้บัญชีทดสอบร่วม — "test-user" เหลือไว้เป็น
-  // fallback สุดท้ายจริงๆ เฉพาะตอน liff.init() ล้มเหลว (เช่น local dev ไม่ได้ตั้ง
-  // LIFF_ID จริง) ซึ่งไม่มีทาง login ผ่าน LINE ได้อยู่แล้ว
+  // ─── Auth ─────────────────────────────────────────
+  // ทุกคำขอ API ต้องแนบ LINE token ให้ server ตรวจเอง (backend/auth.py) — server ไม่เชื่อ
+  // userId ที่ client ส่งมาอีกต่อไป ใช้ ID token เป็นหลัก ถ้า LIFF ยังไม่เปิด scope
+  // "openid" (getIDToken() คืน null) หรือ ID token หมดอายุเพราะเปิดแอปค้างไว้นาน
+  // จะสลับไปใช้ access token แทน
+  let authToken = null;   // { type: "id_token" | "access_token", value }
   let liffInitOk = false;
+  const IS_LOCAL_DEV = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+
+  function pickAuthToken(preferAccess = false) {
+    if (!liffInitOk) return null;
+    try {
+      const idToken = preferAccess ? null : liff.getIDToken();
+      if (idToken) return { type: "id_token", value: idToken };
+      const accessToken = liff.getAccessToken();
+      if (accessToken) return { type: "access_token", value: accessToken };
+    } catch {}
+    return null;
+  }
+
+  function authHeaders() {
+    return authToken
+      ? { "Authorization": `Bearer ${authToken.value}`, "X-Line-Token-Type": authToken.type }
+      : {};
+  }
+
+  async function apiFetch(url, opts = {}) {
+    const send = () => fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...authHeaders() } });
+    let res = await send();
+    if (res.status === 401 && authToken && authToken.type === "id_token") {
+      const fallback = pickAuthToken(true);
+      if (fallback) { authToken = fallback; res = await send(); }
+    }
+    if (res.status === 401) showToast("⚠️ การยืนยันตัวตนหมดอายุ กรุณาปิดแล้วเปิดแอปใหม่");
+    return res;
+  }
+
+  // หลัง liff.init() URL อาจมี code/state จากขั้นตอน login ค้างอยู่ — ลบออก กันผู้ใช้คัดลอก
+  // ลิงก์ที่มี auth code ไปแชร์ต่อ (คง ?tab=... ไว้ เพราะใช้ทำ deep link จาก Rich Menu)
+  function stripAuthParamsFromUrl() {
+    try {
+      const url = new URL(window.location.href);
+      let changed = false;
+      ["code", "state", "liffClientId", "liffRedirectUri", "error", "error_description"].forEach(k => {
+        if (url.searchParams.has(k)) { url.searchParams.delete(k); changed = true; }
+      });
+      if (changed) history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+    } catch {}
+  }
+
+  function showFatal(msg) {
+    const s = document.getElementById("spinner");
+    s.textContent = msg;
+    s.classList.add("show", "error");
+  }
+
+  // ─── Init ─────────────────────────────────────────
+  // เดิมถ้าหา userId ไม่ได้จะ fallback เป็นบัญชีร่วม "test-user" ที่ทุกคนที่หลุดมาทางนี้
+  // ใช้ร่วมกัน (เห็น/บันทึกทับข้อมูลกันได้) — ตอนนี้ server ไม่ยอมรับคำขอที่ไม่มี token
+  // อยู่แล้ว จึงตัดบัญชีร่วมทิ้ง เหลือ "dev-user" เฉพาะตอนรันบน localhost (server ต้อง
+  // ตั้ง IAMROOT_DEV_AUTH_USER=dev-user ด้วย)
+  //
+  // นอกแอป LINE (desktop browser) ที่ยังไม่ login → liff.login() บังคับ login ผ่าน LINE
+  // จริงก่อน (redirect กลับมาหน้านี้เองหลัง login เสร็จ)
   liff.init({ liffId: LIFF_ID })
     .then(() => { liffInitOk = true; })
-    .catch(() => {})   // liff.init() ล้มเหลว (เช่น local dev) — ทำงานเป็น browser ปกติได้
+    .catch((e) => { console.warn("liff.init failed:", e); })
     .finally(async () => {
+      if (liffInitOk) stripAuthParamsFromUrl();
       if (liffInitOk && !liff.isInClient() && !liff.isLoggedIn()) {
         liff.login({ redirectUri: window.location.href });
         return;   // liff.login() จะ redirect ออกจากหน้านี้ทันที ไม่ต้องทำอะไรต่อ
       }
+      if (!liffInitOk && !IS_LOCAL_DEV) {
+        showFatal("⚠️ เปิดแอปไม่สำเร็จ กรุณาปิดแล้วเปิดใหม่จากเมนูในแชท LINE");
+        return;
+      }
 
-      try { userId = liff.getContext()?.userId; } catch {}
-      userId = userId || "test-user";
+      authToken = pickAuthToken();
+      try { userId = liff.getDecodedIDToken()?.sub || liff.getContext()?.userId; } catch {}
 
-      const profile = await liff.getProfile().catch(() => null);
+      const profile = liffInitOk ? await liff.getProfile().catch(() => null) : null;
       if (profile) {
         displayName = profile.displayName || "";
+        userId = userId || profile.userId;
+      }
+      if (!userId && IS_LOCAL_DEV) userId = "dev-user";
+      if (!userId || (!authToken && !IS_LOCAL_DEV)) {
+        showFatal("⚠️ ยืนยันตัวตนกับ LINE ไม่สำเร็จ กรุณาปิดแล้วเปิดแอปใหม่จากแชท LINE");
+        return;
       }
       document.getElementById("username-label").textContent =
         profile ? `สวัสดี ${profile.displayName}` : "";
@@ -761,7 +824,7 @@
   // ─── Load user plots ──────────────────────────────
   async function loadUserPlots() {
     try {
-      const res = await fetch(`${API_URL}/plots/${encodeURIComponent(userId)}`);
+      const res = await apiFetch(`${API_URL}/plots/${encodeURIComponent(userId)}`);
       const json = await res.json();
       userPlots = json.plots || [];
     } catch {
@@ -1422,7 +1485,7 @@
     clearGridOverlay();
     showSpinner("⏳ กำลังวิเคราะห์จุดความชื้นในแปลง...");
     try {
-      const res = await fetch(`${API_URL}/analyze/grid`, {
+      const res = await apiFetch(`${API_URL}/analyze/grid`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ polygon: poly, spacing_m: 10 }),
@@ -1553,7 +1616,7 @@
   async function showPersistentWet(plotId, plotName, polygon) {
     showSpinner("⏳ กำลังดึงประวัติจุดชื้นสะสม...");
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}/persistent-wet?days=14`
       );
       const json = await res.json();
@@ -1662,11 +1725,12 @@
   async function submitAnalysis(lat, lng, plotName, areaRai, polyCoords) {
     showSpinner("⏳ กำลังวิเคราะห์ข้อมูลดาวเทียม...");
     try {
-      const body = { lat, lng, user_id: userId, display_name: displayName, plot_name: plotName };
+      // ไม่ส่ง user_id แล้ว — server ใช้เจ้าของ token เท่านั้น
+      const body = { lat, lng, display_name: displayName, plot_name: plotName };
       if (areaRai) body.area_rai = areaRai;
       if (polyCoords) body.polygon = polyCoords;
 
-      const res = await fetch(`${API_URL}/analyze`, {
+      const res = await apiFetch(`${API_URL}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -1734,7 +1798,7 @@
 
     showSpinner("⏳ กำลังลบแปลง...");
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}`,
         { method: "DELETE" }
       );
@@ -1756,7 +1820,7 @@
     document.getElementById("detail-modal").classList.add("show");
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}/history?limit=15`
       );
       if (!res.ok) throw new Error();
@@ -1867,7 +1931,7 @@
     document.getElementById("detail-modal").classList.add("show");
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}/ndvi-timeseries?months=24`
       );
       if (!res.ok) throw new Error();
