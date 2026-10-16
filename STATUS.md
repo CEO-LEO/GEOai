@@ -1,5 +1,7 @@
 # 📊 GEOai Status Report
 
+> ⚠️ **หมายเหตุ (2026-10-15):** เอกสารนี้เป็นบันทึกช่วงต้นแบบ (มิ.ย. 2569) ตัวเลขด้านล่างมาจากการรันระบบกับ 5 พิกัดโดย **ไม่มีข้อมูลจริงจากแปลง (ผลผลิต/อาการ) มาเทียบ** จึงไม่ใช่ผลวัดความแม่นยำ — ตัวเลข "83%" เดิมคือค่าความสอดคล้องระหว่างโมเดล ML กับสูตรคำนวณของระบบเอง ไม่ใช่ accuracy ได้ลบคำกล่าวอ้างเรื่องความแม่นยำออกแล้ว ห้ามนำตัวเลขในไฟล์นี้ไปใช้ในเอกสารเสนอหน่วยงาน (ดู docs/v2/phase0-report.md หัวข้อ 2.4)
+
 **Date:** 2026-06-27  
 **Version:** v3 (Production Ready)  
 **Project:** Durian Precision Agriculture System  
@@ -21,8 +23,8 @@
 - [x] Backtest on 5 real durian plots (Nai Yai Yam area)
 - [x] NDVI analysis validated (avg 0.52 ✓ healthy)
 - [x] Yield forecast tested (avg 1064 kg/rai)
-- [x] Risk assessment accurate (0 false positives)
-- [x] ML confidence confirmed (83% accuracy)
+- [x] Risk assessment ran on all 5 plots (accuracy not measured — no field data)
+- [ ] ML accuracy — not measured (no real yield data; 83% was model-vs-formula agreement, not accuracy)
 - [x] Backend endpoints verified (health, dashboard, API)
 
 ### Phase 3: Documentation ✅
@@ -102,12 +104,12 @@ c:\GEOai\
 **NDVI Average:** 0.52 (healthy target: 0.50-0.70) ✅  
 **Yield Average:** 1,064 kg/rai  
 **Risk Assessment:** All OK (0 HIGH, 0 MEDIUM)  
-**ML Confidence:** 83%  
+**ML Accuracy:** not measured (no field data)  
 
 **Best Performer:** Hilltop Plot (1,537 kg/rai)  
 **Needs Attention:** Community Plot (NDVI 0.36, requires intensive care)
 
-**Conclusion:** System is **PRODUCTION-READY** for farmer deployment
+**Conclusion:** Pipeline runs end-to-end on these coordinates. Accuracy has not been validated against field observations.
 
 ---
 
@@ -239,11 +241,11 @@ See [QUICK_START.md](QUICK_START.md) Section 1 for how to collect these.
 | Metric | Target | Actual | Status |
 |--------|--------|--------|--------|
 | Backtest Success Rate | >90% | 100% (5/5) | ✅ |
-| NDVI Accuracy | ±0.05 | 0.52 avg | ✅ |
-| Yield Forecast Confidence | >80% | 83% | ✅ |
+| NDVI Accuracy | ±0.05 | not measured | — |
+| Yield Forecast Accuracy | — | not measured | — |
 | API Response Time | <500ms | ~200ms | ✅ |
 | Dashboard Load Time | <2s | ~1s | ✅ |
-| Code Coverage | >70% | ~85% | ✅ |
+| Code Coverage | >70% | not measured | — |
 | Documentation | Complete | 100% | ✅ |
 
 ---
