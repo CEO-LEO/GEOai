@@ -62,10 +62,28 @@ jobs:
             && echo "OK — rain-alert job started (hour=${{ steps.hour.outputs.h }})" \
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
 
-      - name: Trigger daily-scan job for this hour (includes daily digest)
+      - name: Trigger daily-scan job for this hour (includes weekly digest on Mondays)
         run: |
           curl -sf -X POST --max-time 60 \
             -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
             "https://iamroot.onrender.com/admin/trigger/daily-scan?hour=${{ steps.hour.outputs.h }}" \
             && echo "OK — daily-scan job started (hour=${{ steps.hour.outputs.h }})" \
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
+
+      # v6 (Phase 1b): ตรวจสุขภาพการส่งข้อความ LINE ทุกรอบ — 2026-10 โควตา LINE OA หมดแล้ว
+      # push ล้มเหลวเงียบๆ 8 วันโดยไม่มีใครรู้ ถ้าโควตาใกล้หมด/หมด, มีการส่งไม่สำเร็จใน 24 ชม.
+      # หรือเรียก endpoint ไม่ได้ (เช่น ADMIN_API_KEY ใน secret ไม่ตรงกับ Render) step นี้จะ
+      # ล้ม → GitHub ส่งอีเมลแจ้งผู้แก้ไข workflow ตั้งเวลาล่าสุด (ใช้ได้แม้ LINE ส่งไม่ออก)
+      - name: Check LINE messaging health (fails the run if not ok)
+        run: |
+          body=$(curl -s --max-time 60 -w '\n%{http_code}' \
+            -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
+            "https://iamroot.onrender.com/admin/messaging/status")
+          code=$(echo "$body" | tail -n1); json=$(echo "$body" | sed '$d')
+          echo "HTTP $code"; echo "$json" | jq '{health, reasons, remaining, quota, failed_24h, skipped_24h}' || echo "$json"
+          if [ "$code" != "200" ]; then echo "::error::messaging status endpoint returned HTTP $code"; exit 1; fi
+          health=$(echo "$json" | jq -r '.health')
+          if [ "$health" != "ok" ]; then
+            echo "::error::LINE messaging health is '$health': $(echo "$json" | jq -r '.reasons | join("; ")')"
+            exit 1
+          fi

@@ -127,8 +127,8 @@ class TestOwnership:
         assert resp.status_code == 403
         s.assert_not_called()
 
-    async def test_analyze_pushes_only_to_token_owner(self, client):
-        """user_id ใน body ถูกเมิน — push ไปหาเจ้าของ token เท่านั้น"""
+    async def test_analyze_uses_token_owner_and_does_not_push(self, client):
+        """user_id ใน body ถูกเมิน — ใช้เจ้าของ token เท่านั้น และ (Phase 1b) ไม่ push เข้า LINE"""
         data = {"ndvi_now": 0.6, "ndvi_prev": 0.6, "ndvi_change": 0.0, "soil_moisture_vv": -14.0,
                 "elevation": 10.0, "elevation_diff": 0.0, "bsi": 0.1}
         with patch("main.analyze_durian_plot", return_value=data), \
@@ -139,7 +139,7 @@ class TestOwnership:
             resp = await client.post("/analyze", headers=auth_as("U1"),
                                      json={"lat": 13.5, "lng": 99.8, "user_id": "UVICTIM"})
         assert resp.status_code == 200
-        assert send.call_args.args[0] == "U1"
+        send.assert_not_called()
         assert upsert.call_args.args[0] == "U1"
         assert save_plot.call_args.args[0] == "U1"
 
