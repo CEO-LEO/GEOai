@@ -11,7 +11,11 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-load_dotenv()
+# test ตั้ง IAMROOT_DISABLE_DOTENV=1 (ดู conftest.py) กันไม่ให้ backend/.env ตัวจริงใน
+# เครื่องนักพัฒนาถูกโหลดเข้ามาปนระหว่างรัน test — เคยทำให้ test admin พัง 6 ตัว
+# เพราะ ADMIN_API_KEY จาก .env และเสี่ยงยิงบริการจริงด้วย key จริง
+if os.environ.get("IAMROOT_DISABLE_DOTENV") != "1":
+    load_dotenv()
 
 # ── ตั้ง logging + log_buffer ก่อน import module อื่นทุกตัวที่มีโอกาสพัง ──
 # เดิมตั้งไว้ท้ายบล็อก import (หลัง map_image/ml_model) ทำให้ warning ตอน import
@@ -52,22 +56,52 @@ from database import (save_analysis, get_all_reports, save_plot,
                       set_notify_digest, get_latest_risk_by_plots, get_user)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
-from middleware import RateLimitMiddleware
+from middleware import RateLimitMiddleware, user_rate_limit
+from auth import current_user, liff_id, dev_auth_user
 from cache import cache_stats
 from i18n import t, Lang
 
 # ── Admin API Key Auth ─────────────────────────────────
 _admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
-ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
 
 
 async def verify_admin(key: str = Security(_admin_key_header)):
-    """ตรวจ API key สำหรับ /admin/* endpoints"""
-    if not ADMIN_API_KEY:
-        return True  # ไม่ได้ตั้ง key → ปล่อยผ่าน (dev mode)
-    if not key or not secrets.compare_digest(key, ADMIN_API_KEY):
+    """
+    ตรวจ API key สำหรับ /admin/* และ endpoint ที่สั่ง push ข้อความ LINE ได้
+
+    fail-closed: เดิมถ้าไม่ได้ตั้ง ADMIN_API_KEY จะ "ปล่อยผ่าน" ทุกคำขอ (dev mode) —
+    ถ้า env หายไปตอน deploy ทุกคนจะกลายเป็น admin ทันที ตอนนี้ปฏิเสธแทน
+    อ่าน env ตอนเรียก ไม่ใช่ตอน import เพื่อให้ key ที่เปลี่ยนใหม่มีผลกับ test/โปรเซสเดิม
+    """
+    admin_key = os.environ.get("ADMIN_API_KEY", "")
+    if not admin_key:
+        logger.error("ADMIN_API_KEY is not set — rejecting admin request")
+        raise HTTPException(status_code=503, detail="Admin access is not configured")
+    if not key or not secrets.compare_digest(key, admin_key):
         raise HTTPException(status_code=403, detail="Invalid admin API key")
     return True
+
+
+# ── User auth helpers ──────────────────────────────────
+# ทุก endpoint ฝั่งผู้ใช้ต้องผ่าน current_user (ตรวจ LINE token ฝั่ง server) — user_id
+# ใน URL ต้องตรงกับเจ้าของ token และแปลงต้องเป็นของผู้ใช้คนนั้นจริง
+_api_user     = user_rate_limit("api", 60)      # ใช้ทั่วไป
+_analyze_user = user_rate_limit("analyze", 3)   # เรียก GEE หนัก (เท่าเพดานเดิม 3 ครั้ง/นาที)
+_grid_user    = user_rate_limit("grid", 10)
+
+
+def _require_self(path_user_id: str, user_id: str) -> None:
+    if path_user_id != user_id:
+        raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์เข้าถึงข้อมูลของผู้ใช้อื่น")
+
+
+async def _require_own_plot(plot_id: int, user_id: str) -> dict:
+    # ตอบ 404 เหมือนกันทั้ง "ไม่มีแปลงนี้" และ "เป็นแปลงของคนอื่น" — ไม่บอกใบ้ว่า plot_id
+    # ไหนมีอยู่จริง (plot_id เป็นเลขเรียง ไล่เดาได้)
+    plot = await get_plot_by_id(plot_id)
+    if not plot or plot.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้")
+    return plot
 
 
 @asynccontextmanager
@@ -98,6 +132,12 @@ async def lifespan(app: FastAPI):
     if not os.environ.get("SUPABASE_URL"):
         seed_demo_data()
 
+    if not os.environ.get("ADMIN_API_KEY"):
+        logger.warning("ADMIN_API_KEY not set — /admin/* endpoints will reject every request")
+    if dev_auth_user():
+        logger.warning("IAMROOT_DEV_AUTH_USER is set — requests without a LINE token are "
+                       "treated as that user. Local development only.")
+
     scheduler = create_scheduler()
     scheduler.start()
     logger.info("Scheduler started — daily scan every day 07:00")
@@ -110,12 +150,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="IAM ROOT API", version="1.0.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # จำกัด origin ใน production
-    allow_methods=["POST", "GET", "PATCH", "DELETE"],
-    allow_headers=["*"],
-)
+# LIFF และ dashboard ถูกเสิร์ฟจาก origin เดียวกับ API จึงไม่ต้องใช้ CORS — เดิมเปิด "*"
+# ตอนนี้เปิดเฉพาะ origin ที่ระบุใน CORS_ALLOW_ORIGINS (คั่นด้วย ,) เช่นถ้าย้าย frontend
+# ไปโดเมนอื่นในอนาคต (ใช้คู่กับ API_BASE_URL)
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["POST", "GET", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-Line-Token-Type", "X-Admin-Key"],
+    )
 app.add_middleware(RateLimitMiddleware)
 
 # LINE webhook routes
@@ -132,7 +177,9 @@ if not (_BASE_DIR / "liff").exists():
 class AnalysisRequest(BaseModel):
     lat:      float = Field(..., ge=-90,  le=90)
     lng:      float = Field(..., ge=-180, le=180)
-    user_id:  str   = Field(..., min_length=1, max_length=100)
+    # ไม่ใช้แล้ว — ผู้ใช้มาจาก LINE token เท่านั้น (auth.current_user) คงไว้ให้ client
+    # รุ่นเก่าที่ยังส่งมาไม่โดน 422
+    user_id:  str | None = Field(None, max_length=100)
     display_name: str = Field("", max_length=100)
     plot_name: str  = Field("แปลงที่ 1", max_length=50)
     area_rai:  float | None = Field(None, ge=0, le=10000)
@@ -263,9 +310,6 @@ async def liff_config():
     เดียวกับที่ webhook.py::_liff_button() ใช้อยู่แล้ว (ต้องตรงกันเป๊ะ ไม่งั้นปุ่มใน
     LINE OA กับหน้าเว็บที่เปิดตรงๆ จะใช้ LIFF app คนละตัวกัน)
     """
-    liff_url = os.environ.get("LIFF_URL") or "https://liff.line.me/2010580115-di08GvXS"
-    # Extract LIFF ID from URL: https://liff.line.me/LIFF_ID → LIFF_ID
-    liff_id = liff_url.rsplit("/", 1)[-1] if "/" in liff_url else liff_url
     # API base: same origin (empty) in production, override via env
     api_base = os.environ.get("API_BASE_URL", "")
     sphere_key = os.environ.get("SPHERE_KEY", "")
@@ -273,7 +317,7 @@ async def liff_config():
         f"// Auto-generated by IAM ROOT backend — do not edit\n"
         f"window.GEOAI_CONFIG = {{\n"
         f'  API_URL: "{api_base}",\n'
-        f'  LIFF_ID: "{liff_id}",\n'
+        f'  LIFF_ID: "{liff_id()}",\n'
         f'  SPHERE_KEY: "{sphere_key}",\n'
         f"}};\n"
     )
@@ -288,7 +332,12 @@ async def liff_config():
 # ─────────────────────────────────────────────────────────
 
 @app.post("/analyze")
-async def analyze(req: AnalysisRequest):
+async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
+    """
+    วิเคราะห์แปลงแล้ว push การ์ดผลเข้าแชท LINE ของ "ผู้ใช้ที่ยืนยันตัวตนแล้วเท่านั้น"
+    (เดิมส่งไปหา user_id อะไรก็ได้ที่ client ใส่มา — ใช้ OA เราส่งข้อความหาคนอื่นได้)
+    """
+    req.user_id = user_id
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
     try:
         data     = await _run_gee_analysis(req.lat, req.lng, polygon=req.polygon)
@@ -332,7 +381,7 @@ async def analyze(req: AnalysisRequest):
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง")
 
 
-@app.get("/analyze/preview")
+@app.get("/analyze/preview", dependencies=[Depends(verify_admin)])
 async def analyze_preview(
     lat: float = Query(..., ge=-90, le=90),
     lng: float = Query(..., ge=-180, le=180),
@@ -365,7 +414,7 @@ class GridRequest(BaseModel):
 GRID_TIMEOUT_S = 70   # เผื่อเวลาให้แปลงใหญ่ (เพดานจุดขยับ 400→1600 ใน gee_analysis.py)
 
 
-@app.post("/analyze/grid")
+@app.post("/analyze/grid", dependencies=[Depends(_grid_user)])
 async def analyze_grid(req: GridRequest):
     """
     วิเคราะห์ตารางจุดความชื้น/น้ำขังละเอียดภายในแปลงที่วาด — สุ่มจุดตาราง
@@ -392,7 +441,7 @@ async def analyze_grid(req: GridRequest):
         raise HTTPException(status_code=500, detail="เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง")
 
 
-@app.get("/weather-alert/preview")
+@app.get("/weather-alert/preview", dependencies=[Depends(verify_admin)])
 async def weather_alert_preview(lat: float, lng: float):
     """
     ทดสอบระบบแจ้งเตือนฝน+ดิน (ไม่ส่ง LINE)
@@ -404,7 +453,7 @@ async def weather_alert_preview(lat: float, lng: float):
     )
     try:
         forecast = await get_7day_rain(lat, lng)
-        soil_data = analyze_durian_plot(lat, lng)
+        soil_data = await run_in_threadpool(analyze_durian_plot, lat, lng)
         soil_profile = assess_soil_waterlog_risk({
             "elevation_diff":           soil_data["elevation_diff"],
             "surface_stability":        soil_data["displacement"]["surface_stability"],
@@ -492,8 +541,9 @@ async def admin_stats(lang: Lang = "th"):
 
 
 @app.patch("/user/{user_id}/notify")
-async def user_notify(user_id: str, enabled: bool):
+async def user_notify(user_id: str, enabled: bool, me: str = Depends(_api_user)):
     """เปิด/ปิดการแจ้งเตือนเฉพาะตอนเสี่ยง"""
+    _require_self(user_id, me)
     ok = await set_notify(user_id, enabled)
     if not ok:
         raise HTTPException(status_code=500, detail="อัพเดตการตั้งค่าไม่สำเร็จ")
@@ -501,8 +551,9 @@ async def user_notify(user_id: str, enabled: bool):
 
 
 @app.patch("/user/{user_id}/notify-digest")
-async def user_notify_digest(user_id: str, enabled: bool):
+async def user_notify_digest(user_id: str, enabled: bool, me: str = Depends(_api_user)):
     """เปิด/ปิดสรุปแปลงประจำวัน (ทุกแปลง ทุกเช้า 07:00 ไม่ว่าจะเสี่ยงหรือไม่) — คนละอันกับ /notify"""
+    _require_self(user_id, me)
     ok = await set_notify_digest(user_id, enabled)
     if not ok:
         raise HTTPException(status_code=500, detail="อัพเดตการตั้งค่าไม่สำเร็จ")
@@ -622,12 +673,13 @@ async def admin_plot_detail(lat: float, lng: float, months: int = 24):
 
 
 @app.get("/plots/{user_id}")
-async def list_plots(user_id: str):
+async def list_plots(user_id: str, me: str = Depends(_api_user)):
     """
     ดึงแปลงทั้งหมดของเกษตรกร — เติม latest_risk_level/latest_analyzed_at ต่อแปลง
     (ผู้ใช้ขอ: ป้ายความสดของข้อมูลบนการ์ด + ย้อมสีขอบเขตแปลงบนแผนที่ตามความเสี่ยง)
     ยิง query เดียวรวมทุกแปลง ไม่วนยิงทีละแปลง (ดู get_latest_risk_by_plots)
     """
+    _require_self(user_id, me)
     plots = await get_user_plots(user_id)
     plot_ids = [p["id"] for p in plots if p.get("id") is not None]
     risk_by_plot = await get_latest_risk_by_plots(plot_ids)
@@ -639,8 +691,12 @@ async def list_plots(user_id: str):
 
 
 @app.get("/plots/{user_id}/{plot_id}/history")
-async def plot_history(user_id: str, plot_id: int, limit: int = 20):
+async def plot_history(user_id: str, plot_id: int, limit: int = 20,
+                       me: str = Depends(_api_user)):
     """ประวัติการวิเคราะห์ของแปลง (เรียงล่าสุดก่อน)"""
+    _require_self(user_id, me)
+    await _require_own_plot(plot_id, me)
+    limit = min(max(limit, 1), 100)
     rows = await get_plot_history(plot_id, limit=limit)
     # เดิม LIFF คำนวณ risk badge เองจาก ndvi_change/displacement_level เท่านั้น
     # (ไม่รวม SWAB/BSI) แนบ risk_level ที่นี่ให้ตรงกับที่อื่นทั้งระบบแทน (ดู formula-audit)
@@ -650,27 +706,33 @@ async def plot_history(user_id: str, plot_id: int, limit: int = 20):
 
 
 @app.get("/plots/{user_id}/{plot_id}/persistent-wet")
-async def plot_persistent_wet(user_id: str, plot_id: int, days: int = 14):
+async def plot_persistent_wet(user_id: str, plot_id: int, days: int = 14,
+                              me: str = Depends(_api_user)):
     """
     จุดที่ "ชื้น/น้ำขัง" ซ้ำๆ ต่อเนื่องหลายวัน (จาก grid snapshot รายวัน) —
     สัญญาณบ่งชี้แนวโน้มทางน้ำไหลใต้ผิวดินตรงจุดนั้น ไม่ใช่แค่ฝนตกครั้งเดียว
     ต้องมี daily_scan_job เก็บ snapshot สะสมมาแล้วอย่างน้อยไม่กี่วันถึงจะมีผล
     """
+    _require_self(user_id, me)
+    await _require_own_plot(plot_id, me)
     days = min(max(days, 3), 90)
     points = await get_persistent_wet_points(plot_id, days=days)
     return {"plot_id": plot_id, "days": days, "count": len(points), "points": points}
 
 
 @app.get("/plots/{user_id}/{plot_id}/ndvi-timeseries")
-async def ndvi_timeseries(user_id: str, plot_id: int, months: int = 24):
+async def ndvi_timeseries(user_id: str, plot_id: int, months: int = 24,
+                          me: str = Depends(_api_user)):
     """NDVI รายเดือนจาก GEE ย้อนหลัง n เดือน (max 36)"""
-    months = min(months, 36)
+    _require_self(user_id, me)
+    months = min(max(months, 1), 36)
     plots = await get_user_plots(user_id)
     plot = next((p for p in plots if p["id"] == plot_id), None)
     if not plot:
         raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้")
     try:
-        series = get_ndvi_timeseries(plot["lat"], plot["lng"], months=months)
+        # sync GEE call — รันใน threadpool กันบล็อก event loop ทั้งเซิร์ฟเวอร์
+        series = await run_in_threadpool(get_ndvi_timeseries, plot["lat"], plot["lng"], months=months)
         return {"plot_id": plot_id, "months": months, "series": series}
     except Exception as e:
         logger.error(f"NDVI timeseries error: {e}")
@@ -678,8 +740,9 @@ async def ndvi_timeseries(user_id: str, plot_id: int, months: int = 24):
 
 
 @app.delete("/plots/{user_id}/{plot_id}")
-async def remove_plot(user_id: str, plot_id: int):
-    """ลบแปลง (ตรวจสอบสิทธิ์ user_id ก่อนลบ)"""
+async def remove_plot(user_id: str, plot_id: int, me: str = Depends(_api_user)):
+    """ลบแปลง — เฉพาะเจ้าของที่ยืนยันตัวตนแล้ว (delete_plot กรอง user_id ซ้ำอีกชั้นใน query)"""
+    _require_self(user_id, me)
     ok = await delete_plot(user_id, plot_id)
     if not ok:
         raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้ หรือไม่มีสิทธิ์ลบ")
@@ -724,9 +787,15 @@ class IotReading(BaseModel):
     timestamp:    str | None = None
 
 
-@app.post("/iot/reading")
+@app.post("/iot/reading", dependencies=[Depends(verify_admin)])
 async def iot_reading(req: IotReading):
-    """Gap 2: รับข้อมูล IoT soil sensor → บันทึก DB → แจ้งเตือน LINE ถ้าความชื้นเกินเกณฑ์"""
+    """
+    Gap 2: รับข้อมูล IoT soil sensor → บันทึก DB → แจ้งเตือน LINE ถ้าความชื้นเกินเกณฑ์
+
+    ต้องใช้ admin key — endpoint นี้สั่ง push ข้อความ LINE ไปหาเจ้าของแปลงได้ เดิมไม่มี
+    auth เลย ใครก็ส่งค่าเซนเซอร์ปลอมให้ระบบเตือน "เสี่ยงรากเน่า" หาเกษตรกรได้
+    (ถ้ามีเซนเซอร์จริงในอนาคต ควรออก key แยกต่อเซนเซอร์แทนการใช้ admin key)
+    """
     reading_id = await save_iot_reading(
         req.plot_id, req.sensor_id, req.depth_cm,
         req.moisture_pct, req.temp_c, req.timestamp,
@@ -909,7 +978,7 @@ async def setup_richmenu(test_user_id: str | None = None, publish_all: bool = Fa
     if not token:
         raise HTTPException(status_code=503, detail="LINE_CHANNEL_ACCESS_TOKEN not set")
 
-    liff_url = os.environ.get("LIFF_URL") or "https://liff.line.me/2010580115-di08GvXS"
+    liff_url = f"https://liff.line.me/{liff_id()}"
 
     image_path = _BASE_DIR / "backend" / "assets" / "richmenu_main.png"
     if not image_path.exists():
