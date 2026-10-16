@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+import line_quota
+
 logger = logging.getLogger(__name__)
 
 LINE_API_URL = "https://api.line.me/v2/bot/message/push"
@@ -24,68 +26,91 @@ FAILED_QUEUE_MAX  = 200         # เก็บ failed messages ไว้ตร�
 _failed_queue: deque[dict] = deque(maxlen=FAILED_QUEUE_MAX)
 
 
+MAX_MESSAGES_PER_PUSH = 5   # ข้อจำกัดของ LINE: 1 push ส่งได้ไม่เกิน 5 message object
+
+
 async def send_line_message(
-    user_id: str, message: str, flex: dict | None = None, image_url: str | None = None
+    user_id: str, message: str, flex: dict | None = None, image_url: str | None = None,
+    *, messages: list[dict] | None = None, kind: str = "general", priority: str = "normal",
+    plot_id: int | None = None, level: str | None = None,
 ) -> bool:
     """
     ส่งข้อความ push ไปหา user_id ทาง LINE Messaging API
-    ถ้าส่งไม่สำเร็จ → retry สูงสุด 3 ครั้ง (exponential backoff)
-    คืน True ถ้าสำเร็จ, False ถ้าล้มเหลวหลัง retry หมด
+    คืน True ถ้าสำเร็จ, False ถ้าล้มเหลวหรือถูกข้ามเพราะโควตา
 
-    image_url (ถ้ามี) จะถูกส่งเป็นข้อความรูปภาพ "เพิ่มเติม" ต่อจากการ์ด/ข้อความหลัก
-    ในการ push ครั้งเดียวกัน (LINE รับ messages หลายชิ้นต่อ 1 การเรียก API ได้ ขึ้น
-    เป็นบับเบิลแยกกันในแชทตามลำดับ) ต้องเป็น URL https ที่ LINE server เข้าถึงได้เอง
-    โดยไม่ต้องใช้ auth (ดู upload_plot_image ใน plot_image_service.py — อัปโหลด
-    ขึ้น Supabase Storage แล้วคืน public URL ตรงนั้น)
+    - 1 push ไปหา 1 คน นับเป็น 1 ข้อความในโควตา ไม่ว่าจะมีกี่ message object (สูงสุด 5)
+      จึงควรรวมการ์ด + รูปไว้ใน push เดียวเสมอ (ส่ง messages= มาเองได้)
+    - image_url (ถ้ามี) ต่อท้ายการ์ด/ข้อความหลักใน push เดียวกัน ต้องเป็น https ที่ LINE
+      ดึงได้เองโดยไม่ต้อง auth (ดู plot_image_service.upload_plot_image)
+    - priority: critical / normal / low — ตรวจโควตาก่อนส่ง ใกล้เต็มจะส่งเฉพาะที่สำคัญ
+      (ดู line_quota.py) ทุกการส่ง/ล้มเหลว/ข้าม ถูก log และบันทึกลง line_message_log
     """
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
         logger.warning("LINE_CHANNEL_ACCESS_TOKEN not set — skipping push")
         return False
 
-    messages = [flex if flex else {"type": "text", "text": message}]
-    if image_url:
-        messages.append({
-            "type": "image",
-            "originalContentUrl": image_url,
-            "previewImageUrl": image_url,
-        })
+    if messages is None:
+        messages = [flex if flex else {"type": "text", "text": message}]
+        if image_url:
+            messages.append({
+                "type": "image",
+                "originalContentUrl": image_url,
+                "previewImageUrl": image_url,
+            })
+    if len(messages) > MAX_MESSAGES_PER_PUSH:
+        logger.warning(f"push has {len(messages)} messages — truncated to {MAX_MESSAGES_PER_PUSH}")
+        messages = messages[:MAX_MESSAGES_PER_PUSH]
 
-    payload = {
-        "to": user_id,
-        "messages": messages,
-    }
+    if not await line_quota.check(priority):
+        line_quota.note_event("skipped")
+        logger.error(f"LINE push SKIPPED (quota) kind={kind} priority={priority} "
+                     f"remaining={line_quota.remaining()} user={user_id[:8]}…")
+        await _log(user_id, kind, priority, "skipped_quota", None, plot_id, level, "quota low/exhausted")
+        return False
 
+    payload = {"to": user_id, "messages": messages}
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
     last_status = 0
+    last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(LINE_API_URL, headers=headers, json=payload)
 
             last_status = resp.status_code
+            last_error = resp.text[:300]
 
             if resp.status_code == 200:
-                logger.info(f"LINE push sent to {user_id}"
+                line_quota.note_sent()
+                logger.info(f"LINE push sent kind={kind} to {user_id[:8]}…"
                             + (f" (retry {attempt})" if attempt > 0 else ""))
+                await _log(user_id, kind, priority, "sent", 200, plot_id, level, None)
                 return True
+
+            # เกินโควตาเดือนนี้ — retry ไปก็ไม่ผ่าน
+            if resp.status_code == 429 and "monthly limit" in resp.text.lower():
+                line_quota.note_exhausted()
+                logger.error(f"LINE push failed: monthly quota exhausted — {resp.text[:200]}")
+                break
 
             # 4xx client errors (except 429) → ไม่ retry
             if 400 <= resp.status_code < 500 and resp.status_code != 429:
                 logger.error(f"LINE push failed (client error): {resp.status_code} — {resp.text}")
                 break
 
-            # 429 / 5xx → retry
+            # 429 (rate) / 5xx → retry
             logger.warning(
                 f"LINE push attempt {attempt + 1}/{MAX_RETRIES} failed: "
                 f"{resp.status_code} — retrying in {RETRY_DELAYS_S[attempt]}s"
             )
 
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout) as e:
+            last_error = type(e).__name__
             logger.warning(
                 f"LINE push attempt {attempt + 1}/{MAX_RETRIES} network error: {e} "
                 f"— retrying in {RETRY_DELAYS_S[attempt]}s"
@@ -94,9 +119,9 @@ async def send_line_message(
         if attempt < MAX_RETRIES - 1:
             await asyncio.sleep(RETRY_DELAYS_S[attempt])
 
-    # ทุก retry ล้มเหลว → เก็บลง failed queue
     _failed_queue.append({
         "user_id":   user_id,
+        "kind":      kind,
         "status":    last_status,
         "message":   message[:100],
         "has_flex":  flex is not None,
@@ -104,8 +129,20 @@ async def send_line_message(
         "failed_at": datetime.now(timezone.utc).isoformat(),
         "attempts":  MAX_RETRIES,
     })
-    logger.error(f"LINE push FAILED after {MAX_RETRIES} retries for {user_id}")
+    line_quota.note_event("failed")
+    logger.error(f"LINE push FAILED kind={kind} status={last_status} for {user_id[:8]}…")
+    await _log(user_id, kind, priority, "failed", last_status or None, plot_id, level, last_error)
     return False
+
+
+async def _log(user_id, kind, priority, status, http_status, plot_id, level, error) -> None:
+    # import ช้า — database import ของหนักและ test หลายตัว import line_sender ตรงๆ
+    try:
+        from database import log_line_message
+        await log_line_message(user_id, kind, priority, status, http_status=http_status,
+                               plot_id=plot_id, level=level, error=error)
+    except Exception as e:
+        logger.warning(f"message log failed: {type(e).__name__}")
 
 
 def get_failed_queue(limit: int = 50) -> list[dict]:
