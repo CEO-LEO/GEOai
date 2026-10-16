@@ -288,6 +288,20 @@ class TestAuthConfig:
         assert auth.dev_auth_user() is None
 
 
+# ── รูปย่อแปลงใน bucket public ต้องเดา path ไม่ได้ ─────
+
+class TestThumbnailPath:
+    def test_path_is_stable_but_not_guessable(self, monkeypatch):
+        import plot_image_service as pis
+        monkeypatch.setattr(pis, "SUPABASE_KEY", "server-secret")
+        p1 = pis._thumbnail_path(42)
+        assert p1 == pis._thumbnail_path(42)               # เขียนทับที่เดิมได้
+        assert p1 != "thumbnails/42.png"                    # ไม่ใช่ path เลขเรียงแบบเดิม
+        assert p1.startswith("thumbnails/42-") and len(p1) > len("thumbnails/42-.png") + 16
+        monkeypatch.setattr(pis, "SUPABASE_KEY", "other-secret")
+        assert pis._thumbnail_path(42) != p1               # ไม่รู้ key ก็คำนวณไม่ได้
+
+
 # ── rate limit ───────────────────────────────────────
 
 @pytest.mark.asyncio

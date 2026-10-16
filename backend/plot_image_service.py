@@ -9,6 +9,8 @@ scheduler.py อยู่แล้ว (create_scheduler/daily_scan_job/rain_aler
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import re
 import uuid
@@ -86,9 +88,21 @@ async def upload_plot_image(png_bytes: bytes) -> str | None:
     return f"{SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}" if ok else None
 
 
+def _thumbnail_path(plot_id: int) -> str:
+    """
+    path คงที่ต่อแปลง (เขียนทับได้) แต่เดาไม่ได้ — เดิมเป็น thumbnails/{plot_id}.png
+    ใน bucket public ซึ่ง plot_id เป็นเลขเรียง ใครก็ไล่เลขดาวน์โหลดภาพดาวเทียมของทุก
+    แปลงได้ ตอนนี้ต่อท้ายด้วย HMAC ของ plot_id (key = service-role key ที่มีแค่ server)
+    ถ้าเปลี่ยน key ทีหลัง รูปย่อรอบถัดไปจะได้ path ใหม่เอง (URL จริงอ่านจาก
+    plots.thumbnail_url เสมอ ไม่ได้ประกอบ path เองฝั่ง client)
+    """
+    digest = hmac.new(SUPABASE_KEY.encode(), f"thumb:{plot_id}".encode(), hashlib.sha256).hexdigest()[:24]
+    return f"{_THUMB_PREFIX}/{plot_id}-{digest}.png"
+
+
 async def _upload_plot_thumbnail(plot_id: int, thumb_bytes: bytes) -> str | None:
     """อัปโหลดรูปย่อของแปลงที่ path คงที่ (เขียนทับรูปเก่าของแปลงเดิมเสมอ)"""
-    path = f"{_THUMB_PREFIX}/{plot_id}.png"
+    path = _thumbnail_path(plot_id)
     ok = await _upload_bytes(path, thumb_bytes, upsert=True)
     return f"{SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}" if ok else None
 
