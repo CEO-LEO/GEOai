@@ -35,3 +35,6 @@ logs/
 
 # ─── DB backups (มีข้อมูลส่วนบุคคล ห้ามขึ้น git) ──────
 backups/
+
+# ─── สคริปต์ seed ที่เคยมี key จริง (ใช้ในเครื่องเท่านั้น) ──
+backend/seed_nayaiam.py
