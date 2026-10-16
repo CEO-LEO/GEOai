@@ -63,7 +63,7 @@ ESCALATION_DAYS = 2  # (ไม่ได้ใช้ส่งแล้วตั�
 # Phase 1b — ลดข้อความ LINE (OA แพลน Free 300 ข้อความ/เดือน หมดตั้งแต่ราววันที่ 7)
 DIGEST_WEEKDAY = 0             # สรุปแปลงส่งสัปดาห์ละครั้ง วันจันทร์ (0=จันทร์ ตามเวลาไทย)
 DIGEST_MAX_IMAGES = 3          # 1 push ได้ 5 message: ข้อความนำ + carousel + รูปไม่เกิน 3
-RAIN_ALERT_DEDUPE_DAYS = 3     # ไม่ส่งเตือนฝนระดับเดิม/ต่ำกว่าซ้ำภายใน n วัน
+RAIN_ALERT_DEDUPE_DAYS = 7     # ไม่ส่งเตือนฝนระดับเดิม/ต่ำกว่าซ้ำภายใน n วัน (= ช่วงพยากรณ์ 7 วัน)
 _RAIN_LEVEL_RANK = {"watch": 1, "warning": 2, "critical": 3}
 
 
