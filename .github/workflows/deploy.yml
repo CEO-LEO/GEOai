@@ -1,17 +1,20 @@
-name: CI / Deploy to Railway
+name: CI — tests
+
+# เดิม workflow นี้ทริกเกอร์บน branch "main" ซึ่งไม่มีอยู่ (repo ใช้ "master") จึงไม่เคยรัน
+# และมี job deploy ไป Railway ที่ไม่ได้ใช้แล้ว — production อยู่บน Render ซึ่ง auto-deploy
+# จาก master เอง ไฟล์นี้จึงเหลือแค่รัน test (ดู docs/v2/phase0-report.md หัวข้อ 5)
+#
+# env ปลอมทั้งหมดอยู่ใน backend/conftest.py — ไม่ต้องตั้ง secret ใดๆ ที่นี่
 
 on:
   push:
-    branches: [main]
+    branches: [master, "feat/**"]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
-  # ─────────────────────────────────────
-  # Job 1: Test
-  # ─────────────────────────────────────
   test:
-    name: Run Tests
+    name: Run tests
     runs-on: ubuntu-latest
 
     defaults:
@@ -32,33 +35,4 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run tests
-        env:
-          LINE_CHANNEL_ACCESS_TOKEN: test_token
-          LINE_CHANNEL_SECRET: test_secret
-          GEE_SERVICE_ACCOUNT: test@project.iam.gserviceaccount.com
-          GEE_KEY_JSON: '{"type":"service_account"}'
-          SUPABASE_URL: https://example.supabase.co
-          SUPABASE_SERVICE_ROLE_KEY: test_key
-          LIFF_URL: https://liff.line.me/0000000000-AAAAAAAA
-        run: pytest test_system.py -v --tb=short
-
-  # ─────────────────────────────────────
-  # Job 2: Deploy (main branch only)
-  # ─────────────────────────────────────
-  deploy:
-    name: Deploy to Railway
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --service geoai-api --detach
+        run: pytest -v --tb=short
