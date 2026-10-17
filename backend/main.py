@@ -50,6 +50,7 @@ from line_sender import send_line_message, get_failed_queue, get_retry_stats
 import line_quota
 import client_telemetry as client_telemetry_mod
 import risk_v2
+import risk_display
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -358,6 +359,7 @@ async def liff_config():
         f'  API_URL: "{api_base}",\n'
         f'  LIFF_ID: "{liff_id()}",\n'
         f'  SPHERE_KEY: "{sphere_key}",\n'
+        f'  RISK_DISPLAY: "{"interim" if risk_display.interim() else "legacy"}",\n'
         f"}};\n"
     )
     return Response(content=js, media_type="application/javascript")

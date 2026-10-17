@@ -86,10 +86,20 @@ class TestWetnessAnomaly:
 class TestProfile:
     def test_flags(self):
         import risk_v2
-        assert risk_v2.classify_profile(1.5, 0.9, 0.95)["flags"] == ["low_lying_very", "wetter_than_neighbors"]
-        assert risk_v2.classify_profile(4.0, 0.9, 0.5)["flags"] == ["low_lying"]
-        assert risk_v2.classify_profile(20.0, 0.05, 0.99)["flags"] == ["mixed_land_cover"]
-        assert risk_v2.classify_profile(None, None, None)["flags"] == []
+        f = lambda *a, **k: risk_v2.classify_profile(*a, **k)["flags"]
+        assert f(1.5, {"trees": 0.95}, 0.95, area_rai=5) == ["low_lying_very", "wetter_than_neighbors"]
+        assert f(4.0, {"trees": 0.9}, 0.5) == ["low_lying"]
+        assert f(20.0, {"trees": 0.6, "built": 0.26}, None) == ["boundary_has_buildings"]
+        assert f(20.0, {"crops": 0.98}, None) == ["mostly_field_crops"]
+        assert f(20.0, {"trees": 0.3, "grass": 0.7}, None) == ["low_tree_cover"]
+        assert f(20.0, {"built": 1.0}, None, is_point=True) == ["boundary_point_only", "boundary_has_buildings", "low_tree_cover"]
+        assert "boundary_too_small" in f(20.0, {"built": 1.0}, None, area_rai=0.01)
+        assert f(None, None, None) == []
+
+    def test_land_cover_histogram(self):
+        import risk_v2
+        lc = risk_v2._land_cover_fractions({"1": 57, "6": 26, "5": 17})
+        assert lc == {"trees": 0.57, "built": 0.26, "shrub_and_scrub": 0.17}
 
 
 class TestShadowSummary:

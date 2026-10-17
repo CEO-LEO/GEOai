@@ -525,11 +525,11 @@
     <div id="grid-legend">
       <div class="legend-gradient-bar"></div>
       <div class="legend-gradient-labels">
-        <span>🔴 จุดแห้งสุด</span>
-        <span>🟢 ปานกลาง</span>
-        <span>🔵 จุดแฉะสุด</span>
+        <span>🔴 แห้งกว่าส่วนอื่น</span>
+        <span>🟢 กลาง ๆ</span>
+        <span>🔵 ชื้นกว่าส่วนอื่น</span>
       </div>
-      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
+      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ ไม่ได้แปลว่าแห้งหรือแฉะเกินไปจริง &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
     </div>
   </div>
 </div>
@@ -571,6 +571,10 @@
   const API_URL    = _cfg.API_URL || "";
   const LIFF_ID    = _cfg.LIFF_ID || "YOUR_LIFF_ID";
   const SPHERE_KEY = _cfg.SPHERE_KEY || "";
+  // โหมด "กำลังปรับปรุง" (backend/risk_display.py): ไม่แสดงป้ายเสี่ยงสูง/ปานกลาง/ปกติ และสถานะ
+  // ความชื้นจากสูตรเดิม (อ่านทรงพุ่มเป็นน้ำ — ดู docs/v2/risk-level-review.md) ค่าเริ่มต้น = interim
+  const RISK_INTERIM = (_cfg.RISK_DISPLAY || "interim") !== "legacy";
+  const INTERIM_HEX = "#546E7A";
 
   // ─── State ────────────────────────────────────────
   let userId         = null;
@@ -589,6 +593,7 @@
   let plotOverlays   = [];
   let gridMarkers    = [];   // sphere.Dot[]/sphere.Polygon[]/sphere.Polyline[] — จุด/หยด/เส้นทางน้ำ
   let gridPointsData = [];   // ข้อมูลดิบของแต่ละจุด (lat/lng/status/...) ไว้จับคู่ตอนแตะแผนที่
+  let gridNormalizer = null;   // สเกลสีของตารางจุดล่าสุด (เทียบกันเองในแปลง)
   let gridSinkPoints = new Set();   // จุดที่มีน้ำจากรอบข้างไหลมารวม ≥2 ทิศทาง (ดู computeFlowGraph)
   let persistentMarkers   = [];  // sphere.Dot[] — จุดชื้นสะสม (ชื้นซ้ำๆ หลายวัน)
   let persistentPointsData = []; // ข้อมูลดิบของแต่ละจุดชื้นสะสม ไว้จับคู่ตอนแตะแผนที่
@@ -1064,8 +1069,11 @@
     ok:     { line: "rgba(26, 122, 60, 0.9)", fill: "rgba(26, 122, 60, 0.15)" },
   };
   const RISK_HEX = { high: "#C62828", medium: "#E65100", ok: "#1a7a3c" };
-  function riskStyle(level) { return RISK_FILL_LINE[level] || RISK_FILL_LINE.ok; }
-  function riskHex(level)   { return RISK_HEX[level] || RISK_HEX.ok; }
+  function riskStyle(level) {
+    if (RISK_INTERIM) return { line: "rgba(84, 110, 122, 0.9)", fill: "rgba(84, 110, 122, 0.12)" };
+    return RISK_FILL_LINE[level] || RISK_FILL_LINE.ok;
+  }
+  function riskHex(level)   { return RISK_INTERIM ? INTERIM_HEX : (RISK_HEX[level] || RISK_HEX.ok); }
 
   function addPlotOverlays() {
     plotOverlays.forEach(o => { try { map.Overlays.remove(o); } catch {} });
@@ -1540,6 +1548,13 @@
     const p = findNearestGridPoint(lat, lng);
     if (!p) return false;
     const sinkNote = gridSinkPoints.has(p) ? "  🎯 จุดรวมน้ำจากรอบข้าง — เหมาะขุดร่องระบายน้ำเริ่มจากตรงนี้" : "";
+    if (RISK_INTERIM) {
+      const rel = gridNormalizer ? gridNormalizer(p.swab_index) : 0;
+      const relText = rel >= 0.15 ? "🔵 ชื้นกว่าส่วนอื่นของแปลง"
+                    : rel <= -0.15 ? "🔴 แห้งกว่าส่วนอื่นของแปลง" : "🟢 ใกล้เคียงส่วนอื่นของแปลง";
+      showToast(`${relText}  📍${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${sinkNote}`);
+      return true;
+    }
     showToast(
       `${p.status_th || p.status}  💧${p.soil_water_pct ?? '-'}%  ` +
       `📍${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${sinkNote}`
@@ -1572,7 +1587,8 @@
         // กันกระเบื้องทับกันแม้จุดบางคู่จะห่างกันน้อยกว่าระยะห่างที่ตั้งใจไว้จริง
         const actualMinDist = json.points.length >= 2 ? nearestNeighborDistM(json.points) : spacingM;
         const tileSizeM = Math.min(spacingM, actualMinDist) * 0.96;
-        const normalizeSwab = buildSwabNormalizer(json.points);   // ยืดสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้
+        const normalizeSwab = buildSwabNormalizer(json.points);
+        gridNormalizer = normalizeSwab;   // ใช้ตอนแตะจุด (โหมดกำลังปรับปรุง)   // ยืดสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้
         const { inDegree } = computeFlowGraph(json.points, spacingM);
         // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีจุดเด่น
         // กระจายเกลื่อนแทบทุกจุด (สัญญาณเสียความหมาย) ≥3 คัดเหลือแค่จุดที่รวมน้ำจาก
@@ -1909,8 +1925,9 @@
                         : r.ndvi_change < -0.10 || r.displacement_level === 'medium' ? 'medium' : 'ok');
         const isHigh  = lvl === 'high';
         const isMed   = lvl === 'medium';
-        const cls     = isHigh ? "hist-red" : isMed ? "hist-orange" : "hist-green";
-        const label   = isHigh ? "🔴 เสี่ยงสูง" : isMed ? "🟠 ปานกลาง" : "🟢 ปกติ";
+        const cls     = RISK_INTERIM ? "" : isHigh ? "hist-red" : isMed ? "hist-orange" : "hist-green";
+        const label   = RISK_INTERIM ? "🛠️ กำลังปรับปรุง"
+                        : isHigh ? "🔴 เสี่ยงสูง" : isMed ? "🟠 ปานกลาง" : "🟢 ปกติ";
         const arrow   = r.ndvi_change >= 0 ? "▲" : "▼";
         const date    = new Date(r.created_at).toLocaleString("th-TH",
                           { dateStyle: "short", timeStyle: "short" });
@@ -2106,6 +2123,7 @@
   // ใช้ d.overall_risk_level ตรงๆ ถ้า backend คำนวณมาให้แล้ว (ผลวิเคราะห์สดทุกจุด
   // มีอยู่แล้ว) เหลือสูตรด้านล่างไว้เป็น fallback สำหรับข้อมูลเก่าที่ไม่มี field นี้
   function computeOverallStatus(d) {
+    if (RISK_INTERIM) return { icon: "🛠️", text: "ระดับความเสี่ยง: กำลังปรับปรุง", color: INTERIM_HEX };
     const disp = d.displacement || {};
     const imp  = d.land_impact || {};
     const swab = d.swab || {};
@@ -2122,6 +2140,22 @@
       color: level === "high" ? "#c62828" : level === "medium" ? "#e65100" : "#1a7a3c",
     };
   }
+
+  // ข้อความ ข + ค ใน docs/v2/risk-display-interim.md (อนุมัติ 2026-10-17)
+  const INTERIM_NOTE_HTML = `
+      <div class="result-section" style="background:#ECEFF1;border-radius:10px">
+        <div style="font-size:14px;color:#37474F;line-height:1.6">
+          เรากำลังปรับวิธีประเมินให้แม่นขึ้นร่วมกับสำนักงานเกษตรจังหวัดราชบุรี
+          ระหว่างนี้ดูจุดที่ชื้นหรือแห้งกว่าส่วนอื่นของแปลงได้จากแผนที่
+        </div>
+        <details style="margin-top:8px;font-size:13px;color:#455A64;line-height:1.6">
+          <summary style="cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center">ทำไม?</summary>
+          วิธีเดิมประเมินความชื้นของสวนที่มีต้นไม้หนาแน่นสูงเกินจริง ทำให้หลายแปลงขึ้น "เสี่ยงสูง" ทั้งที่ไม่ได้มีปัญหา
+          วิธีใหม่จะเทียบความชื้นตอนนี้กับช่วงเดียวกันของปีก่อน ๆ ในแปลงของคุณเอง
+          เจ้าหน้าที่เกษตรกำลังลงตรวจแปลงตัวอย่างเพื่อยืนยันผลก่อนเปิดใช้
+          ถ้าเห็นน้ำขังหรือต้นไม้มีอาการผิดปกติ ติดต่อเจ้าหน้าที่ได้ที่ปุ่ม "ติดต่อเจ้าหน้าที่" ในเมนูแชท
+        </details>
+      </div>`;
 
   // ─── Result Display (farmer-friendly) ──────────────
   function showResult(data, plotName, polyCoords) {
@@ -2198,6 +2232,7 @@
         <div class="result-status" style="color:${statusColor}">${statusText}</div>
         <div class="result-coords">📍 ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)} — "${escHtml(plotName)}"</div>
       </div>
+      ${RISK_INTERIM ? INTERIM_NOTE_HTML : ''}
 
       ${polyCoords && polyCoords.length >= 3 ? `
       <div class="result-section" style="text-align:center;color:#1a7a3c;font-size:13px">
@@ -2245,7 +2280,7 @@
       </div>
 
       <!-- ความสมดุลน้ำ-อากาศในดิน (SWAB v3) -->
-      ${swab.swab_index != null ? (() => {
+      ${swab.swab_index != null && !RISK_INTERIM ? (() => {
         const swabIdx  = swab.swab_index;
         const waterPct = swab.soil_water_pct != null ? swab.soil_water_pct : 45;
         const airPct   = swab.soil_air_pct   != null ? swab.soil_air_pct   : 30;

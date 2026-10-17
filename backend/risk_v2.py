@@ -16,8 +16,8 @@ risk_v2.py — วิธีวัดความเสี่ยงแบบใ�
    - z ≥ 1 = ชื้นกว่าปกติ (medium), z ≥ 2 = ชื้นกว่าปกติมาก (high) — ค่าทางสถิติ รอปรับจากผลภาคสนาม
 2) ลักษณะประจำแปลง (ไม่ใช้เตือน แสดงเป็นข้อมูลได้) — แก้จุดบอด "แปลงที่น้ำขังทุกปีจะถือว่าปกติ"
    - HAND (ความสูงเหนือทางน้ำใกล้สุด, MERIT Hydro 90 ม.) → ที่ลุ่มต่ำ
-   - สัดส่วนต้นไม้ในขอบเขต (ESA WorldCover 2021) → บอกคุณภาพข้อมูล: ขอบเขตที่มีบ้าน/ถนนปน
-     ทำให้ค่าเรดาร์สูงผิดปกติ (พบหลายแปลงที่ค่าชื้นมากแต่มีต้นไม้แค่ 2–5%)
+   - ประเภทพื้นที่ในขอบเขต (Google Dynamic World 6 เดือนล่าสุด) → คุณภาพขอบเขต: มีบ้าน/ถนนปน,
+     ปักจุดเดียว, เล็กผิดปกติ, ส่วนใหญ่เป็นพืชไร่/ผัก — บ้าน/ถนนทำให้ค่าเรดาร์สูงผิดปกติ
    - ชื้นกว่าสวนต้นไม้รอบ 3 กม. ในหน้าฝน (percentile) — คำนวณเฉพาะแปลงที่เป็นต้นไม้ ≥ 60%
 """
 
@@ -41,7 +41,7 @@ MIN_SD_DB = 0.5
 Z_MEDIUM = 1.0
 Z_HIGH = 2.0
 
-PROFILE_METHOD = "profile_v1"
+PROFILE_METHOD = "profile_v2"
 TREE_FRACTION_MIN = 0.6
 LOW_LYING_VERY_M = 2.0       # HAND ≤ 2 ม. = ลุ่มต่ำมาก (ค่าเริ่มต้น รอยืนยันภาคสนาม)
 LOW_LYING_M = 5.0            # HAND ≤ 5 ม. = ลุ่มต่ำ
@@ -134,23 +134,66 @@ def get_wetness_anomaly(lat: float, lng: float, polygon: list | None = None,
     return compute_wetness_anomaly(series, today)
 
 
-def classify_profile(hand_m: float | None, tree_fraction: float | None,
-                     wet_rank: float | None) -> dict:
-    """แปลงค่าดิบเป็นป้ายภาษาคน — ฟังก์ชันล้วน ทดสอบได้"""
+# Dynamic World (Google, 10 ม., อัปเดตต่อเนื่อง, CC-BY 4.0) — ใช้แทน ESA WorldCover 2021 ที่เก่า
+# เกินไป (ตรวจ 2026-10-17: แปลงหนึ่ง WorldCover บอกต้นไม้ 46% แต่ Dynamic World ล่าสุดบอก 99%)
+DW_CLASSES = {0: "water", 1: "trees", 2: "grass", 3: "flooded_vegetation", 4: "crops",
+              5: "shrub_and_scrub", 6: "built", 7: "bare"}
+DW_LOOKBACK_DAYS = 180
+BUILT_FRACTION_WARN = 0.15     # สิ่งปลูกสร้าง ≥ 15% ของขอบเขต → น่าจะวาดเลยไปถึงบ้าน/ถนน
+CROPS_FRACTION_MAJOR = 0.5     # พืชไร่/ผัก ≥ 50% → อาจเป็นแปลงผัก/พืชไร่ หรือสวนที่เพิ่งปลูก
+MIN_AREA_RAI = 0.1             # เล็กกว่านี้ = ขอบเขตผิดพลาด (จิ้มจุดซ้อนกัน)
+
+
+def classify_profile(hand_m: float | None, land_cover: dict | None, wet_rank: float | None,
+                     area_rai: float | None = None, is_point: bool = False) -> dict:
+    """
+    แปลงค่าดิบเป็นป้าย — ฟังก์ชันล้วน ทดสอบได้
+    land_cover = สัดส่วนต่อประเภท {"trees": 0.8, "built": 0.1, ...} (Dynamic World ล่าสุด)
+
+    ป้ายคุณภาพขอบเขต (boundary_*) ใช้ทำคำเตือนตอนวาด/บันทึกแปลง (1c) — ไม่ได้ตัดสินว่าแปลง
+    ผิด เพราะแปลงผัก/พืชไร่หรือสวนที่เพิ่งปลูกก็มีต้นไม้น้อยตามจริง ต้องดูชนิดพืชประกอบ
+    """
+    lc = land_cover or {}
+    # ประเภทที่ไม่ปรากฏใน histogram = 0% (ถ้ามีข้อมูลประเภทพื้นที่เลย)
+    zero = 0.0 if lc else None
+    trees, built, crops = lc.get("trees", zero), lc.get("built", zero), lc.get("crops", zero)
     flags = []
     if hand_m is not None:
         if hand_m <= LOW_LYING_VERY_M:
             flags.append("low_lying_very")
         elif hand_m <= LOW_LYING_M:
             flags.append("low_lying")
-    if tree_fraction is not None and tree_fraction < TREE_FRACTION_MIN:
-        flags.append("mixed_land_cover")     # ค่าเรดาร์ของแปลงนี้เชื่อถือได้น้อยลง
-    elif wet_rank is not None and wet_rank >= WETTER_THAN_NEIGHBORS_PCT:
+    if is_point:
+        flags.append("boundary_point_only")        # ปักจุดเดียว: วงกลม 100 ม. อาจรวมบ้าน/ถนน
+    if area_rai is not None and area_rai < MIN_AREA_RAI:
+        flags.append("boundary_too_small")
+    if built is not None and built >= BUILT_FRACTION_WARN:
+        flags.append("boundary_has_buildings")
+    if crops is not None and crops >= CROPS_FRACTION_MAJOR:
+        flags.append("mostly_field_crops")         # ถ้าแปลงเป็นไม้ผล → อาจวาดผิดที่ หรือเพิ่งปลูก
+    elif trees is not None and trees < TREE_FRACTION_MIN:
+        flags.append("low_tree_cover")
+    if wet_rank is not None and wet_rank >= WETTER_THAN_NEIGHBORS_PCT:
         flags.append("wetter_than_neighbors")
     return {"method": PROFILE_METHOD, "hand_m": None if hand_m is None else round(hand_m, 1),
-            "tree_fraction": None if tree_fraction is None else round(tree_fraction, 2),
+            "land_cover": {k: round(v, 2) for k, v in lc.items() if v >= 0.03},
+            "tree_fraction": None if trees is None else round(trees, 2),
             "wet_rank_vs_trees": None if wet_rank is None else round(wet_rank, 2),
+            "area_rai": None if area_rai is None else round(area_rai, 2),
             "flags": flags}
+
+
+def _land_cover_fractions(histogram: dict | None) -> dict:
+    hist = histogram or {}
+    total = sum(hist.values()) or 0
+    if not total:
+        return {}
+    out: dict[str, float] = {}
+    for k, v in hist.items():
+        name = DW_CLASSES.get(int(float(k)))
+        if name:
+            out[name] = out.get(name, 0.0) + v / total
+    return out
 
 
 def get_plot_profile(lat: float, lng: float, polygon: list | None = None) -> dict:
@@ -159,26 +202,33 @@ def get_plot_profile(lat: float, lng: float, polygon: list | None = None) -> dic
         return {"method": PROFILE_METHOD, "status": "unavailable"}
     ee = gee_analysis.ee
     geom = _geometry(lat, lng, polygon)
+    now = datetime.now(timezone.utc)
     s1 = (ee.ImageCollection("COPERNICUS/S1_GRD").filter(ee.Filter.eq("instrumentMode", "IW"))
           .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV")).select("VV")
           .filterBounds(geom.buffer(NEIGHBOR_RADIUS_M)))
-    year = datetime.now(timezone.utc).year
-    wet_filter = ee.Filter.Or(*[ee.Filter.date(f"{y}-06-01", f"{y}-10-31") for y in (year - 2, year - 1)])
+    wet_filter = ee.Filter.Or(*[ee.Filter.date(f"{y}-06-01", f"{y}-10-31") for y in (now.year - 2, now.year - 1)])
     wet = s1.filter(wet_filter).median()
-    trees = ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").eq(10)
+    dw = (ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+          .filterDate((now - timedelta(days=DW_LOOKBACK_DAYS)).strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d"))
+          .filterBounds(geom).select("label").mode())
     hand = ee.Image("MERIT/Hydro/v1_0_1").select("hnd")
     r = gee_analysis._retry_gee(ee.Dictionary({
         "wet": wet.reduceRegion(ee.Reducer.mean(), geom, 10).get("VV"),
         "hand": hand.reduceRegion(ee.Reducer.mean(), geom, 90).get("hnd"),
-        "tree": trees.reduceRegion(ee.Reducer.mean(), geom, 10).get("Map"),
+        "lc": dw.reduceRegion(ee.Reducer.frequencyHistogram(), geom, 10).get("label"),
+        "area_m2": geom.area(1),
     }).getInfo)
+    lc = _land_cover_fractions(r.get("lc"))
     wet_rank = None
-    if r.get("wet") is not None and (r.get("tree") or 0) >= TREE_FRACTION_MIN:
+    if r.get("wet") is not None and lc.get("trees", 0) >= TREE_FRACTION_MIN:
+        trees = dw.eq(1)
         ring = geom.buffer(NEIGHBOR_RADIUS_M).difference(geom.buffer(50))
         wet_rank = gee_analysis._retry_gee(
             wet.lt(r["wet"]).updateMask(trees).reduceRegion(ee.Reducer.mean(), ring, 20, maxPixels=1e8)
             .get("VV").getInfo)
-    return classify_profile(r.get("hand"), r.get("tree"), wet_rank)
+    is_point = not (polygon and len(polygon) >= 3)
+    area_rai = None if is_point or r.get("area_m2") is None else r["area_m2"] / 1600
+    return classify_profile(r.get("hand"), lc, wet_rank, area_rai=area_rai, is_point=is_point)
 
 
 # ─────────────────────────────────────────────────────────

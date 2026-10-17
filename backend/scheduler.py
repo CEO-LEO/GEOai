@@ -29,6 +29,7 @@ from flex_messages import (build_weekly_alert_flex,
 from plot_image_service import build_plot_grid_image_url, delete_old_plot_images
 from line_sender import send_line_message
 import risk_v2
+import risk_display
 from weather_alert import (
     get_7day_rain,
     build_rain_alert_flex,
@@ -258,7 +259,9 @@ async def daily_scan_job(hour: int | None = None):
                     # ── แจ้งเตือนเฉพาะเมื่อความเสี่ยงเพิ่มขึ้นเป็น "สูง" ──
                     # เทียบกับผลก่อนวันนี้ (ไม่ใช่ทุกวันที่เป็นสูง) และกันส่งซ้ำวันเดียวกัน
                     # ถ้ามี line_message_log — เลิกส่ง "escalation" ซ้ำทุกวันแล้ว (Phase 1b)
-                    if _is_high_risk(data) and user_id in notifiable and plot_id:
+                    # โหมด "กำลังปรับปรุง": หยุดคำเตือนความเสี่ยงชั่วคราว (ยังใช้สูตรเดิม) — เตือนฝนยังส่ง
+                    if (_is_high_risk(data) and user_id in notifiable and plot_id
+                            and risk_display.risk_alerts_enabled()):
                         prev_level = await get_previous_risk_level(plot_id, day_start_utc)
                         kind = "risk_alert"
                         if not _risk_increased_to_high(True, prev_level):
