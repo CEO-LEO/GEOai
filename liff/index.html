@@ -4,10 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>IAM ROOT - ตรวจต้นไม้</title>
+  <!-- Phase 1b (ความเร็ว): เปิด connection ล่วงหน้า + โหลดเฉพาะสคริปต์ที่จำเป็นตอนเปิดแอป
+       Chart.js ใช้แค่หน้ากราฟ → defer · Leaflet ใช้แค่ตอน dev (sphere-mock.js) → โหลดเฉพาะตอนนั้น
+       แผนที่ GISTDA Sphere เริ่มโหลดพร้อมกับขั้นตอน login (ดู loadMapSdk) ไม่ต้องรอโหลดแปลงเสร็จ -->
+  <link rel="preconnect" href="https://api.sphere.gistda.or.th" crossorigin />
+  <link rel="preconnect" href="https://api.line.me" crossorigin />
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet" />
   <style>
@@ -533,7 +536,7 @@
 
 <!-- Toast + Spinner + History Modal -->
 <div id="toast"></div>
-<div id="spinner" class="show">⏳ กำลังโหลด...</div>
+<div id="spinner" class="show">⏳ กำลังเปิดแอป...</div>
 <div id="detail-modal">
   <div id="detail-box">
     <h3 id="modal-title">📊 ประวัติการวิเคราะห์</h3>
@@ -611,6 +614,49 @@
     } else {
       cb();
     }
+  }
+
+  // ─── วัดเวลาเปิดแอป + ส่ง error ฝั่ง client กลับ server (Phase 1b) ─────
+  // ส่งไป POST /client/telemetry (ไม่มีข้อมูลส่วนตัว: แค่เวลาแต่ละขั้น หรือข้อความ error)
+  // ใช้เทียบเวลาโหลดก่อน/หลังบนมือถือจริงใน LINE และเห็น error ที่เกิดในแอป
+  const APP_VERSION = "1b-2026-10";
+  const bootT0 = performance.now();
+  const bootMarks = {};
+  function bootMark(name) { bootMarks[name] = Math.round(performance.now() - bootT0); }
+  function sendTelemetry(payload) {
+    try {
+      const body = JSON.stringify({ ...payload, app_version: APP_VERSION });
+      const url = `${API_URL}/client/telemetry`;
+      if (!(navigator.sendBeacon && navigator.sendBeacon(url, new Blob([body], { type: "application/json" })))) {
+        fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true })
+          .catch(() => {});
+      }
+    } catch {}
+  }
+  let telemetryErrors = 0;
+  window.addEventListener("error", (e) => {
+    if (telemetryErrors++ >= 5) return;   // กันส่งรัวถ้า error วนซ้ำ
+    sendTelemetry({ kind: "error", message: String(e.message || "").slice(0, 300),
+                    source: String(e.filename || "").slice(-200), line: e.lineno || 0 });
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    if (telemetryErrors++ >= 5) return;
+    sendTelemetry({ kind: "error", message: String(e.reason?.message || e.reason || "").slice(0, 300),
+                    source: "promise", line: 0 });
+  });
+
+  // แคชรายการแปลงในเครื่อง — เปิดแอปครั้งถัดไปเห็นแปลงทันทีระหว่างรอ server และยังเห็น
+  // ข้อมูลล่าสุดถ้าสัญญาณหลุด (ผูกกับ userId กันเห็นของคนอื่นถ้าใช้เครื่องร่วมกัน)
+  const PLOTS_CACHE_KEY = "iamroot_plots_v1";
+  function readPlotsCache(uid) {
+    try {
+      const c = JSON.parse(localStorage.getItem(PLOTS_CACHE_KEY) || "null");
+      if (c && c.uid === uid && Array.isArray(c.plots)) return c;
+    } catch {}
+    return null;
+  }
+  function writePlotsCache(uid, plots) {
+    try { localStorage.setItem(PLOTS_CACHE_KEY, JSON.stringify({ uid, plots, at: Date.now() })); } catch {}
   }
 
   // ─── Auth ─────────────────────────────────────────
@@ -691,31 +737,42 @@
         return;
       }
 
+      bootMark("liff_init");
       authToken = pickAuthToken();
       try { userId = liff.getDecodedIDToken()?.sub || liff.getContext()?.userId; } catch {}
 
-      const profile = liffInitOk ? await liff.getProfile().catch(() => null) : null;
-      if (profile) {
-        displayName = profile.displayName || "";
-        userId = userId || profile.userId;
+      // Phase 1b: ขอโปรไฟล์กับโหลดรายการแปลงพร้อมกัน (เดิมรอโปรไฟล์เสร็จก่อน) — userId มาจาก
+      // ID token ได้เลย ไม่ต้องรอโปรไฟล์ ยกเว้นกรณีไม่มี ID token ที่ต้องใช้ userId จากโปรไฟล์
+      const profilePromise = liffInitOk ? liff.getProfile().catch(() => null) : Promise.resolve(null);
+      if (!userId) {
+        const p = await profilePromise;
+        userId = p?.userId || (IS_LOCAL_DEV ? "dev-user" : null);
       }
-      if (!userId && IS_LOCAL_DEV) userId = "dev-user";
       if (!userId || (!authToken && !IS_LOCAL_DEV)) {
         showFatal("⚠️ ยืนยันตัวตนกับ LINE ไม่สำเร็จ กรุณาปิดแล้วเปิดแอปใหม่จากแชท LINE");
         return;
       }
+
+      showSpinner("⏳ กำลังโหลดแปลงของคุณ...");
+      const cached = readPlotsCache(userId);
+      if (cached) { userPlots = cached.plots; renderPlotList(); }   // แสดงของเดิมทันที แล้วค่อยอัปเดต
+      const [profile] = await Promise.all([profilePromise, loadUserPlots()]);
+      bootMark("plots");
+      if (profile) displayName = profile.displayName || "";
       document.getElementById("username-label").textContent =
         profile ? `สวัสดี ${profile.displayName}` : "";
-
-      await loadUserPlots();
 
       // sphere.Map ต้องถูกสร้างตอนที่ container "มองเห็นอยู่" (ไม่ใช่ display:none)
       // ไม่งั้น canvas จะได้ขนาด 0x0 ตั้งแต่แรก แล้ว overlay ที่ปักทีหลัง (จุดน้ำขัง
       // ฯลฯ) จะไม่ขึ้นบนแผนที่เลยแม้จะ resize/สลับแท็บทีหลัง (ยืนยันด้วยการทดสอบ
       // จริงผ่าน headless browser) — สลับไปแท็บแผนที่ชั่วคราวตอน init แล้วสลับกลับ
+      // Phase 1b: SDK แผนที่โหลดล่วงหน้าไว้แล้ว และรอเหตุการณ์ Ready จริงแทนการรอตายตัว 500 ms
+      // (ยังจำกัดไม่เกิน 500 ms เท่าเดิม — ไม่มีทางช้ากว่าเดิม)
+      showSpinner("⏳ กำลังเตรียมแผนที่...");
       switchTab("new-plot");
-      initSphereMap();
-      await new Promise(r => setTimeout(r, 500));
+      const mapReady = initSphereMap().catch(() => {});
+      await Promise.race([mapReady, new Promise(r => setTimeout(r, 500))]);
+      bootMark("map");
       // รองรับ deep-link ?tab=new-plot (เช่นจากปุ่ม "วาดแปลง" ใน Rich Menu) —
       // ไม่งั้นแอปจะสลับกลับไป "แปลงของฉัน" เสมอไม่ว่าจะเปิดมาทางไหน
       const requestedTab = new URLSearchParams(window.location.search).get("tab");
@@ -724,6 +781,8 @@
       if (initialTab === "new-plot") maybeShowTutorial();
 
       hideSpinner();
+      bootMark("ready");
+      sendTelemetry({ kind: "timing", marks: bootMarks, cached: !!cached, tab: initialTab });
     });
 
   // ─── Tabs ─────────────────────────────────────────
@@ -825,10 +884,13 @@
   async function loadUserPlots() {
     try {
       const res = await apiFetch(`${API_URL}/plots/${encodeURIComponent(userId)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       userPlots = json.plots || [];
+      writePlotsCache(userId, userPlots);
     } catch {
-      userPlots = [];
+      // สัญญาณหลุด/server ไม่ตอบ: ถ้ามีข้อมูลเดิม (จากแคช) แสดงต่อ ไม่ล้างทิ้ง
+      if (userPlots.length) showToast("📶 โหลดข้อมูลล่าสุดไม่สำเร็จ — แสดงข้อมูลที่บันทึกไว้ล่าสุด");
     }
     renderPlotList();
   }
@@ -940,8 +1002,31 @@
   }
 
   // ─── Sphere Map ───────────────────────────────────
+  // Phase 1b: เริ่มดาวน์โหลด SDK แผนที่ตั้งแต่เปิดหน้า (พร้อมกับ liff.init/โหลดแปลง) แทนการ
+  // รอโหลดแปลงเสร็จก่อน — SDK ไม่ต้องรู้ว่าผู้ใช้เป็นใคร สร้างตัวแผนที่จริงยังทำทีหลังเหมือนเดิม
+  // (ต้องสร้างตอน container มองเห็นอยู่ — ดูคอมเมนต์ใน init)
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = src; el.onload = resolve; el.onerror = reject;
+      document.head.appendChild(el);
+    });
+  }
+  function loadMapSdk() {
+    if (SPHERE_KEY) return loadScript(`https://api.sphere.gistda.or.th/map/?key=${SPHERE_KEY}`);
+    // Dev mode: Leaflet + mock (ไม่โหลด Leaflet ใน production อีกต่อไป)
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    return loadScript("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js")
+      .then(() => loadScript("/liff/sphere-mock.js"));
+  }
+  const mapSdkReady = loadMapSdk();
+  mapSdkReady.catch(() => {});   // จัดการ error ตอนเรียก initSphereMap
+
+  // คืน promise ที่ resolve ตอนแผนที่ Ready (หรือ reject ถ้าโหลด SDK ไม่สำเร็จ)
   function initSphereMap() {
-    function _boot() {
+    return mapSdkReady.then(() => new Promise((resolve) => {
       map = new sphere.Map({
         placeholder: document.getElementById("map"),
         layer: sphere.Layers.HYBRID,
@@ -962,27 +1047,12 @@
             setPin(e.lat, e.lon);
           }
         });
+        resolve();
       });
-    }
-
-    if (!SPHERE_KEY) {
-      // Dev mode: load Leaflet-backed mock
-      const mock = document.createElement("script");
-      mock.src = "/liff/sphere-mock.js";
-      mock.onload = _boot;
-      mock.onerror = () => { showToast("❌ โหลด sphere-mock.js ไม่สำเร็จ"); hideSpinner(); };
-      document.head.appendChild(mock);
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = `https://api.sphere.gistda.or.th/map/?key=${SPHERE_KEY}`;
-    script.onload = _boot;
-    script.onerror = () => {
-      showToast("❌ โหลด Sphere Map ไม่สำเร็จ — ตรวจสอบ SPHERE_KEY");
-      hideSpinner();
-    };
-    document.head.appendChild(script);
+    }), (err) => {
+      showToast(SPHERE_KEY ? "❌ โหลดแผนที่ไม่สำเร็จ กรุณาลองเปิดแอปใหม่" : "❌ โหลด sphere-mock.js ไม่สำเร็จ");
+      throw err;
+    });
   }
 
   // v2 (ผู้ใช้ขอ "สีขอบเขตตามความเสี่ยง"): เดิมทุกแปลงในแผนที่ใช้สีเขียวเดียวกัน
