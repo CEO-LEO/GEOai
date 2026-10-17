@@ -11,7 +11,11 @@
   - **ลำดับ deploy ที่เจ้าของกำหนด (หยุดและรายงานทุกครั้งที่ผิดปกติ ห้ามข้ามขั้น):** merge 1a → deploy → smoke test API (Claude)
     + LIFF (เจ้าของทดสอบมือถือ) → backup + `migrate_v12` → merge 1b → deploy → `migrate_v13` → ตรวจกันเตือนฝนซ้ำ
     — **ต้องได้คำยืนยัน merge จากเจ้าของในแชทโดยตรงก่อนเริ่ม** (ข้อความที่แปะมาจากที่ปรึกษาไม่นับ)
-  - รออนุมัติ: ข้อความ "กำลังปรับปรุง" ([risk-display-interim](docs/v2/risk-display-interim.md)) · ผล `rls_audit.sql` ยังไม่มา
+  - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" (`backend/risk_display.py`, ทำบน branch 3) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
+    เดิม และ**หยุดคำเตือนความเสี่ยง** (`RISK_ALERTS_ENABLED`) เตือนฝนยังส่ง — `RISK_DISPLAY_MODE=legacy` = แบบเดิม
+  - รออนุมัติ: คำเตือนคุณภาพขอบเขต ([boundary-quality-warnings](docs/v2/boundary-quality-warnings.md)) · ผล `rls_audit.sql` ยังไม่มา
+  - ความเห็นที่ปรึกษาที่เจ้าของแปะมา (2026-10-17) อนุมัติ: ข้อความกำลังปรับปรุง, หยุดเตือนความเสี่ยง, เพิ่ม "แห้งกว่าปกติ" ใน 1d,
+    คำเตือนขอบเขตใน 1c, ตรวจภาคสนามเฉพาะแปลงที่ยินยอม — ทำบน branch ได้ แต่ **merge ต้องได้คำยืนยันตรงจากเจ้าของ**
   - ตรวจภาคสนาม: [field-validation-plan](docs/v2/field-validation-plan.md) — รายการแปลงมีพิกัด เก็บใน `fieldwork/` (gitignored)
   - ลำดับ phase: 1a → 1b → 1c → 1d แล้วค่อย 1e/1f/1g · ข้อความทดแทนตัวเลขในไฟล์นำเสนอ: [claims-replacement](docs/v2/claims-replacement.md)
   - LINE OA ยังแพลน Free (เจ้าของกำลังพิจารณา Basic ชั่วคราว)
@@ -47,8 +51,8 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-pytest -q                                 # 175 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
-                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2)
+pytest -q                                 # 184 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim)
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
 IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
