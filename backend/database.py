@@ -1231,6 +1231,17 @@ async def get_last_sent_message(plot_id: int, kind: str | list[str], since_iso: 
     return rows[0] if rows else None
 
 
+async def get_shadow_rows(since_iso: str) -> list[dict]:
+    """ผลวิเคราะห์ตั้งแต่ since_iso พร้อมระดับเดิม + risk_v2 + plot_profile สำหรับสรุปผลรันคู่"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    rows = await _fetch_all("analyses", {
+        "select": "plot_id,created_at,old:full_data->>overall_risk_level,"
+                  "risk_v2:full_data->risk_v2,profile:full_data->plot_profile",
+        "created_at": f"gte.{since_iso}", "plot_id": "not.is.null", "order": "created_at.asc"})
+    return rows or []
+
+
 async def get_recent_message_failures(since_iso: str, limit: int = 50) -> list[dict] | None:
     """การส่งที่ล้มเหลว/ถูกข้ามล่าสุด สำหรับหน้า admin — None ถ้ายังไม่มีตาราง"""
     if not SUPABASE_URL or not SUPABASE_KEY or _message_log_available is False:
