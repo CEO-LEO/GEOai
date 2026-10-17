@@ -324,3 +324,118 @@ class TestHistoryReply:
         assert msgs[0]["contents"]["type"] == "carousel"
         assert msgs[1]["type"] == "text" and "A1" in msgs[1]["text"] and "ในแอป" in msgs[1]["text"]
         assert [m["type"] for m in msgs[2:]] == ["image"] * 3
+
+
+# ── รอบ 3: เตือนซ้ำครั้งเดียว, รวมเตือนฝน, แจ้งเฉพาะตอนสถานะเปลี่ยน ─────────────
+
+@pytest.mark.asyncio
+class TestRiskReminder:
+    async def _needs(self, last):
+        from scheduler import _needs_risk_reminder
+        with patch("scheduler.get_last_sent_message", new_callable=AsyncMock, return_value=last):
+            return await _needs_risk_reminder(7)
+
+    async def test_reminder_after_seven_days_once(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        assert await self._needs({"kind": "risk_alert", "created_at": old})
+        assert not await self._needs({"kind": "risk_alert", "created_at": recent})
+        assert not await self._needs({"kind": "risk_reminder", "created_at": old})   # เตือนซ้ำไปแล้ว
+        assert not await self._needs(None)                                          # ไม่มี log
+
+    async def test_scan_sends_reminder_when_still_high(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        patches = [p for p in _scan_patches(prev_level="high") if p.attribute != "get_last_sent_message"]
+        patches.append(patch("scheduler.get_last_sent_message", new_callable=AsyncMock,
+                             return_value={"kind": "risk_alert", "created_at": old}))
+        send = await _run_scan(patches)
+        assert send.call_count == 1
+        assert send.call_args.kwargs["kind"] == "risk_reminder"
+        assert send.call_args.kwargs["priority"] == "normal"
+
+
+@pytest.mark.asyncio
+class TestGroupedRainAlert:
+    async def test_many_plots_one_push_with_per_plot_logs(self):
+        from scheduler import _send_grouped_rain_alert
+        poly = [[0, 0], [1, 0], [1, 1], [0, 0]]
+        pending = [{"flex": {"type": "flex", "contents": {"type": "bubble", "i": i}}, "msg": f"m{i}",
+                    "plot_id": i, "level": "critical" if i == 2 else "warning",
+                    "polygon": poly, "name": f"P{i}"} for i in range(1, 6)]
+        with patch("scheduler.build_plot_grid_image_url", new_callable=AsyncMock,
+                   return_value={"url": "https://img/a.png", "problem_points": []}) as img, \
+             patch("scheduler.send_line_message", new_callable=AsyncMock) as send:
+            await _send_grouped_rain_alert("U1", pending)
+        assert send.call_count == 1
+        kw = send.call_args.kwargs
+        assert kw["messages"][0]["contents"]["type"] == "carousel"
+        assert len(kw["messages"][0]["contents"]["contents"]) == 5
+        assert [m["type"] for m in kw["messages"][1:]] == ["image"] * 3
+        assert img.call_count == 3
+        assert kw["priority"] == "critical"
+        assert kw["log_plots"] == [(i, "critical" if i == 2 else "warning") for i in range(1, 6)]
+
+    async def test_single_plot_keeps_single_card(self):
+        from scheduler import _send_grouped_rain_alert
+        pending = [{"flex": {"type": "flex", "contents": {"type": "bubble"}}, "msg": "m",
+                    "plot_id": 1, "level": "warning", "polygon": None, "name": "P1"}]
+        with patch("scheduler.send_line_message", new_callable=AsyncMock) as send:
+            await _send_grouped_rain_alert("U1", pending)
+        msgs = send.call_args.kwargs["messages"]
+        assert msgs == [pending[0]["flex"]]
+        assert send.call_args.kwargs["priority"] == "normal"
+
+    async def test_log_plots_writes_one_row_per_plot(self):
+        import line_sender
+        client = _mock_client(post=AsyncMock(return_value=_resp(200)))
+        with patch("line_sender.httpx.AsyncClient", return_value=client), \
+             patch("database.log_line_message", new_callable=AsyncMock) as log:
+            await line_sender.send_line_message("U1", "x", kind="rain_alert",
+                                                log_plots=[(1, "warning"), (2, "critical")])
+        assert client.post.call_count == 1
+        assert [(c.kwargs["plot_id"], c.kwargs["level"]) for c in log.call_args_list] == \
+               [(1, "warning"), (2, "critical")]
+
+
+class TestQuotaReset:
+    def test_reset_date(self):
+        from line_quota import quota_reset_date
+        bkk = timezone(timedelta(hours=7))
+        assert quota_reset_date(datetime(2026, 10, 17, tzinfo=bkk)) == "2026-11-01"
+        assert quota_reset_date(datetime(2026, 12, 31, 23, tzinfo=bkk)) == "2027-01-01"
+
+    def test_exhausted_reason_has_reset_date(self):
+        import line_quota
+        _set_quota(300, 300)
+        h = line_quota.health()
+        assert any("รีเซ็ต" in r for r in h["reasons"]) and h["quota_resets_on"]
+
+
+@pytest.mark.asyncio
+class TestHealthTracking:
+    async def _status(self, client, stored):
+        with patch("line_quota.refresh", new_callable=AsyncMock), \
+             patch("main.get_recent_message_failures", new_callable=AsyncMock, return_value=[]), \
+             patch("main.get_scheduler_last_run", new_callable=AsyncMock, return_value=stored), \
+             patch("main.set_scheduler_last_run", new_callable=AsyncMock) as save:
+            resp = await client.get("/admin/messaging/status?track=true", headers=ADMIN_HEADERS)
+        return resp.json(), save
+
+    async def test_notifies_once_when_problem_starts(self, client):
+        _set_quota(300, 300)
+        body, save = await self._status(client, {"last_run_hour": 0})        # เดิม ok
+        assert body["changed"] is True and body["health"] == "critical"
+        save.assert_called_once()
+        assert save.call_args.args[2] == 2
+
+    async def test_no_notify_while_problem_continues(self, client):
+        _set_quota(300, 300)
+        body, save = await self._status(client, {"last_run_hour": 2})        # เดิม critical
+        assert body["changed"] is False
+        save.assert_not_called()
+
+    async def test_notifies_on_recovery(self, client):
+        _set_quota(300, 100)
+        body, save = await self._status(client, {"last_run_hour": 2})
+        assert body["changed"] is True and body["health"] == "ok"
+        assert save.call_args.args[2] == 0

@@ -1211,17 +1211,18 @@ async def log_line_message(user_id: str, kind: str, priority: str, status: str,
         logger.warning(f"log_line_message error: {type(e).__name__}")
 
 
-async def get_last_sent_message(plot_id: int, kind: str, since_iso: str) -> dict | None:
-    """ข้อความประเภท kind ที่ "ส่งสำเร็จ" ล่าสุดของแปลงนี้ตั้งแต่ since_iso (ใช้กันส่งซ้ำ)"""
+async def get_last_sent_message(plot_id: int, kind: str | list[str], since_iso: str) -> dict | None:
+    """ข้อความประเภท kind (หรือหลายประเภท) ที่ "ส่งสำเร็จ" ล่าสุดของแปลงนี้ตั้งแต่ since_iso (ใช้กันส่งซ้ำ)"""
+    kind_filter = f"in.({','.join(kind)})" if isinstance(kind, list) else f"eq.{kind}"
     if not SUPABASE_URL or not SUPABASE_KEY or _message_log_available is False:
         return None
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
             f"{SUPABASE_URL}/rest/v1/line_message_log",
             headers={**_HEADERS(), "Prefer": ""},
-            params={"plot_id": f"eq.{plot_id}", "kind": f"eq.{kind}", "status": "eq.sent",
+            params={"plot_id": f"eq.{plot_id}", "kind": kind_filter, "status": "eq.sent",
                     "created_at": f"gte.{since_iso}", "order": "created_at.desc", "limit": "1",
-                    "select": "level,created_at"},
+                    "select": "kind,level,created_at"},
         )
     if resp.status_code != 200:
         _message_log_missing(resp)

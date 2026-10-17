@@ -18,6 +18,7 @@ import logging
 import os
 import time
 from collections import deque
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -104,6 +105,16 @@ def _count_recent(kind: str, window_s: int = 86400) -> int:
     return sum(1 for t, k in _events if k == kind and t >= cutoff)
 
 
+_BANGKOK_TZ = timezone(timedelta(hours=7))
+
+
+def quota_reset_date(now: datetime | None = None) -> str:
+    """โควตา LINE OA รีเซ็ตต้นเดือน — คืนวันที่ 1 ของเดือนถัดไป (YYYY-MM-DD, เวลาไทย)"""
+    now = (now or datetime.now(_BANGKOK_TZ)).astimezone(_BANGKOK_TZ)
+    year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+    return f"{year:04d}-{month:02d}-01"
+
+
 def health() -> dict:
     """ok / warn / critical พร้อมเหตุผล — ใช้ใน /admin/messaging/status"""
     left = remaining()
@@ -113,7 +124,8 @@ def health() -> dict:
     reasons = []
     level = "ok"
     if left is not None and left <= 0:
-        level = "critical"; reasons.append("โควตาข้อความ LINE เดือนนี้หมดแล้ว")
+        level = "critical"
+        reasons.append(f"โควตาข้อความ LINE เดือนนี้หมดแล้ว — จะรีเซ็ตประมาณ {quota_reset_date()}")
     elif left is not None and quota and left / quota < 0.10:
         level = "warn"; reasons.append(f"โควตาเหลือ {left}/{quota} (< 10%)")
     if failed:
@@ -132,6 +144,7 @@ def health() -> dict:
         "failed_24h": failed,
         "skipped_24h": skipped,
         "quota_check_error": _state["last_error"],
+        "quota_resets_on": quota_reset_date(),
     }
 
 

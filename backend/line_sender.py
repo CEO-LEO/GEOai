@@ -33,6 +33,7 @@ async def send_line_message(
     user_id: str, message: str, flex: dict | None = None, image_url: str | None = None,
     *, messages: list[dict] | None = None, kind: str = "general", priority: str = "normal",
     plot_id: int | None = None, level: str | None = None,
+    log_plots: list[tuple[int | None, str | None]] | None = None,
 ) -> bool:
     """
     ส่งข้อความ push ไปหา user_id ทาง LINE Messaging API
@@ -44,7 +45,10 @@ async def send_line_message(
       ดึงได้เองโดยไม่ต้อง auth (ดู plot_image_service.upload_plot_image)
     - priority: critical / normal / low — ตรวจโควตาก่อนส่ง ใกล้เต็มจะส่งเฉพาะที่สำคัญ
       (ดู line_quota.py) ทุกการส่ง/ล้มเหลว/ข้าม ถูก log และบันทึกลง line_message_log
+    - log_plots: push เดียวที่รวมหลายแปลง (เช่นเตือนฝน) — บันทึก 1 แถวต่อแปลง [(plot_id, level)]
+      เพื่อให้การกันส่งซ้ำรายแปลงยังทำงาน (โควตานับครั้งเดียวต่อ push เหมือนเดิม)
     """
+    targets = log_plots or [(plot_id, level)]
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
         logger.warning("LINE_CHANNEL_ACCESS_TOKEN not set — skipping push")
@@ -66,7 +70,8 @@ async def send_line_message(
         line_quota.note_event("skipped")
         logger.error(f"LINE push SKIPPED (quota) kind={kind} priority={priority} "
                      f"remaining={line_quota.remaining()} user={user_id[:8]}…")
-        await _log(user_id, kind, priority, "skipped_quota", None, plot_id, level, "quota low/exhausted")
+        for pid, lvl in targets:
+            await _log(user_id, kind, priority, "skipped_quota", None, pid, lvl, "quota low/exhausted")
         return False
 
     payload = {"to": user_id, "messages": messages}
@@ -89,7 +94,8 @@ async def send_line_message(
                 line_quota.note_sent()
                 logger.info(f"LINE push sent kind={kind} to {user_id[:8]}…"
                             + (f" (retry {attempt})" if attempt > 0 else ""))
-                await _log(user_id, kind, priority, "sent", 200, plot_id, level, None)
+                for pid, lvl in targets:
+                    await _log(user_id, kind, priority, "sent", 200, pid, lvl, None)
                 return True
 
             # เกินโควตาเดือนนี้ — retry ไปก็ไม่ผ่าน
@@ -131,7 +137,8 @@ async def send_line_message(
     })
     line_quota.note_event("failed")
     logger.error(f"LINE push FAILED kind={kind} status={last_status} for {user_id[:8]}…")
-    await _log(user_id, kind, priority, "failed", last_status or None, plot_id, level, last_error)
+    for pid, lvl in targets:
+        await _log(user_id, kind, priority, "failed", last_status or None, pid, lvl, last_error)
     return False
 
 

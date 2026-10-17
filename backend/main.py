@@ -55,7 +55,8 @@ from database import (save_analysis, get_all_reports, save_plot,
                       upsert_user, save_iot_reading, get_plot_by_id,
                       save_field_observation, get_persistent_wet_points,
                       set_notify_digest, get_latest_risk_by_plots, get_user,
-                      get_recent_message_failures)
+                      get_recent_message_failures, get_scheduler_last_run,
+                      set_scheduler_last_run)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit
@@ -570,17 +571,43 @@ async def admin_logs(level: str | None = None, limit: int = 50):
     }
 
 
+_HEALTH_CODE = {"ok": 0, "warn": 1, "critical": 2}
+_HEALTH_NAME = {v: k for k, v in _HEALTH_CODE.items()}
+_last_health_mem: str | None = None   # สำรองเมื่อ DB ใช้ไม่ได้
+
+
 @app.get("/admin/messaging/status", dependencies=[Depends(verify_admin)])
-async def admin_messaging_status():
+async def admin_messaging_status(track: bool = False):
     """
     สถานะการส่งข้อความ LINE: โควตาคงเหลือ, จำนวนที่ส่งไม่สำเร็จ/ถูกข้ามใน 24 ชม.
-    health = ok / warn / critical — GitHub Actions (keep-alive.yml) เรียกทุกชั่วโมง ถ้าไม่
-    ok งานจะล้มและ GitHub อีเมลแจ้งเจ้าของ repo (เดิมโควตาหมด 8 วันโดยไม่มีใครรู้)
+    health = ok / warn / critical
+
+    track=true (ใช้โดย GitHub Actions ทุกชั่วโมง): เทียบกับสถานะครั้งก่อนที่บันทึกไว้ แล้วคืน
+    changed=true เฉพาะตอนสถานะเปลี่ยน → workflow ล้ม (= GitHub อีเมลแจ้ง) เฉพาะตอนนั้น
+    ไม่ใช่ทุกชั่วโมงที่ยังมีปัญหา (เจ้าของขอ 2026-10-17 — อีเมลซ้ำทุกชั่วโมงจะทำให้เลิกอ่าน)
+    สถานะครั้งก่อนเก็บในตาราง scheduler_runs (job_name="messaging_health",
+    last_run_hour = รหัสระดับ 0/1/2) ไม่ต้องเพิ่ม schema
     """
+    global _last_health_mem
     await line_quota.refresh(force=True)
     since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    return {**line_quota.health(),
-            "recent_failures": await get_recent_message_failures(since, limit=20)}
+    result = {**line_quota.health(),
+              "recent_failures": await get_recent_message_failures(since, limit=20)}
+    if track:
+        stored = await get_scheduler_last_run("messaging_health")
+        if stored is not None:
+            previous = _HEALTH_NAME.get(stored.get("last_run_hour"), "ok")
+        else:
+            previous = _last_health_mem or "ok"
+        current = result["health"]
+        result["previous_health"] = previous
+        result["changed"] = current != previous
+        if result["changed"]:
+            _last_health_mem = current
+            await set_scheduler_last_run("messaging_health",
+                                         datetime.now(timezone.utc).date().isoformat(),
+                                         _HEALTH_CODE[current])
+    return result
 
 
 @app.get("/admin/failed-messages", dependencies=[Depends(verify_admin)])

@@ -71,19 +71,27 @@ jobs:
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
 
       # v6 (Phase 1b): ตรวจสุขภาพการส่งข้อความ LINE ทุกรอบ — 2026-10 โควตา LINE OA หมดแล้ว
-      # push ล้มเหลวเงียบๆ 8 วันโดยไม่มีใครรู้ ถ้าโควตาใกล้หมด/หมด, มีการส่งไม่สำเร็จใน 24 ชม.
-      # หรือเรียก endpoint ไม่ได้ (เช่น ADMIN_API_KEY ใน secret ไม่ตรงกับ Render) step นี้จะ
-      # ล้ม → GitHub ส่งอีเมลแจ้งผู้แก้ไข workflow ตั้งเวลาล่าสุด (ใช้ได้แม้ LINE ส่งไม่ออก)
-      - name: Check LINE messaging health (fails the run if not ok)
+      # push ล้มเหลวเงียบๆ 8 วันโดยไม่มีใครรู้
+      # v7: แจ้งเฉพาะตอน "สถานะเปลี่ยน" (ปกติ → มีปัญหา, มีปัญหา → กลับมาปกติ) ไม่ใช่ทุกชั่วโมง
+      # ที่ยังมีปัญหา — server จำสถานะครั้งก่อนเอง (?track=true) ถ้าเปลี่ยน step นี้จะล้ม →
+      # GitHub ส่งอีเมลแจ้งผู้แก้ไข workflow ตั้งเวลาล่าสุด (ใช้ได้แม้ LINE ส่งไม่ออก)
+      # โควตาหมด = แจ้งครั้งเดียวพร้อมวันที่รีเซ็ต · เรียก endpoint ไม่ได้ (เช่น key ไม่ตรง) = ล้มทุกครั้ง
+      - name: Check LINE messaging health (fails the run only when status changes)
         run: |
           body=$(curl -s --max-time 60 -w '\n%{http_code}' \
             -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
-            "https://iamroot.onrender.com/admin/messaging/status")
+            "https://iamroot.onrender.com/admin/messaging/status?track=true")
           code=$(echo "$body" | tail -n1); json=$(echo "$body" | sed '$d')
-          echo "HTTP $code"; echo "$json" | jq '{health, reasons, remaining, quota, failed_24h, skipped_24h}' || echo "$json"
+          echo "HTTP $code"; echo "$json" | jq '{health, previous_health, changed, reasons, remaining, quota, quota_resets_on}' || echo "$json"
           if [ "$code" != "200" ]; then echo "::error::messaging status endpoint returned HTTP $code"; exit 1; fi
+          changed=$(echo "$json" | jq -r '.changed')
           health=$(echo "$json" | jq -r '.health')
-          if [ "$health" != "ok" ]; then
-            echo "::error::LINE messaging health is '$health': $(echo "$json" | jq -r '.reasons | join("; ")')"
+          if [ "$changed" = "true" ] && [ "$health" = "ok" ]; then
+            echo "::error::✅ การส่งข้อความ LINE กลับมาปกติแล้ว (แจ้งเพราะสถานะเปลี่ยน — ไม่ใช่ข้อผิดพลาดใหม่)"
             exit 1
           fi
+          if [ "$changed" = "true" ]; then
+            echo "::error::⚠️ การส่งข้อความ LINE มีปัญหา ($health): $(echo "$json" | jq -r '.reasons | join("; ")')"
+            exit 1
+          fi
+          echo "สถานะไม่เปลี่ยน ($health) — ไม่แจ้ง"

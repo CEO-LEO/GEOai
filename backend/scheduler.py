@@ -63,6 +63,8 @@ ESCALATION_DAYS = 2  # (ไม่ได้ใช้ส่งแล้วตั�
 # Phase 1b — ลดข้อความ LINE (OA แพลน Free 300 ข้อความ/เดือน หมดตั้งแต่ราววันที่ 7)
 DIGEST_WEEKDAY = 0             # สรุปแปลงส่งสัปดาห์ละครั้ง วันจันทร์ (0=จันทร์ ตามเวลาไทย)
 DIGEST_MAX_IMAGES = 3          # 1 push ได้ 5 message: ข้อความนำ + carousel + รูปไม่เกิน 3
+RISK_REMINDER_AFTER_DAYS = 7   # ยังสูงต่อเนื่องเกิน n วันหลังเตือน → เตือนซ้ำ "ครั้งเดียว"
+RAIN_ALERT_MAX_IMAGES = 3      # เตือนฝนรวมหลายแปลง: carousel 1 + รูปไม่เกิน 3
 RAIN_ALERT_DEDUPE_DAYS = 7     # ไม่ส่งเตือนฝนระดับเดิม/ต่ำกว่าซ้ำภายใน n วัน (= ช่วงพยากรณ์ 7 วัน)
 _RAIN_LEVEL_RANK = {"watch": 1, "warning": 2, "critical": 3}
 
@@ -231,9 +233,13 @@ async def daily_scan_job(hour: int | None = None):
                     # ถ้ามี line_message_log — เลิกส่ง "escalation" ซ้ำทุกวันแล้ว (Phase 1b)
                     if _is_high_risk(data) and user_id in notifiable and plot_id:
                         prev_level = await get_previous_risk_level(plot_id, day_start_utc)
+                        kind = "risk_alert"
                         if not _risk_increased_to_high(True, prev_level):
-                            continue
-                        if await get_last_sent_message(plot_id, "risk_alert", day_start_utc):
+                            # ยังสูงต่อเนื่อง — เตือนซ้ำครั้งเดียวถ้าเกิน 7 วันนับจากที่เตือน
+                            if not await _needs_risk_reminder(plot_id):
+                                continue
+                            kind = "risk_reminder"
+                        elif await get_last_sent_message(plot_id, "risk_alert", day_start_utc):
                             continue
 
                         alert_img_url = None
@@ -248,7 +254,8 @@ async def daily_scan_job(hour: int | None = None):
                                                        plot_name=plot.get("name") or "",
                                                        problem_points=alert_problem_points)
                         await send_line_message(user_id, message, flex=flex, image_url=alert_img_url,
-                                                kind="risk_alert", priority="critical",
+                                                kind=kind,
+                                                priority="critical" if kind == "risk_alert" else "normal",
                                                 plot_id=plot_id, level="high")
                         counters["alerted"] += 1
 
@@ -397,6 +404,21 @@ async def run_job_with_catchup(job_fn, job_name: str, hour: int | None):
 # ─────────────────────────────────────────────────
 # Rain alert job (Job 2)
 # ─────────────────────────────────────────────────
+async def _needs_risk_reminder(plot_id: int) -> bool:
+    """
+    เตือนซ้ำ "ครั้งเดียว" เมื่อแปลงยังสูงต่อเนื่องเกิน RISK_REMINDER_AFTER_DAYS วันหลังคำเตือน
+    ข้อความล่าสุดของแปลง (risk_alert/risk_reminder ใน 60 วัน) ต้องเป็น risk_alert ที่ส่งไปนาน
+    พอแล้ว — ถ้าเป็น risk_reminder แปลว่าเตือนซ้ำไปแล้ว ไม่ส่งอีกจนกว่าระดับจะลดแล้วขึ้นใหม่
+    (ซึ่งจะเป็น risk_alert ครั้งใหม่) ต้องมี line_message_log (migrate_v13) ถ้าไม่มีจะไม่เตือนซ้ำ
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    last = await get_last_sent_message(plot_id, ["risk_alert", "risk_reminder"], since)
+    if not last or last.get("kind") != "risk_alert":
+        return False
+    sent_at = datetime.fromisoformat(last["created_at"].replace("Z", "+00:00"))
+    return datetime.now(timezone.utc) - sent_at >= timedelta(days=RISK_REMINDER_AFTER_DAYS)
+
+
 def _rain_priority(level: str) -> str:
     return "critical" if level == "critical" else "normal"
 
@@ -414,6 +436,39 @@ async def _rain_alert_is_new(plot_id: int | None, level: str) -> bool:
     if not last:
         return True
     return _RAIN_LEVEL_RANK.get(level, 0) > _RAIN_LEVEL_RANK.get(last.get("level"), 0)
+
+
+async def _send_grouped_rain_alert(user_id: str, pending: list[dict]) -> None:
+    """
+    เตือนฝนของทุกแปลงของผู้ใช้ใน push เดียว (1 ข้อความในโควตา) — 1 แปลง: การ์ด + รูป,
+    หลายแปลง: carousel การ์ด (สูงสุด 10) + รูปแผนที่ไม่เกิน RAIN_ALERT_MAX_IMAGES
+    บันทึก log แยกรายแปลงเพื่อให้การกันส่งซ้ำ 7 วันยังทำงานต่อแปลง
+    """
+    images: list[str] = []
+    for item in pending:
+        if len(images) >= RAIN_ALERT_MAX_IMAGES:
+            break
+        polygon = item.get("polygon")
+        if polygon and len(polygon) >= 3:
+            img_result = await build_plot_grid_image_url(polygon, item["name"], plot_id=item["plot_id"])
+            if img_result["url"]:
+                images.append(img_result["url"])
+
+    if len(pending) == 1:
+        messages = [pending[0]["flex"]]
+    else:
+        messages = [{
+            "type": "flex",
+            "altText": f"🌧️ แจ้งเตือนฝน {len(pending)} แปลงของคุณ — ปัดดูทีละแปลง",
+            "contents": {"type": "carousel",
+                         "contents": [item["flex"]["contents"] for item in pending[:10]]},
+        }]
+    messages += [{"type": "image", "originalContentUrl": u, "previewImageUrl": u} for u in images]
+
+    priority = "critical" if any(_rain_priority(i["level"]) == "critical" for i in pending) else "normal"
+    await send_line_message(user_id, pending[0]["msg"], messages=messages, kind="rain_alert",
+                            priority=priority,
+                            log_plots=[(i["plot_id"], i["level"]) for i in pending])
 
 
 async def rain_alert_job(hour: int | None = None):
@@ -449,6 +504,8 @@ async def rain_alert_job(hour: int | None = None):
                 if not plots:
                     return
 
+                # Phase 1b: เก็บคำเตือนของทุกแปลงก่อน แล้วส่งรวมเป็น push เดียวต่อคน
+                pending: list[dict] = []
                 for plot in plots:
                     lat     = float(plot["lat"])
                     lng     = float(plot["lng"])
@@ -480,25 +537,14 @@ async def rain_alert_job(hour: int | None = None):
                             )
 
                         if alert["should_notify"] and await _rain_alert_is_new(plot_id, alert["alert_level"]):
-                            # ผู้ใช้ขอ "ทุกคนได้รับภาพในการแจ้งตอนเช้าทุกคน" — แนบรูป
-                            # แผนที่เหมือนกับที่ทำใน daily_scan_job (เฉพาะแปลงที่มี
-                            # ขอบเขต ถึงจะมีตารางจุดให้ทำรูปได้)
-                            rain_img_url = None
-                            if polygon and len(polygon) >= 3:
-                                img_result = await build_plot_grid_image_url(
-                                    polygon, name, plot_id=plot_id)
-                                rain_img_url = img_result["url"]
-
-                            flex = build_combined_alert_flex(
-                                forecast, soil_risk, alert,
-                                lat, lng, plot_name=name)
-                            msg = build_combined_alert_message(
-                                forecast, soil_risk, alert,
-                                lat, lng, plot_name=name)
-                            await send_line_message(user_id, msg, flex=flex, image_url=rain_img_url,
-                                                    kind="rain_alert",
-                                                    priority=_rain_priority(alert["alert_level"]),
-                                                    plot_id=plot_id, level=alert["alert_level"])
+                            pending.append({
+                                "flex": build_combined_alert_flex(forecast, soil_risk, alert,
+                                                                  lat, lng, plot_name=name),
+                                "msg": build_combined_alert_message(forecast, soil_risk, alert,
+                                                                    lat, lng, plot_name=name),
+                                "plot_id": plot_id, "level": alert["alert_level"],
+                                "polygon": polygon, "name": name,
+                            })
                             counters["combined_alerts"] += 1
                             logger.info(
                                 f"{alert['alert_title']} → {user_id} plot '{name}' "
@@ -509,24 +555,20 @@ async def rain_alert_job(hour: int | None = None):
                     else:
                         # ── Fallback: ไม่มีข้อมูลดิน → ใช้ rain-only alert ──
                         if forecast["is_heavy_rain"] and await _rain_alert_is_new(plot_id, "warning"):
-                            rain_img_url = None
-                            if polygon and len(polygon) >= 3:
-                                img_result = await build_plot_grid_image_url(
-                                    polygon, name, plot_id=plot_id)
-                                rain_img_url = img_result["url"]
-
-                            flex = build_rain_alert_flex(
-                                forecast, lat, lng, plot_name=name)
-                            msg = build_rain_alert_message(
-                                forecast, lat, lng, plot_name=name)
-                            await send_line_message(user_id, msg, flex=flex, image_url=rain_img_url,
-                                                    kind="rain_alert", priority="normal",
-                                                    plot_id=plot_id, level="warning")
+                            pending.append({
+                                "flex": build_rain_alert_flex(forecast, lat, lng, plot_name=name),
+                                "msg": build_rain_alert_message(forecast, lat, lng, plot_name=name),
+                                "plot_id": plot_id, "level": "warning",
+                                "polygon": polygon, "name": name,
+                            })
                             counters["alerted"] += 1
                             logger.info(
                                 f"🌧️ Rain-only alert → {user_id} plot '{name}' "
                                 f"— {forecast['total_rain_mm']}mm"
                             )
+
+                if pending:
+                    await _send_grouped_rain_alert(user_id, pending)
 
             except Exception as e:
                 logger.error(f"Rain alert failed for {user_id}: {e}")
