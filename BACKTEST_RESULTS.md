@@ -1,4 +1,6 @@
 # GEOai Backtest Results
+
+> ⚠️ **หมายเหตุ (2026-10-15):** เอกสารนี้เป็นบันทึกช่วงต้นแบบ (มิ.ย. 2569) ตัวเลขด้านล่างมาจากการรันระบบกับ 5 พิกัดโดย **ไม่มีข้อมูลจริงจากแปลง (ผลผลิต/อาการ) มาเทียบ** จึงไม่ใช่ผลวัดความแม่นยำ — ตัวเลข "83%" เดิมคือค่าความสอดคล้องระหว่างโมเดล ML กับสูตรคำนวณของระบบเอง ไม่ใช่ accuracy ได้ลบคำกล่าวอ้างเรื่องความแม่นยำออกแล้ว ห้ามนำตัวเลขในไฟล์นี้ไปใช้ในเอกสารเสนอหน่วยงาน (ดู docs/v2/phase0-report.md หัวข้อ 2.4)
 ## Durian Health Analysis — Nai Yai Yam District, Chachoengsao
 
 **Test Date:** 2026-06-27  
@@ -142,14 +144,11 @@
 3. SWAB Index: 13.5%
 4. Other factors: 11.9%
 
-**Confidence Metrics:**
-- Model agreement rate: 83% (moderate-high confidence)
-- Prediction error range: ±200 kg/rai for yield
+**Confidence Metrics:** not measured — there is no real harvest data to compare against.
+(The earlier "83% agreement" compared the ML model with the system's own formula, which says nothing about real-world accuracy.)
 
 ### Model Strengths
-✅ Correctly identified geography-based performance differences  
-✅ Elevation impact accurately modeled  
-✅ Fertilizer recommendations aligned with observed stress  
+Not assessed — would require field observations from these plots.
 
 ### Model Limitations
 ⚠️ Limited by 3-month historical satellite window  

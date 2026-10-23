@@ -13,6 +13,8 @@ import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import AsyncClient, ASGITransport
 
+from conftest import ADMIN_HEADERS, auth_as, fake_verify_line_token
+
 # ── Mock GEE ก่อน import main ──────────────────────────
 import sys
 gee_mock = MagicMock()
@@ -60,20 +62,14 @@ SAMPLE_GEE_DATA_OK = {
 
 @pytest_asyncio.fixture
 async def client():
-    """สร้าง test client กับ mock GEE + scheduler"""
-    env_vars = {
-        "GEE_SERVICE_ACCOUNT": "test@test.iam.gserviceaccount.com",
-        "GEE_KEY_JSON": json.dumps({"type": "service_account"}),
-        "LINE_CHANNEL_ACCESS_TOKEN": "test_token",
-        "LINE_CHANNEL_SECRET": "test_secret",
-        "LIFF_URL": "https://liff.line.me/test",
-        "SUPABASE_URL": "",
-        "SUPABASE_SERVICE_ROLE_KEY": "",
-    }
-    with patch.dict("os.environ", env_vars):
-        with patch("scheduler.create_scheduler", return_value=scheduler_mock):
-            with patch("tempfile.NamedTemporaryFile"):
-                with patch("os.unlink"):
+    """สร้าง test client กับ mock GEE + scheduler + LINE token ปลอม (ดู conftest.auth_as)
+    env ปลอมทั้งหมดถูกตั้งใน conftest.py ก่อน import แล้ว"""
+    from middleware import reset_limits
+    reset_limits()
+    with patch("scheduler.create_scheduler", return_value=scheduler_mock):
+        with patch("tempfile.NamedTemporaryFile"):
+            with patch("os.unlink"):
+                with patch("auth.verify_line_token", side_effect=fake_verify_line_token):
                     from main import app
                     async with AsyncClient(
                         transport=ASGITransport(app=app),
@@ -171,7 +167,7 @@ class TestAPI:
                 with patch("main.save_analysis", new_callable=AsyncMock):
                     with patch("main.save_plot",
                                new_callable=AsyncMock, return_value=1):
-                        resp = await client.post("/analyze", json={
+                        resp = await client.post("/analyze", headers=auth_as("Utest"), json={
                             "lat":    12.6011,
                             "lng":    102.1042,
                             "user_id": "Utest123"
@@ -181,7 +177,7 @@ class TestAPI:
         mock_gee.assert_called_once_with(12.6011, 102.1042, polygon=None)
 
     async def test_analyze_invalid_lat(self, client):
-        resp = await client.post("/analyze", json={
+        resp = await client.post("/analyze", headers=auth_as("Utest"), json={
             "lat": 999.0, "lng": 102.0, "user_id": "Utest"
         })
         assert resp.status_code == 422
@@ -189,7 +185,7 @@ class TestAPI:
     async def test_analyze_gee_error_returns_502(self, client):
         with patch("main.analyze_durian_plot",
                    side_effect=Exception("GEE down")):
-            resp = await client.post("/analyze", json={
+            resp = await client.post("/analyze", headers=auth_as("Utest"), json={
                 "lat": 12.60, "lng": 102.10, "user_id": "Utest"
             })
         assert resp.status_code in (500, 502)
@@ -198,7 +194,7 @@ class TestAPI:
         with patch("main.get_user_plots",
                    new_callable=AsyncMock,
                    return_value=[{"id": 1, "name": "แปลงที่ 1"}]):
-            resp = await client.get("/plots/Utest123")
+            resp = await client.get("/plots/Utest123", headers=auth_as("Utest123"))
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
 
@@ -208,7 +204,7 @@ class TestAPI:
                    return_value=[{**SAMPLE_GEE_DATA,
                                   "id": 1, "user_id": "U1",
                                   "created_at": "2026-04-09T00:00:00"}]):
-            resp = await client.get("/admin/reports/export.csv")
+            resp = await client.get("/admin/reports/export.csv", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         assert "text/csv" in resp.headers["content-type"]
         assert "ndvi_now" in resp.text
@@ -222,7 +218,7 @@ class TestAPI:
         ]
         with patch("main.get_all_reports",
                    new_callable=AsyncMock, return_value=reports):
-            resp = await client.get("/admin/stats")
+            resp = await client.get("/admin/stats", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
@@ -233,14 +229,14 @@ class TestAPI:
     async def test_delete_plot(self, client):
         with patch("main.delete_plot",
                    new_callable=AsyncMock, return_value=True):
-            resp = await client.delete("/plots/Utest123/1")
+            resp = await client.delete("/plots/Utest123/1", headers=auth_as("Utest123"))
         assert resp.status_code == 200
         assert resp.json()["status"] == "deleted"
 
     async def test_delete_plot_not_found(self, client):
         with patch("main.delete_plot",
                    new_callable=AsyncMock, return_value=False):
-            resp = await client.delete("/plots/Utest123/999")
+            resp = await client.delete("/plots/Utest123/999", headers=auth_as("Utest123"))
         assert resp.status_code == 404
 
     async def test_plot_history(self, client):
@@ -249,8 +245,10 @@ class TestAPI:
              "created_at": "2026-04-09T07:00:00"}
         ]
         with patch("main.get_plot_history",
-                   new_callable=AsyncMock, return_value=mock_hist):
-            resp = await client.get("/plots/Utest123/1/history")
+                   new_callable=AsyncMock, return_value=mock_hist), \
+             patch("main.get_plot_by_id", new_callable=AsyncMock,
+                   return_value={"id": 1, "user_id": "Utest123"}):
+            resp = await client.get("/plots/Utest123/1/history", headers=auth_as("Utest123"))
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
         assert resp.json()["plot_id"] == 1
@@ -451,7 +449,7 @@ class TestLogBuffer:
 @pytest.mark.asyncio
 class TestAdminLogs:
     async def test_admin_logs_endpoint(self, client):
-        resp = await client.get("/admin/logs")
+        resp = await client.get("/admin/logs", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
         assert "stats" in data
@@ -486,7 +484,7 @@ class TestAdminStatsLang:
     async def test_stats_thai_labels(self, client):
         reports = [{**SAMPLE_GEE_DATA, "id": 1, "user_id": "U1", "created_at": "2026-04-09"}]
         with patch("main.get_all_reports", new_callable=AsyncMock, return_value=reports):
-            resp = await client.get("/admin/stats?lang=th")
+            resp = await client.get("/admin/stats?lang=th", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
         assert "labels" in data
@@ -495,7 +493,7 @@ class TestAdminStatsLang:
     async def test_stats_english_labels(self, client):
         reports = [{**SAMPLE_GEE_DATA, "id": 1, "user_id": "U1", "created_at": "2026-04-09"}]
         with patch("main.get_all_reports", new_callable=AsyncMock, return_value=reports):
-            resp = await client.get("/admin/stats?lang=en")
+            resp = await client.get("/admin/stats?lang=en", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
         assert data["labels"]["high_risk"] == "High Risk"
@@ -791,7 +789,7 @@ class TestAnalyzePredictedYield:
                 with patch("main.save_analysis", new_callable=AsyncMock):
                     with patch("main.save_plot",
                                new_callable=AsyncMock, return_value=1):
-                        resp = await client.post("/analyze", json={
+                        resp = await client.post("/analyze", headers=auth_as("Utest"), json={
                             "lat": 12.6011, "lng": 102.1042, "user_id": "Utest"
                         })
         assert resp.status_code == 200
@@ -807,7 +805,7 @@ class TestAnalyzePredictedYield:
                 with patch("main.save_analysis", new_callable=AsyncMock):
                     with patch("main.save_plot",
                                new_callable=AsyncMock, return_value=2):
-                        resp = await client.post("/analyze", json={
+                        resp = await client.post("/analyze", headers=auth_as("Utest"), json={
                             "lat": 12.60, "lng": 102.10, "user_id": "Utest"
                         })
         assert resp.status_code == 200
@@ -816,7 +814,7 @@ class TestAnalyzePredictedYield:
         assert data["topsoil_risk_level"] in ("low", "medium", "high")
 
     async def test_failed_messages_endpoint(self, client):
-        resp = await client.get("/admin/failed-messages")
+        resp = await client.get("/admin/failed-messages", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
         assert "stats" in data
@@ -878,7 +876,7 @@ class TestPolygon:
                 with patch("main.save_analysis", new_callable=AsyncMock):
                     with patch("main.save_plot",
                                new_callable=AsyncMock, return_value=1):
-                        resp = await client.post("/analyze", json={
+                        resp = await client.post("/analyze", headers=auth_as("Utest"), json={
                             "lat": 12.6, "lng": 102.1,
                             "user_id": "Utest",
                             "polygon": polygon,
@@ -893,7 +891,7 @@ class TestPolygon:
                 with patch("main.save_analysis", new_callable=AsyncMock):
                     with patch("main.save_plot",
                                new_callable=AsyncMock, return_value=1):
-                        resp = await client.post("/analyze", json={
+                        resp = await client.post("/analyze", headers=auth_as("Utest"), json={
                             "lat": 12.6, "lng": 102.1,
                             "user_id": "Utest",
                         })
@@ -914,7 +912,7 @@ class TestNDVITimeseries:
                    new_callable=AsyncMock, return_value=mock_plots):
             with patch("main.get_ndvi_timeseries",
                        return_value=mock_series):
-                resp = await client.get("/plots/Utest/1/ndvi-timeseries")
+                resp = await client.get("/plots/Utest/1/ndvi-timeseries", headers=auth_as("Utest"))
         assert resp.status_code == 200
         data = resp.json()
         assert data["plot_id"] == 1
@@ -923,5 +921,5 @@ class TestNDVITimeseries:
     async def test_ndvi_timeseries_plot_not_found(self, client):
         with patch("main.get_user_plots",
                    new_callable=AsyncMock, return_value=[]):
-            resp = await client.get("/plots/Utest/999/ndvi-timeseries")
+            resp = await client.get("/plots/Utest/999/ndvi-timeseries", headers=auth_as("Utest"))
         assert resp.status_code == 404

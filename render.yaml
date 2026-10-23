@@ -17,14 +17,27 @@ services:
     # dashboard setting is manually updated to match.
     buildCommand: pip install -r requirements.txt
     startCommand: bash -c "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    # ห้ามใส่ค่า secret ในไฟล์นี้ — repo เป็น public (เคยมี ADMIN_API_KEY/SPHERE_KEY ตัวจริง
+    # อยู่ตรงนี้ เอาออกเมื่อ 2026-10-15 — ค่าชุดนั้นยังอยู่ใน git history ถือว่ารั่วแล้ว ห้ามใช้อีก) ตั้งค่าทั้งหมดใน
+    # Render Dashboard → Environment; `sync: false` = Render ไม่เขียนทับค่าที่ตั้งไว้ใน Dashboard
     envVars:
       - key: ADMIN_API_KEY
-        value: VQBL_7QERqR4Vgrybadjg3J3OdF1StV9K3SGWslfY6U
-        scope: build,run
+        sync: false
       - key: SPHERE_KEY
-        value: 58319FD529C64DDEB319F94C4B395BC7
-        scope: build,run
-      # ⚠️ Add these in Render Dashboard → Environment (do NOT commit secrets):
-      # GEE_SERVICE_ACCOUNT, GEE_KEY_JSON, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-      # LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, LIFF_URL
+        sync: false
+      - key: GEE_SERVICE_ACCOUNT
+        sync: false
+      - key: GEE_KEY_JSON
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LIFF_URL
+        sync: false
+      # ไม่บังคับ: LINE_LOGIN_CHANNEL_ID (ถ้าไม่ตั้ง ใช้ส่วนหน้าของ LIFF ID — ดู backend/auth.py)
     healthCheckPath: /health

@@ -430,6 +430,18 @@ async def upsert_user(user_id: str, display_name: str = "") -> None:
     }
 
     async with httpx.AsyncClient(timeout=10) as client:
+        # ผู้ใช้ใหม่: สรุปแปลงประจำวัน "ปิด" เป็นค่าเริ่มต้น ให้ผู้ใช้เลือกเปิดเอง (ตัดสินใจ
+        # 2026-10-15 — ส่งทุกแปลงทุกเช้ากินโควตาข้อความ LINE OA ตามจำนวนผู้ใช้ × วัน)
+        # ignore-duplicates = insert เฉพาะตอนยังไม่มีแถว ไม่แตะค่าที่ผู้ใช้เดิมเลือกไว้แล้ว
+        # (คอลัมน์ DEFAULT ใน DB ยังเป็น TRUE จาก migrate_v11 — ดู migrate_v12.sql)
+        new_user_resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/users",
+            headers={**_HEADERS(), "Prefer": "resolution=ignore-duplicates,return=minimal"},
+            json={"user_id": user_id, "notify_daily_digest": False},
+        )
+        if new_user_resp.status_code not in (200, 201):
+            logger.error(f"Supabase insert new user failed: {new_user_resp.status_code} — {new_user_resp.text}")
+
         resp = await client.post(
             f"{SUPABASE_URL}/rest/v1/users",
             headers=headers,

@@ -155,7 +155,13 @@ Push ไป `main` → auto test → auto deploy Railway
 | `GET` | `/admin/logs?level=ERROR&limit=50` | Log entries ล่าสุด (monitoring) |
 | `POST` | `/webhook` | LINE webhook endpoint |
 
-> **หมายเหตุ:** endpoint ที่ขึ้นต้นด้วย `/admin/*` ต้องส่ง header `X-Admin-Key` (ตั้งค่าผ่าน `ADMIN_API_KEY` env var)
+> **การยืนยันตัวตน (ตั้งแต่ v2 Phase 1a):**
+> - endpoint ฝั่งผู้ใช้ (`/analyze`, `/analyze/grid`, `/plots/*`, `/user/*`) ต้องส่ง LINE token จาก LIFF:
+>   `Authorization: Bearer <token>` + `X-Line-Token-Type: id_token|access_token` — server ตรวจกับ LINE เอง
+>   และใช้ user_id จาก token เท่านั้น ([backend/auth.py](backend/auth.py))
+> - `/admin/*`, `/iot/reading`, `/analyze/preview`, `/weather-alert/preview` ต้องส่ง header `X-Admin-Key`
+>   (`ADMIN_API_KEY` env) — ถ้าไม่ได้ตั้ง key ระบบปฏิเสธทั้งหมด
+> - รายละเอียดดู [docs/v2/phase1a-report.md](docs/v2/phase1a-report.md)
 
 ---
 
@@ -163,12 +169,12 @@ Push ไป `main` → auto test → auto deploy Railway
 
 ```bash
 cd backend
-pytest test_system.py -v
+pytest -q        # test_system.py + test_auth.py — ไม่ต้องตั้ง env (conftest.py ตั้งค่าปลอมให้ และไม่อ่าน .env)
 ```
 
 ทดสอบ: Rule Engine, Flex Messages, Cache, API endpoints, Weather Alert, Signature Verification,  
-GEE Retry, Duplicate Plot Detection, Log Buffer, Admin Logs  
-ทุก test ใช้ mock — ไม่ต้องมี GEE key / LINE token จริง
+GEE Retry, Duplicate Plot Detection, Log Buffer, Admin Logs, การยืนยันตัวตน/สิทธิ์/rate limit (test_auth.py)  
+ทุก test ใช้ mock — ไม่ต้องมี GEE key / LINE token จริง · CI รันบน branch `master` และ `feat/**`
 
 ---
 

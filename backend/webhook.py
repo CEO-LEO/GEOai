@@ -36,10 +36,12 @@ _DB_DOWN = ("⚠️ ระบบฐานข้อมูลขัดข้อง
 # ─────────────────────────────────────────────────────
 
 def _verify_signature(body: bytes, signature: str) -> bool:
+    # fail-closed: เดิมถ้าไม่ได้ตั้ง secret จะข้ามการตรวจแล้วรับทุก event — ใครก็ปลอม event
+    # (เช่น postback "action=history") ส่งเข้ามาสั่งให้บอท push ข้อความหาใครก็ได้
     secret = os.environ.get("LINE_CHANNEL_SECRET", "").encode()
     if not secret:
-        logger.warning("LINE_CHANNEL_SECRET not set — skipping signature verification (dev mode)")
-        return True
+        logger.error("LINE_CHANNEL_SECRET not set — rejecting webhook (signature cannot be verified)")
+        return False
     digest = hmac.new(secret, body, hashlib.sha256).digest()
     expected = base64.b64encode(digest).decode()
     return hmac.compare_digest(expected, signature)
