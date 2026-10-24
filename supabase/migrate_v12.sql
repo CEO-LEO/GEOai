@@ -13,8 +13,20 @@
 --    ผู้ใช้ใหม่ต้องเลือกเปิดสรุปประจำวันเอง (ตัดสินใจ 2026-10-15) — ไม่แตะค่าของ
 --    ผู้ใช้เดิม โค้ด (database.upsert_user) ใส่ FALSE ให้ผู้ใช้ใหม่อยู่แล้วตั้งแต่ Phase 1a
 --    ข้อนี้ทำให้ค่าเริ่มต้นใน DB ตรงกับโค้ด เผื่อมีทางอื่นสร้างแถว users ในอนาคต
+--
+-- 3) (เพิ่ม 2026-10-24 จากผล rls_audit.sql บน production) ถอนสิทธิ์ทั้งหมดของ role
+--    anon / authenticated ใน schema public — แอปนี้ไม่ใช้ anon key เลย (backend ใช้
+--    service_role อย่างเดียว) แต่ Supabase ให้สิทธิ์ ALL เป็นค่าเริ่มต้น:
+--      - view dashboard_summary ข้าม RLS ของตารางต้นทาง → anon อ่านสถิติรวมได้
+--      - TRUNCATE ไม่ถูก RLS กัน → ต้องถอนสิทธิ์ตรงๆ
+--    และตั้ง default privileges ให้ตารางใหม่ในอนาคต (เช่น line_message_log) ไม่ได้สิทธิ์ด้วย
 
 BEGIN;
+
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
 
 ALTER TABLE scheduler_runs ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN
@@ -36,3 +48,7 @@ WHERE n.nspname = 'public' AND c.relname = 'scheduler_runs';
 SELECT column_name, column_default
 FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'notify_daily_digest';
+
+SELECT count(*) AS anon_or_authenticated_grants_left
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public' AND grantee IN ('anon', 'authenticated');
