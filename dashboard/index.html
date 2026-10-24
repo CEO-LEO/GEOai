@@ -226,6 +226,9 @@
 </head>
 <body>
 
+<!-- Phase 1b: แถบเตือนเมื่อการส่งข้อความ LINE มีปัญหา (โควตาใกล้หมด/หมด, ส่งไม่สำเร็จ) -->
+<div id="msg-banner" role="alert" style="display:none;position:fixed;top:0;left:0;right:0;z-index:10000;padding:10px 16px;font-weight:600;font-size:14px;text-align:center"></div>
+
 <div id="overlay"><div>⏳ กำลังเชื่อมต่อระบบ IAM ROOT...</div></div>
 
 <div class="app">
@@ -783,10 +786,29 @@
     loadReports();
   }
 
+  // ───────── สถานะการส่งข้อความ LINE (Phase 1b) ─────────
+  // เดิมโควตา LINE OA หมดแล้วข้อความส่งไม่ออก 8 วันโดยไม่มีใครรู้ — แสดงแถบเตือนบนสุด
+  async function loadMessagingStatus(){
+    const el = document.getElementById('msg-banner');
+    try {
+      const r = await fetch(`${API_BASE}/admin/messaging/status`, { headers: adminHeaders() });
+      if (!r.ok) return;
+      const st = await r.json();
+      if (st.health === 'ok') { el.style.display = 'none'; return; }
+      const left = st.remaining == null ? '' : ` · โควตาเหลือ ${st.remaining}/${st.quota}`;
+      el.textContent = `${st.health === 'critical' ? '🔴' : '🟠'} การส่งข้อความ LINE: ${(st.reasons || []).join(' · ')}${left}`;
+      el.style.background = st.health === 'critical' ? '#b71c1c' : '#e65100';
+      el.style.color = '#fff';
+      el.style.display = 'block';
+    } catch (e) { /* ไม่ให้แถบนี้ทำ dashboard พัง */ }
+  }
+
   // ───────── Init ─────────
   initMap();
   loadReports();
+  loadMessagingStatus();
   setInterval(loadReports, 60000);
+  setInterval(loadMessagingStatus, 300000);
 </script>
 </body>
 </html>

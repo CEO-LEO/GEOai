@@ -123,6 +123,11 @@ def user_rate_limit(bucket: str, max_calls: int, window_s: int = WINDOW_S):
     return _limit
 
 
+def ip_bucket_exceeded(request: Request, bucket: str, max_calls: int, window_s: int = WINDOW_S) -> bool:
+    """เพดานแยกต่อ IP สำหรับ endpoint ที่ไม่มีการยืนยันตัวตน (เช่น /client/telemetry)"""
+    return _ip_limiter.hit(f"{bucket}:{client_ip(request)}", max_calls, window_s)
+
+
 def reset_limits() -> None:
     """ใช้ใน test"""
     _ip_limiter.reset()

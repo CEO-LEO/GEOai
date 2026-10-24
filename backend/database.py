@@ -664,25 +664,52 @@ async def set_notify(user_id: str, enabled: bool) -> bool:
     return ok
 
 
+PAGE_SIZE = 1000   # Supabase/PostgREST คืนไม่เกิน 1,000 แถวต่อคำขอโดยค่าเริ่มต้น
+
+
+async def _fetch_all(table: str, params: dict) -> list[dict] | None:
+    """
+    ดึงทุกแถวที่ตรงเงื่อนไขแบบแบ่งหน้า — เดิมฟังก์ชันรายชื่อผู้ใช้ยิงคำขอเดียว ถ้าเกิน
+    1,000 แถว Supabase ตัดทิ้งเงียบๆ (ผู้ใช้หลุดจากการแจ้งเตือนโดยไม่มี error)
+    คืน None ถ้าคำขอใดล้มเหลว ให้ผู้เรียกตัดสินใจเอง
+    """
+    rows: list[dict] = []
+    offset = 0
+    async with httpx.AsyncClient(timeout=20) as client:
+        while True:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/{table}",
+                headers={**_HEADERS(), "Prefer": ""},
+                params={**params, "limit": str(PAGE_SIZE), "offset": str(offset)},
+            )
+            if resp.status_code != 200:
+                logger.error(f"Supabase _fetch_all({table}) failed: {resp.status_code} — {resp.text[:200]}")
+                return None
+            page = resp.json()
+            rows.extend(page)
+            if len(page) < PAGE_SIZE:
+                return rows
+            offset += PAGE_SIZE
+
+
+async def get_all_user_ids() -> list[str]:
+    """
+    รายชื่อผู้ใช้ทั้งหมด — ใช้แทนการหาผู้ใช้จาก "รายงานล่าสุด 1,000 แถว" ใน
+    daily_scan_job/rain_alert_job (เดิมเมื่อมีแปลงเกินราว 1,000 แปลง ผู้ใช้บางคนจะ
+    หลุดจากการสแกนถาวรโดยไม่มี error)
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return sorted({r["user_id"] for r in _demo_reports})
+    rows = await _fetch_all("users", {"select": "user_id", "order": "user_id.asc"})
+    return [r["user_id"] for r in rows or []]
+
+
 async def get_notifiable_users() -> set[str]:
     """ดึง user_id ทั้งหมดที่เปิดรับการแจ้งเตือน (notify_weekly = true)"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return set()
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"{SUPABASE_URL}/rest/v1/users",
-            headers={**_HEADERS(), "Prefer": ""},
-            params={
-                "notify_weekly": "eq.true",
-                "select":        "user_id",
-            },
-        )
-
-    if resp.status_code != 200:
-        logger.error(f"Supabase get_notifiable_users failed: {resp.status_code}")
-        return set()
-    return {row["user_id"] for row in resp.json()}
+    rows = await _fetch_all("users", {"notify_weekly": "eq.true", "select": "user_id"})
+    return {row["user_id"] for row in rows or []}
 
 
 async def set_notify_digest(user_id: str, enabled: bool) -> bool:
@@ -709,24 +736,11 @@ async def set_notify_digest(user_id: str, enabled: bool) -> bool:
 
 
 async def get_digest_users() -> set[str]:
-    """ดึง user_id ทั้งหมดที่เปิดรับสรุปแปลงประจำวัน (notify_daily_digest = true)"""
+    """ดึง user_id ทั้งหมดที่เปิดรับสรุปแปลง (คอลัมน์ notify_daily_digest — ตั้งแต่ Phase 1b ส่งเป็นรายสัปดาห์)"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return set()
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"{SUPABASE_URL}/rest/v1/users",
-            headers={**_HEADERS(), "Prefer": ""},
-            params={
-                "notify_daily_digest": "eq.true",
-                "select":              "user_id",
-            },
-        )
-
-    if resp.status_code != 200:
-        logger.error(f"Supabase get_digest_users failed: {resp.status_code}")
-        return set()
-    return {row["user_id"] for row in resp.json()}
+    rows = await _fetch_all("users", {"notify_daily_digest": "eq.true", "select": "user_id"})
+    return {row["user_id"] for row in rows or []}
 
 
 PRESET_NOTIFY_HOURS = (5, 6, 7, 8, 9, 10)  # ต้องตรงกับ CHECK constraint ใน migrate_v8.sql
@@ -806,34 +820,20 @@ async def get_users_by_hour(hour: int) -> set[str] | None:
     รายชั่วโมง (ดู .github/workflows/keep-alive.yml) กันสแกน/ส่งซ้ำให้คนที่ไม่ได้ตั้ง
     เวลานี้ไว้
 
-    คืน None (แทน set() ว่าง) เฉพาะกรณีคอลัมน์ notify_hour ยังไม่มีในฐานข้อมูลจริง
-    (ยังไม่ได้รัน migrate_v8.sql) — เพื่อให้ตัวเรียกรู้ว่า "ยังกรองตามชั่วโมงไม่ได้"
-    แล้ว fallback ไปแบบเดิม (ไม่กรอง สแกนทุกคน) แทนที่จะกรองแล้วเจอ error ตลอดจน
-    ไม่มีใครถูกสแกนเลยสักคนเงียบๆ (อันตรายกว่า "ยังไม่กรอง" มาก)
+    ถ้าดึงไม่สำเร็จคืน set() ว่าง (รอบนี้ไม่ส่งให้ใคร) — เดิมคืน None ให้ผู้เรียก
+    "ไม่กรอง" ซึ่งทำให้ทุกคนได้ข้อความทุกชั่วโมงที่ทริกเกอร์ (6 รอบ/วัน) เปลืองโควตา LINE
     """
     if not SUPABASE_URL or not SUPABASE_KEY:
         return set()
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"{SUPABASE_URL}/rest/v1/users",
-            headers={**_HEADERS(), "Prefer": ""},
-            params={
-                "notify_hour": f"eq.{hour}",
-                "select":      "user_id",
-            },
-        )
-
-    if resp.status_code != 200:
-        if resp.status_code == 400 and "42703" in resp.text:
-            logger.warning(
-                "get_users_by_hour: notify_hour column missing (migrate_v8.sql not "
-                "run yet?) — falling back to unfiltered (everyone scanned this run)"
-            )
-            return None
-        logger.error(f"Supabase get_users_by_hour failed: {resp.status_code}")
+    rows = await _fetch_all("users", {"notify_hour": f"eq.{hour}", "select": "user_id"})
+    if rows is None:
+        # คำขอล้มเหลว (รายละเอียดใน log ของ _fetch_all) — คืน set ว่าง = รอบนี้ไม่ส่งให้ใคร
+        # (ถ้าคืน None ระบบจะ "ไม่กรอง" แล้วส่งให้ทุกคนทุกชั่วโมงที่ทริกเกอร์ เปลืองโควตา
+        # LINE มาก) — กรณีคอลัมน์ notify_hour ยังไม่มีเลิกรองรับแล้ว migrate_v8 รันไปนานแล้ว
+        logger.error("get_users_by_hour failed — no notifications for this hour")
         return set()
-    return {row["user_id"] for row in resp.json()}
+    return {row["user_id"] for row in rows}
 
 
 async def get_recent_analyses(plot_id: int, days: int = 10) -> list[dict]:
@@ -1138,3 +1138,112 @@ async def get_persistent_wet_points(
 
     persistent.sort(key=lambda p: p["wet_ratio"], reverse=True)
     return persistent
+
+
+# ─────────────────────────────────────────────────────────
+# Phase 1b — ลดข้อความ LINE
+# ─────────────────────────────────────────────────────────
+
+async def get_previous_risk_level(plot_id: int, before_iso: str) -> str | None:
+    """
+    ระดับความเสี่ยงรวม (high/medium/ok) ของผลวิเคราะห์ล่าสุด "ก่อน" เวลา before_iso
+    ใช้ตัดสินว่าความเสี่ยง "เพิ่มขึ้น" หรือไม่ — แจ้งเตือนเฉพาะตอนเพิ่มขึ้นเท่านั้น
+    คืน None ถ้าไม่เคยมีผลก่อนหน้า
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/analyses",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={
+                "plot_id":    f"eq.{plot_id}",
+                "created_at": f"lt.{before_iso}",
+                "order":      "created_at.desc",
+                "limit":      "1",
+                "select":     "full_data,ndvi_change,elevation_diff,soil_moisture_vv",
+            },
+        )
+    if resp.status_code != 200 or not resp.json():
+        return None
+    row = resp.json()[0]
+    full = row.get("full_data") or {}
+    level = full.get("overall_risk_level")
+    if level in ("high", "medium", "ok"):
+        return level
+    return compute_risk_level(full or row)
+
+
+# ตาราง line_message_log (migrate_v13.sql) — ถ้ายังไม่ได้รัน migration ฟังก์ชันด้านล่าง
+# ทำงานแบบ "ไม่มีบันทึก" (log เตือนครั้งเดียว) ระบบหลักยังทำงานได้ปกติ
+_message_log_available: bool | None = None
+
+
+def _message_log_missing(resp) -> bool:
+    global _message_log_available
+    if resp.status_code == 404 or "PGRST205" in resp.text or "42P01" in resp.text:
+        if _message_log_available is not False:
+            logger.warning("line_message_log table missing — run supabase/migrate_v13.sql "
+                           "(message logging / alert de-duplication disabled until then)")
+        _message_log_available = False
+        return True
+    return False
+
+
+async def log_line_message(user_id: str, kind: str, priority: str, status: str,
+                           http_status: int | None = None, plot_id: int | None = None,
+                           level: str | None = None, error: str | None = None) -> None:
+    """บันทึกทุกการส่ง LINE (สำเร็จ/ไม่สำเร็จ/ข้ามเพราะโควตา) — ไม่ให้ล้มงานหลักถ้าบันทึกพัง"""
+    if not SUPABASE_URL or not SUPABASE_KEY or _message_log_available is False:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/line_message_log",
+                headers={**_HEADERS(), "Prefer": "return=minimal"},
+                json={"user_id": user_id, "plot_id": plot_id, "kind": kind,
+                      "priority": priority, "status": status, "http_status": http_status,
+                      "level": level, "error": (error or "")[:500] or None},
+            )
+        if resp.status_code not in (200, 201) and not _message_log_missing(resp):
+            logger.warning(f"log_line_message failed: {resp.status_code} — {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"log_line_message error: {type(e).__name__}")
+
+
+async def get_last_sent_message(plot_id: int, kind: str | list[str], since_iso: str) -> dict | None:
+    """ข้อความประเภท kind (หรือหลายประเภท) ที่ "ส่งสำเร็จ" ล่าสุดของแปลงนี้ตั้งแต่ since_iso (ใช้กันส่งซ้ำ)"""
+    kind_filter = f"in.({','.join(kind)})" if isinstance(kind, list) else f"eq.{kind}"
+    if not SUPABASE_URL or not SUPABASE_KEY or _message_log_available is False:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/line_message_log",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={"plot_id": f"eq.{plot_id}", "kind": kind_filter, "status": "eq.sent",
+                    "created_at": f"gte.{since_iso}", "order": "created_at.desc", "limit": "1",
+                    "select": "kind,level,created_at"},
+        )
+    if resp.status_code != 200:
+        _message_log_missing(resp)
+        return None
+    rows = resp.json()
+    return rows[0] if rows else None
+
+
+async def get_recent_message_failures(since_iso: str, limit: int = 50) -> list[dict] | None:
+    """การส่งที่ล้มเหลว/ถูกข้ามล่าสุด สำหรับหน้า admin — None ถ้ายังไม่มีตาราง"""
+    if not SUPABASE_URL or not SUPABASE_KEY or _message_log_available is False:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/line_message_log",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={"status": "neq.sent", "created_at": f"gte.{since_iso}",
+                    "order": "created_at.desc", "limit": str(limit),
+                    "select": "kind,priority,status,http_status,error,created_at"},
+        )
+    if resp.status_code != 200:
+        _message_log_missing(resp)
+        return None
+    return resp.json()

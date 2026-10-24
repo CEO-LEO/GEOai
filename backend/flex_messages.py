@@ -832,7 +832,7 @@ def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str,
     base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name,
                              problem_points=problem_points)
     # Prepend alert banner ใน body
-    base["altText"] = f"⚠️ แจ้งเตือนประจำวัน — {plot_name}" if plot_name else "⚠️ แจ้งเตือนประจำวัน — IAM ROOT"
+    base["altText"] = f"⚠️ ความเสี่ยงเพิ่มขึ้น — {plot_name}" if plot_name else "⚠️ ความเสี่ยงเพิ่มขึ้น — IAM ROOT"
     base["contents"]["body"]["contents"].insert(0, {
         "type": "box",
         "layout": "horizontal",
@@ -841,7 +841,7 @@ def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str,
         "paddingAll": "10px",
         "contents": [
             {"type": "text", "text": "⚠️", "size": "lg", "flex": 0},
-            {"type": "text", "text": "การแจ้งเตือนประจำวัน ระบบตรวจพบความผิดปกติในสวนของคุณ",
+            {"type": "text", "text": "ความเสี่ยงของแปลงนี้เพิ่มขึ้นจากครั้งก่อน ควรตรวจดูในสวน",
              "size": "sm", "wrap": True, "color": "#E65100", "margin": "md"}
         ]
     })
@@ -913,7 +913,7 @@ def build_escalation_flex(data: dict, lat: float, lng: float,
 def build_daily_digest_message(plots: list[dict]) -> str:
     """plots = [{'name': str, 'data': dict}, ...] — ข้อความ plain text สำรอง"""
     date_str = datetime.now(_BANGKOK_TZ).strftime("%d/%m/%Y")
-    lines = [f"📋 สรุปแปลงประจำวัน — {date_str}", "━━━━━━━━━━━━━━━━━━━━"]
+    lines = [f"📋 สรุปแปลงรายสัปดาห์ — {date_str}", "━━━━━━━━━━━━━━━━━━━━"]
     for p in plots:
         level = _risk_level(p["data"])
         icon = _COLORS[level]["icon"]
@@ -951,7 +951,7 @@ def build_daily_digest_flex(plots: list[dict]) -> dict:
 
     return {
         "type": "flex",
-        "altText": f"📋 สรุปแปลงประจำวัน {date_str} ({len(plots)} แปลง)",
+        "altText": f"📋 สรุปแปลงรายสัปดาห์ {date_str} ({len(plots)} แปลง)",
         "contents": {
             "type": "bubble",
             "header": {
@@ -960,7 +960,7 @@ def build_daily_digest_flex(plots: list[dict]) -> dict:
                 "backgroundColor": "#1a7a3c",
                 "paddingAll": "14px",
                 "contents": [
-                    {"type": "text", "text": "📋 สรุปแปลงประจำวัน", "color": "#FFFFFF",
+                    {"type": "text", "text": "📋 สรุปแปลงรายสัปดาห์", "color": "#FFFFFF",
                      "weight": "bold", "size": "md"},
                     {"type": "text", "text": date_str, "color": "#C8E6C9", "size": "xs"},
                 ]

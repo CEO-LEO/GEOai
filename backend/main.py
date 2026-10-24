@@ -6,6 +6,7 @@ import logging
 import tempfile
 import io
 import secrets
+from datetime import datetime, timedelta, timezone
 import traceback
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -29,7 +30,7 @@ log_buffer.install()
 logger = logging.getLogger(__name__)
 
 import ee
-from fastapi import FastAPI, HTTPException, Depends, Security, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Security, Query, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, Response
@@ -45,18 +46,21 @@ except Exception as _ml_model_err:
     logger.warning(f"ml_model unavailable — ML yield model disabled: {_ml_model_err}")
     _get_model_meta = None
 from rule_engine import format_message, compute_risk_level
-from flex_messages import build_result_flex
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
+import line_quota
+import client_telemetry as client_telemetry_mod
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
                       delete_plot, find_nearby_plot, seed_demo_data,
                       upsert_user, save_iot_reading, get_plot_by_id,
                       save_field_observation, get_persistent_wet_points,
-                      set_notify_digest, get_latest_risk_by_plots, get_user)
+                      set_notify_digest, get_latest_risk_by_plots, get_user,
+                      get_recent_message_failures, get_scheduler_last_run,
+                      set_scheduler_last_run)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
-from middleware import RateLimitMiddleware, user_rate_limit
+from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
 from auth import current_user, liff_id, dev_auth_user
 from cache import cache_stats
 from i18n import t, Lang
@@ -297,6 +301,25 @@ async def root():
     return RedirectResponse(url="/dashboard/")
 
 
+@app.post("/client/telemetry", status_code=204)
+async def client_telemetry(event: client_telemetry_mod.ClientEvent, request: Request):
+    """
+    เวลาเปิดแอป/ error จากหน้า LIFF — ไม่ต้อง login (ส่งได้แม้ยืนยันตัวตนไม่สำเร็จ ซึ่งเป็น
+    error ที่อยากเห็นที่สุด) ไม่มีข้อมูลส่วนบุคคล ขนาดจำกัดด้วย ClientEvent และนับในเพดาน
+    rate limit ต่อ IP เหมือน API อื่น
+    """
+    # เพดานแยก 30 ครั้ง/นาที/IP — กัน log ถูกถมด้วย error ปลอม (เกินแล้วเงียบ ไม่ตอบ error)
+    if not ip_bucket_exceeded(request, "telemetry", 30):
+        client_telemetry_mod.record(event, request.headers.get("User-Agent", ""))
+    return Response(status_code=204)
+
+
+@app.get("/admin/client-telemetry", dependencies=[Depends(verify_admin)])
+async def admin_client_telemetry(days: int = 7):
+    """สรุปเวลาเปิดแอป (p50/p90 ต่อขั้นตอน, แยกเวอร์ชัน/แพลตฟอร์ม) + error ล่าสุดจาก LIFF"""
+    return client_telemetry_mod.summary(since_s=min(max(days, 1), 30) * 86400)
+
+
 @app.get("/liff/config.js")
 async def liff_config():
     """
@@ -334,8 +357,11 @@ async def liff_config():
 @app.post("/analyze")
 async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
     """
-    วิเคราะห์แปลงแล้ว push การ์ดผลเข้าแชท LINE ของ "ผู้ใช้ที่ยืนยันตัวตนแล้วเท่านั้น"
-    (เดิมส่งไปหา user_id อะไรก็ได้ที่ client ใส่มา — ใช้ OA เราส่งข้อความหาคนอื่นได้)
+    วิเคราะห์แปลงของผู้ใช้ที่ยืนยันตัวตนแล้ว (user จาก LINE token เท่านั้น)
+
+    Phase 1b: ไม่ push การ์ดผลเข้าแชท LINE แล้ว — ผู้ใช้กดเองในแอปและเห็นผลบนหน้าจอ
+    อยู่แล้ว push นี้กินโควตา LINE OA 1 ข้อความทุกครั้งที่กดตรวจ (แพลน Free มีแค่ 300/เดือน)
+    ผู้ใช้ยังดูการ์ดในแชทได้จากปุ่ม "ตรวจสอบ" ใน Rich Menu (ส่งแบบ reply ไม่นับโควตา)
     """
     req.user_id = user_id
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
@@ -351,10 +377,9 @@ async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
                                   req.plot_name, req.area_rai,
                                   polygon=req.polygon)
 
-        # แปลงที่วาดขอบเขตไว้ (polygon) เท่านั้นถึงจะมีตารางความชื้นให้ทำภาพ —
-        # ของแถมส่งเข้า LINE คู่กับการ์ดผลวิเคราะห์ ล้มเหลวได้โดยไม่กระทบคำขอหลัก
-        # ต้องเรียกก่อนสร้าง flex การ์ด (ย้ายลงมาด้านล่างแล้ว) เพราะการ์ดต้องใช้
-        # problem_points ที่ได้จากตรงนี้ (ผู้ใช้ขอ "บอกจุดที่เกิดปัญหาแทนวิธีแก้")
+        # แปลงที่วาดขอบเขตไว้ (polygon) — สร้างรูปแผนที่ + รูปย่อของแปลง (รูปย่อใช้ในหน้า
+        # "แปลงของฉัน") ล้มเหลวได้โดยไม่กระทบคำขอหลัก ส่ง image_url/problem_points
+        # กลับไปใน response ให้หน้าแอปใช้ได้ (ไม่ push เข้า LINE แล้ว — ดู docstring)
         image_url = None
         problem_points = []
         if req.polygon and len(req.polygon) >= 3:
@@ -362,12 +387,9 @@ async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
             image_url = img_result["url"]
             problem_points = img_result["problem_points"]
 
-        flex = build_result_flex(data, req.lat, req.lng, message,
-                                 problem_points=problem_points, plot_name=req.plot_name)
-
-        await send_line_message(req.user_id, message, flex=flex, image_url=image_url)
         await save_analysis(req.user_id, data, message, plot_id=plot_id)
-        return {"status": "ok", "plot_id": plot_id, "data": data}
+        return {"status": "ok", "plot_id": plot_id, "data": data,
+                "image_url": image_url, "problem_points": problem_points}
     except (asyncio.TimeoutError, ee.EEException, NoSatelliteDataError) as e:
         logger.error(f"GEE failure: lat={req.lat} lng={req.lng}: {e}")
         status_code, detail = _gee_failure_detail(e)
@@ -567,6 +589,45 @@ async def admin_logs(level: str | None = None, limit: int = 50):
         "stats":   log_buffer.get_stats(),
         "entries": log_buffer.get_entries(level=level, limit=limit),
     }
+
+
+_HEALTH_CODE = {"ok": 0, "warn": 1, "critical": 2}
+_HEALTH_NAME = {v: k for k, v in _HEALTH_CODE.items()}
+_last_health_mem: str | None = None   # สำรองเมื่อ DB ใช้ไม่ได้
+
+
+@app.get("/admin/messaging/status", dependencies=[Depends(verify_admin)])
+async def admin_messaging_status(track: bool = False):
+    """
+    สถานะการส่งข้อความ LINE: โควตาคงเหลือ, จำนวนที่ส่งไม่สำเร็จ/ถูกข้ามใน 24 ชม.
+    health = ok / warn / critical
+
+    track=true (ใช้โดย GitHub Actions ทุกชั่วโมง): เทียบกับสถานะครั้งก่อนที่บันทึกไว้ แล้วคืน
+    changed=true เฉพาะตอนสถานะเปลี่ยน → workflow ล้ม (= GitHub อีเมลแจ้ง) เฉพาะตอนนั้น
+    ไม่ใช่ทุกชั่วโมงที่ยังมีปัญหา (เจ้าของขอ 2026-10-17 — อีเมลซ้ำทุกชั่วโมงจะทำให้เลิกอ่าน)
+    สถานะครั้งก่อนเก็บในตาราง scheduler_runs (job_name="messaging_health",
+    last_run_hour = รหัสระดับ 0/1/2) ไม่ต้องเพิ่ม schema
+    """
+    global _last_health_mem
+    await line_quota.refresh(force=True)
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    result = {**line_quota.health(),
+              "recent_failures": await get_recent_message_failures(since, limit=20)}
+    if track:
+        stored = await get_scheduler_last_run("messaging_health")
+        if stored is not None:
+            previous = _HEALTH_NAME.get(stored.get("last_run_hour"), "ok")
+        else:
+            previous = _last_health_mem or "ok"
+        current = result["health"]
+        result["previous_health"] = previous
+        result["changed"] = current != previous
+        if result["changed"]:
+            _last_health_mem = current
+            await set_scheduler_last_run("messaging_health",
+                                         datetime.now(timezone.utc).date().isoformat(),
+                                         _HEALTH_CODE[current])
+    return result
 
 
 @app.get("/admin/failed-messages", dependencies=[Depends(verify_admin)])

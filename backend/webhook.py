@@ -196,52 +196,62 @@ async def _handle_postback(event: dict):
         if not bubbles:
             await _reply(reply_token, [{"type": "text",
                 "text": "มีแปลงที่บันทึกไว้แล้ว แต่ยังไม่มีผลวิเคราะห์ กรุณากด 'ตรวจสอบแปลงใหม่' ก่อนครับ 🌿"}])
-        elif len(bubbles) == 1:
-            await _reply(reply_token, [{
-                "type": "flex", "altText": "📋 ผลวิเคราะห์แปลงของคุณ", "contents": bubbles[0],
-            }])
+            return
+
+        if len(bubbles) == 1:
+            cards = {"type": "flex", "altText": "📋 ผลวิเคราะห์แปลงของคุณ", "contents": bubbles[0]}
         else:
-            await _reply(reply_token, [{
+            cards = {
                 "type": "flex",
                 "altText": f"📋 ผลวิเคราะห์ {len(bubbles)} แปลงของคุณ — ปัดดูทีละแปลง",
                 "contents": {"type": "carousel", "contents": bubbles},
-            }])
+            }
 
-        # ── รูปแผนที่ความชื้นตามมาทีละแปลง (ที่วาดขอบเขตไว้เท่านั้น) ─────────────
-        # ผู้ใช้ขอเพิ่ม "อย่าลืมรูป map ด้วย" — ส่งเป็น push ตามหลัง ไม่ใช่มัดรวมใน
-        # reply() เดียวกัน เพราะ reply token ใช้ได้ครั้งเดียว+มีเวลาจำกัด ส่วนสร้างรูป
-        # ต้องรอ GEE 2 ครั้ง/แปลง (grid + ภาพถ่ายดาวเทียม) หลายแปลงรวมกันอาจไม่ทันเวลา
-        # reply — push ไม่มีข้อจำกัดนี้ สร้างรูปทุกแปลงพร้อมกัน (asyncio.gather) ลด
-        # เวลารอ แล้วค่อยส่งเรียงตามลำดับแปลงให้อ่านง่าย
+        # ── การ์ด + รูปแผนที่ส่งใน reply เดียว (Phase 1b) ─────────────────────────
+        # เดิม reply การ์ดก่อน แล้ว push รูปตามทีละแปลง — push กินโควตา LINE OA ทุกแปลง
+        # ทุกครั้งที่กดปุ่ม (แพลน Free มี 300/เดือน) reply ไม่นับโควตา จึงรอสร้างรูปก่อน
+        # (สูงสุด REPLY_IMAGE_DEADLINE_S วินาที ระหว่างนั้นแสดงจุดกำลังพิมพ์ในแชท) แล้ว
+        # ตอบทีเดียว: การ์ด + สรุปจุดที่พบปัญหา + รูปไม่เกิน 3 รูป (reply ได้ 5 ข้อความ)
+        # รูปที่สร้างไม่ทัน/แปลงเกิน 3 แปลง → บอกให้ดูในแอปแทน
+        messages = [cards]
         plots_with_polygon = [p for p in plots if p.get("polygon") and len(p["polygon"]) >= 3]
         if plots_with_polygon:
             from plot_image_service import build_plot_grid_image_url
-            from line_sender import send_line_message
 
-            img_results = await asyncio.gather(*[
-                build_plot_grid_image_url(p["polygon"], p.get("name") or "แปลงของคุณ",
-                                          plot_id=p.get("id"))
-                for p in plots_with_polygon
-            ], return_exceptions=True)
+            await _start_loading(user_id, REPLY_IMAGE_DEADLINE_S + 5)
+            chosen = plots_with_polygon[:REPLY_MAX_IMAGES]
 
-            for plot, result in zip(plots_with_polygon, img_results):
-                if isinstance(result, Exception) or not result.get("url"):
-                    if isinstance(result, Exception):
-                        logger.warning(f"map image failed for plot {plot.get('id')}: {result}")
+            async def _image(p):
+                try:
+                    return await asyncio.wait_for(
+                        build_plot_grid_image_url(p["polygon"], p.get("name") or "แปลงของคุณ",
+                                                  plot_id=p.get("id")),
+                        timeout=REPLY_IMAGE_DEADLINE_S)
+                except Exception as e:
+                    logger.warning(f"map image failed/timed out for plot {p.get('id')}: {type(e).__name__}")
+                    return None
+
+            results = await asyncio.gather(*[_image(p) for p in chosen])
+            images, lines = [], []
+            for plot, result in zip(chosen, results):
+                if not result or not result.get("url"):
                     continue
+                images.append(result["url"])
                 plot_name = plot.get("name") or "แปลงของคุณ"
-                caption = f"🗺️ แผนที่ความชื้น — {plot_name}"
-                # การ์ดสรุป (ส่งไปก่อนหน้าแล้วใน reply) ใช้ข้อมูลแคชล่าสุด ยังไม่มี
-                # จุดที่พบปัญหาเพราะต้องรอตารางจุดที่เพิ่งคำนวณเสร็จตรงนี้ — แนบสรุป
-                # สั้นๆ ต่อท้ายรูปแทน ดีกว่าไม่มีเลย (ผู้ใช้ขอ "บอกจุดที่เกิดปัญหา")
-                problem_points = result.get("problem_points") or []
-                if problem_points:
-                    lines = "\n".join(
-                        f"• {p['grid_label']} {p['label_th']} — {p['position_desc']}"
-                        for p in problem_points
-                    )
-                    caption += f"\n📍 จุดที่พบปัญหา:\n{lines}"
-                await send_line_message(user_id, caption, image_url=result["url"])
+                for pp in result.get("problem_points") or []:
+                    lines.append(f"• {plot_name} {pp['grid_label']} {pp['label_th']} — {pp['position_desc']}")
+
+            if images:
+                text = "🗺️ แผนที่ความชื้นของแปลง (ภาพถัดไป)"
+                if lines:
+                    text += "\n📍 จุดที่พบปัญหา:\n" + "\n".join(lines[:12])
+                if len(images) < len(plots_with_polygon):
+                    text += "\n\nดูแผนที่ของแปลงอื่นได้ในแอป (กด \"วาดแปลง\" ในเมนู)"
+                messages.append({"type": "text", "text": text[:4900]})
+                messages += [{"type": "image", "originalContentUrl": u, "previewImageUrl": u}
+                             for u in images]
+
+        await _reply(reply_token, messages[:5])
 
     elif data == "action=settings":
         # _safe() คืนแค่ True/False (ไม่ใช่ผลลัพธ์จริง) — ตรงนี้ต้องการ dict ผู้ใช้
@@ -259,7 +269,7 @@ async def _handle_postback(event: dict):
         ok = await _safe(set_notify, user_id, True)
         await _reply(reply_token, [{
             "type": "text",
-            "text": "🔔 เปิดการแจ้งเตือนประจำวันแล้ว\nคุณจะได้รับรายงานทุกวัน 07:00 น. หากตรวจพบความเสี่ยง 🌿"
+            "text": "🔔 เปิดการแจ้งเตือนแล้ว\nระบบจะแจ้งเมื่อแปลงของคุณมีความเสี่ยงเพิ่มขึ้น หรือฝนหนักกำลังจะมา 🌿"
                     if ok else _DB_DOWN
         }])
 
@@ -267,7 +277,7 @@ async def _handle_postback(event: dict):
         ok = await _safe(set_notify, user_id, False)
         await _reply(reply_token, [{
             "type": "text",
-            "text": "🔕 ปิดการแจ้งเตือนประจำวันแล้ว\nคุณยังสามารถตรวจสอบแปลงเองตลอดเวลา ✅"
+            "text": "🔕 ปิดการแจ้งเตือนแล้ว\nคุณยังสามารถตรวจสอบแปลงเองตลอดเวลา ✅"
                     if ok else _DB_DOWN
         }])
 
@@ -275,7 +285,7 @@ async def _handle_postback(event: dict):
         ok = await _safe(set_notify_digest, user_id, True)
         await _reply(reply_token, [{
             "type": "text",
-            "text": "📋 เปิดสรุปแปลงประจำวันแล้ว\nทุกเช้า 07:00 น. คุณจะได้รับสรุปสถานะทุกแปลงที่ปักหมุดไว้ ไม่ว่าจะเสี่ยงหรือไม่ 🌿"
+            "text": "📋 เปิดสรุปแปลงรายสัปดาห์แล้ว\nทุกวันจันทร์ตามเวลาที่ตั้งไว้ คุณจะได้รับสรุปสถานะทุกแปลง ไม่ว่าจะเสี่ยงหรือไม่ 🌿"
                     if ok else _DB_DOWN
         }])
 
@@ -283,7 +293,7 @@ async def _handle_postback(event: dict):
         ok = await _safe(set_notify_digest, user_id, False)
         await _reply(reply_token, [{
             "type": "text",
-            "text": "🔕 ปิดสรุปแปลงประจำวันแล้ว\nยังสามารถตรวจสอบแปลงเองตลอดเวลาได้ตามปกติ ✅"
+            "text": "🔕 ปิดสรุปแปลงรายสัปดาห์แล้ว\nยังสามารถตรวจสอบแปลงเองตลอดเวลาได้ตามปกติ ✅"
                     if ok else _DB_DOWN
         }])
 
@@ -302,7 +312,7 @@ async def _handle_postback(event: dict):
         await _reply(reply_token, [{
             "type": "text",
             "text": f"⏰ ตั้งเวลาแจ้งเตือนเป็น {hour:02d}:00 น. แล้ว\n"
-                    f"ใช้กับทั้งการแจ้งเตือนเฉพาะตอนเสี่ยง และสรุปแปลงประจำวัน 🌿"
+                    f"ใช้กับทั้งการแจ้งเตือนเฉพาะตอนเสี่ยง และสรุปแปลงรายสัปดาห์ 🌿"
                     if ok else _DB_DOWN
         }])
 
@@ -458,7 +468,7 @@ def _settings_menu(user: dict | None = None) -> dict:
         },
         {
             "type": "text",
-            "text": "ระบบสแกนแปลงของคุณตามเวลาที่ตั้งไว้ (ค่าเริ่มต้น 07:00 น.)\n— ส่งข้อความเฉพาะเมื่อพบความเสี่ยงหรือฝนหนักกำลังจะมา",
+            "text": "ระบบสแกนแปลงของคุณตามเวลาที่ตั้งไว้ (ค่าเริ่มต้น 07:00 น.)\n— ส่งข้อความเฉพาะเมื่อความเสี่ยงเพิ่มขึ้นหรือฝนหนักกำลังจะมา",
             "wrap": True,
             "size": "sm",
             "color": "#666666",
@@ -467,7 +477,7 @@ def _settings_menu(user: dict | None = None) -> dict:
         {"type": "separator", "margin": "lg"},
         {
             "type": "text",
-            "text": "📋 สรุปแปลงประจำวัน",
+            "text": "📋 สรุปแปลงรายสัปดาห์",
             "weight": "bold",
             "size": "sm",
             "color": "#333333",
@@ -475,7 +485,7 @@ def _settings_menu(user: dict | None = None) -> dict:
         },
         {
             "type": "text",
-            "text": "สรุปสถานะทุกแปลงของคุณตามเวลาที่ตั้งไว้\nไม่ว่าจะเสี่ยงหรือไม่ก็ได้รับทุกวัน",
+            "text": "สรุปสถานะทุกแปลงของคุณทุกวันจันทร์ตามเวลาที่ตั้งไว้\nไม่ว่าจะเสี่ยงหรือไม่",
             "wrap": True,
             "size": "sm",
             "color": "#666666",
@@ -645,7 +655,7 @@ def _time_picker_menu() -> dict:
                 "contents": [
                     {
                         "type": "text",
-                        "text": "ใช้กับทั้งการแจ้งเตือนเฉพาะตอนเสี่ยง และสรุปแปลงประจำวัน",
+                        "text": "ใช้กับทั้งการแจ้งเตือนเฉพาะตอนเสี่ยง และสรุปแปลงรายสัปดาห์",
                         "wrap": True,
                         "size": "sm",
                         "color": "#666666",
@@ -706,6 +716,25 @@ async def _get_profile(user_id: str) -> dict | None:
 # ─────────────────────────────────────────────────────
 # LINE Reply API
 # ─────────────────────────────────────────────────────
+
+REPLY_IMAGE_DEADLINE_S = 20   # รอสร้างรูปได้นานสุดเท่านี้ก่อนตอบ (reply token ควรใช้ภายใน ~1 นาที)
+REPLY_MAX_IMAGES = 3           # reply ได้ 5 ข้อความ: การ์ด + ข้อความสรุป + รูป 3 รูป
+
+
+async def _start_loading(user_id: str, seconds: int) -> None:
+    """แสดงจุด "กำลังพิมพ์..." ในแชทระหว่างรอ (ไม่นับโควตาข้อความ) — ล้มเหลวได้ไม่เป็นไร"""
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+    if not token:
+        return
+    seconds = max(5, min(60, seconds - seconds % 5))   # LINE รับเป็นช่วงละ 5 วินาที 5-60
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post("https://api.line.me/v2/bot/chat/loading/start",
+                              headers={"Authorization": f"Bearer {token}"},
+                              json={"chatId": user_id, "loadingSeconds": seconds})
+    except httpx.HTTPError:
+        pass
+
 
 async def _reply(reply_token: str, messages: list):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
