@@ -49,6 +49,8 @@ from rule_engine import format_message, compute_risk_level
 from line_sender import send_line_message, get_failed_queue, get_retry_stats
 import line_quota
 import client_telemetry as client_telemetry_mod
+import risk_v2
+import risk_display
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -57,7 +59,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       save_field_observation, get_persistent_wet_points,
                       set_notify_digest, get_latest_risk_by_plots, get_user,
                       get_recent_message_failures, get_scheduler_last_run,
-                      set_scheduler_last_run)
+                      set_scheduler_last_run, get_shadow_rows)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -314,6 +316,21 @@ async def client_telemetry(event: client_telemetry_mod.ClientEvent, request: Req
     return Response(status_code=204)
 
 
+@app.get("/admin/risk-shadow", dependencies=[Depends(verify_admin)])
+async def admin_risk_shadow(days: int = 7, format: str = "json"):
+    """
+    เทียบระดับความเสี่ยงวิธีเดิม vs วิธีใหม่ (รันคู่) ในช่วง n วันล่าสุด — ใช้ทำรายงานรายสัปดาห์
+    format=markdown คืนตารางภาษาไทยพร้อมวางในรายงาน (ไม่มีพิกัด/ชื่อเจ้าของ)
+    """
+    days = min(max(days, 1), 60)
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    summary = risk_v2.summarize_shadow(await get_shadow_rows(since))
+    if format == "markdown":
+        return Response(content=risk_v2.shadow_markdown(summary, days),
+                        media_type="text/markdown; charset=utf-8")
+    return summary
+
+
 @app.get("/admin/client-telemetry", dependencies=[Depends(verify_admin)])
 async def admin_client_telemetry(days: int = 7):
     """สรุปเวลาเปิดแอป (p50/p90 ต่อขั้นตอน, แยกเวอร์ชัน/แพลตฟอร์ม) + error ล่าสุดจาก LIFF"""
@@ -342,6 +359,7 @@ async def liff_config():
         f'  API_URL: "{api_base}",\n'
         f'  LIFF_ID: "{liff_id()}",\n'
         f'  SPHERE_KEY: "{sphere_key}",\n'
+        f'  RISK_DISPLAY: "{"interim" if risk_display.interim() else "legacy"}",\n'
         f"}};\n"
     )
     return Response(content=js, media_type="application/javascript")

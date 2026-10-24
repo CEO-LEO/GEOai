@@ -9,6 +9,7 @@ v2: เพิ่ม land displacement, fertilizer, yield estimation
 from datetime import datetime, timezone, timedelta
 from typing import Literal
 
+import risk_display
 from rule_engine import compute_risk_level
 from gee_analysis import swab_index_to_level
 
@@ -61,7 +62,8 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
     เป็นคนคำนวณให้ (ต้องมีตารางจุดความชื้นซึ่งคำนวณตอนทำรูปแผนที่อยู่แล้ว)
     """
     level  = _risk_level(data)
-    colors = _COLORS[level]
+    # โหมด "กำลังปรับปรุง" (risk_display.py): ไม่แสดงป้ายเสี่ยงสูง/ปานกลาง/ปกติแบบเดิม
+    colors = risk_display.INTERIM_COLORS if risk_display.interim() else _COLORS[level]
 
     ndvi_now    = data["ndvi_now"]
     ndvi_change = data["ndvi_change"]
@@ -264,7 +266,8 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     {"type": "separator"},
 
                     # v3: Soil Water-Air Balance
-                    *(_build_swab_section(data.get("swab", {}), swab_trend, problem_points)),
+                    *(_build_interim_section(problem_points) if risk_display.interim()
+                      else _build_swab_section(data.get("swab", {}), swab_trend, problem_points)),
 
                     # v2: Land impact summary
                     *(_build_impact_section(land_impact) if land_impact and land_impact.get("severity") != "low" else []),
@@ -611,6 +614,38 @@ _SWAB_LEVEL_EXPLANATION = {
 }
 
 
+_RELATIVE_COLOR = {"wet": "#1565C0", "dry": "#E65100", "mid": "#78909C"}
+
+
+def _build_interim_section(problem_points: list[dict] | None) -> list[dict]:
+    """
+    แทนส่วนความชื้น (SWAB) ระหว่างโหมด "กำลังปรับปรุง" — สูตร SWAB เดิมอ่านทรงพุ่มเป็นน้ำ
+    จึงไม่แสดงสถานะ "น้ำขังวิกฤต/ชื้นเกิน" อีก เหลือคำอธิบาย + จุดที่ชื้น/แห้งกว่าส่วนอื่น
+    ของแปลง (เทียบกันเองในแปลง ไม่ใช่ค่าสัมบูรณ์)
+    """
+    parts: list[dict] = [{
+        "type": "box", "layout": "vertical", "backgroundColor": "#ECEFF1", "cornerRadius": "8px",
+        "paddingAll": "8px", "margin": "sm",
+        "contents": [
+            {"type": "text", "text": f"{risk_display.INTERIM_ICON} {risk_display.INTERIM_LABEL}",
+             "size": "sm", "weight": "bold", "color": "#37474F", "wrap": True},
+            {"type": "text", "text": risk_display.INTERIM_NOTE, "size": "xs", "color": "#546E7A",
+             "wrap": True, "margin": "xs"},
+        ],
+    }]
+    if problem_points:
+        relative = []
+        for p in problem_points:
+            side = ("wet" if p.get("status") in ("waterlogged", "wet")
+                    else "dry" if p.get("status") in ("dry", "drought") else "mid")
+            relative.append({**p, "label_th": risk_display.relative_label(p.get("status")),
+                             "color_hint": _RELATIVE_COLOR[side]})
+        section = _build_problem_points_section(relative)
+        section["contents"][0]["text"] = f"📍 จุดที่ต่างจากส่วนอื่นของแปลง ({len(relative)} จุด)"
+        parts.append(section)
+    return parts
+
+
 def _build_problem_points_section(problem_points: list[dict]) -> dict:
     """
     "จุดที่พบปัญหาในแปลง" — แทนที่บรรทัดคำแนะนำวิธีแก้ทั่วไปเมื่อมีข้อมูลตาราง
@@ -914,6 +949,10 @@ def build_daily_digest_message(plots: list[dict]) -> str:
     """plots = [{'name': str, 'data': dict}, ...] — ข้อความ plain text สำรอง"""
     date_str = datetime.now(_BANGKOK_TZ).strftime("%d/%m/%Y")
     lines = [f"📋 สรุปแปลงรายสัปดาห์ — {date_str}", "━━━━━━━━━━━━━━━━━━━━"]
+    if risk_display.interim():
+        lines += [f"🌿 {p['name']}" for p in plots]
+        lines += ["━━━━━━━━━━━━━━━━━━━━", f"{risk_display.INTERIM_ICON} {risk_display.INTERIM_DIGEST_LINE}"]
+        return "\n".join(lines)
     for p in plots:
         level = _risk_level(p["data"])
         icon = _COLORS[level]["icon"]

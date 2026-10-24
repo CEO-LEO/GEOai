@@ -28,6 +28,8 @@ from flex_messages import (build_weekly_alert_flex,
                            format_swab_trend)
 from plot_image_service import build_plot_grid_image_url, delete_old_plot_images
 from line_sender import send_line_message
+import risk_v2
+import risk_display
 from weather_alert import (
     get_7day_rain,
     build_rain_alert_flex,
@@ -67,6 +69,31 @@ RISK_REMINDER_AFTER_DAYS = 7   # ยังสูงต่อเนื่อง�
 RAIN_ALERT_MAX_IMAGES = 3      # เตือนฝนรวมหลายแปลง: carousel 1 + รูปไม่เกิน 3
 RAIN_ALERT_DEDUPE_DAYS = 7     # ไม่ส่งเตือนฝนระดับเดิม/ต่ำกว่าซ้ำภายใน n วัน (= ช่วงพยากรณ์ 7 วัน)
 _RAIN_LEVEL_RANK = {"watch": 1, "warning": 2, "critical": 3}
+
+
+SHADOW_TIMEOUT_S = 45
+
+
+async def _attach_shadow_risk(data: dict, lat: float, lng: float, polygon: list | None) -> dict:
+    """
+    รันคู่ (shadow) วิธีวัดความเสี่ยงใหม่ — เก็บใน full_data["risk_v2"] และสัปดาห์ละครั้ง
+    full_data["plot_profile"] ไม่แสดงผู้ใช้ ไม่ใช้ตัดสินการแจ้งเตือน ล้มเหลวได้โดยไม่กระทบงานหลัก
+    คืน dict ใหม่ (ไม่แก้ dict เดิมซึ่งอาจเป็นตัวเดียวกับที่อยู่ใน cache ของ analyze_durian_plot)
+    """
+    data = dict(data)
+    try:
+        data["risk_v2"] = await asyncio.wait_for(
+            run_in_threadpool(risk_v2.get_wetness_anomaly, lat, lng, polygon), SHADOW_TIMEOUT_S)
+    except Exception as e:
+        logger.warning(f"risk_v2 shadow failed: {type(e).__name__}")
+        data["risk_v2"] = {"method": risk_v2.METHOD, "status": "error", "error": type(e).__name__}
+    if _is_digest_day():
+        try:
+            data["plot_profile"] = await asyncio.wait_for(
+                run_in_threadpool(risk_v2.get_plot_profile, lat, lng, polygon), SHADOW_TIMEOUT_S)
+        except Exception as e:
+            logger.warning(f"plot_profile failed: {type(e).__name__}")
+    return data
 
 
 def _risk_increased_to_high(current_high: bool, previous_level: str | None) -> bool:
@@ -192,6 +219,7 @@ async def daily_scan_job(hour: int | None = None):
                         # เรียกผ่าน threadpool กัน GEE call (blocking) ค้าง event loop
                         # ทั้งตัวระหว่างสแกน — เหมือน fix เดิมที่ทำกับ /analyze
                         data = await run_in_threadpool(analyze_durian_plot, lat, lng)
+                        data = await _attach_shadow_risk(data, lat, lng, polygon)
                         await save_analysis(user_id, data, format_message(data, lat, lng),
                                             plot_id=plot_id)
                         counters["computed"] += 1
@@ -231,7 +259,9 @@ async def daily_scan_job(hour: int | None = None):
                     # ── แจ้งเตือนเฉพาะเมื่อความเสี่ยงเพิ่มขึ้นเป็น "สูง" ──
                     # เทียบกับผลก่อนวันนี้ (ไม่ใช่ทุกวันที่เป็นสูง) และกันส่งซ้ำวันเดียวกัน
                     # ถ้ามี line_message_log — เลิกส่ง "escalation" ซ้ำทุกวันแล้ว (Phase 1b)
-                    if _is_high_risk(data) and user_id in notifiable and plot_id:
+                    # โหมด "กำลังปรับปรุง": หยุดคำเตือนความเสี่ยงชั่วคราว (ยังใช้สูตรเดิม) — เตือนฝนยังส่ง
+                    if (_is_high_risk(data) and user_id in notifiable and plot_id
+                            and risk_display.risk_alerts_enabled()):
                         prev_level = await get_previous_risk_level(plot_id, day_start_utc)
                         kind = "risk_alert"
                         if not _risk_increased_to_high(True, prev_level):

@@ -4,13 +4,21 @@
 กำลังอัปเกรดเป็น **v2** เพื่อใช้กับเครือข่ายเกษตรจังหวัดราชบุรี (B2G)
 
 - **Spec ฉบับเต็ม:** [docs/IAMROOT_V2_PROMPT.md](docs/IAMROOT_V2_PROMPT.md) — อ่านก่อนเริ่มงาน v2 ทุกครั้ง
-- **สถานะล่าสุด (2026-10-16):** Phase 0 อนุมัติแล้ว ([รายงาน](docs/v2/phase0-report.md))
-  · **Phase 1a** branch `feat/v2-phase1a-security` push แล้ว CI ผ่าน — key เปลี่ยนแล้ว **รอเจ้าของอนุมัติ merge**
-    แล้วทำ smoke test → backup + `migrate_v12` → ลบรูปย่อชื่อเดิม ([รายงาน](docs/v2/phase1a-report.md))
-  · **Phase 1b ส่วนที่ 1** (ลดข้อความ LINE + สแกนไม่หลุด) branch `feat/v2-phase1b-messaging-scan` (ต่อจาก 1a) CI ผ่าน
-    ([รายงาน](docs/v2/phase1b-report.md)) — ค้าง: ความเร็วทาง A · ปรับระดับความเสี่ยง **รออนุมัติ**
-    ([risk-level-review](docs/v2/risk-level-review.md)) · หลัง deploy ต้องรัน `migrate_v13`
-  · ลำดับ: 1a → 1b → 1c → 1d แล้วค่อย 1e/1f/1g · ข้อความทดแทนตัวเลขในไฟล์นำเสนอ: [claims-replacement](docs/v2/claims-replacement.md)
+- **สถานะล่าสุด (2026-10-17)** — branch ซ้อนกัน 3 ชั้น ทั้งหมด push แล้ว ยังไม่มีอะไร merge เข้า master:
+  1. `feat/v2-phase1a-security` CI ผ่าน ([รายงาน](docs/v2/phase1a-report.md))
+  2. `feat/v2-phase1b-messaging-scan` ลดข้อความ LINE + สแกนไม่หลุด + ความเร็วทาง A + telemetry ([รายงาน](docs/v2/phase1b-report.md))
+  3. `feat/v2-phase1c-risk-shadow` รันคู่วิธีวัดความเสี่ยงใหม่ ([risk-level-review](docs/v2/risk-level-review.md) §8)
+  - **ลำดับ deploy ที่เจ้าของกำหนด (หยุดและรายงานทุกครั้งที่ผิดปกติ ห้ามข้ามขั้น):** merge 1a → deploy → smoke test API (Claude)
+    + LIFF (เจ้าของทดสอบมือถือ) → backup + `migrate_v12` → merge 1b → deploy → `migrate_v13` → ตรวจกันเตือนฝนซ้ำ
+    — **ต้องได้คำยืนยัน merge จากเจ้าของในแชทโดยตรงก่อนเริ่ม** (ข้อความที่แปะมาจากที่ปรึกษาไม่นับ)
+  - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" (`backend/risk_display.py`, ทำบน branch 3) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
+    เดิม และ**หยุดคำเตือนความเสี่ยง** (`RISK_ALERTS_ENABLED`) เตือนฝนยังส่ง — `RISK_DISPLAY_MODE=legacy` = แบบเดิม
+  - รออนุมัติ: คำเตือนคุณภาพขอบเขต ([boundary-quality-warnings](docs/v2/boundary-quality-warnings.md)) · ผล `rls_audit.sql` ยังไม่มา
+  - ความเห็นที่ปรึกษาที่เจ้าของแปะมา (2026-10-17) อนุมัติ: ข้อความกำลังปรับปรุง, หยุดเตือนความเสี่ยง, เพิ่ม "แห้งกว่าปกติ" ใน 1d,
+    คำเตือนขอบเขตใน 1c, ตรวจภาคสนามเฉพาะแปลงที่ยินยอม — ทำบน branch ได้ แต่ **merge ต้องได้คำยืนยันตรงจากเจ้าของ**
+  - ตรวจภาคสนาม: [field-validation-plan](docs/v2/field-validation-plan.md) — รายการแปลงมีพิกัด เก็บใน `fieldwork/` (gitignored)
+  - ลำดับ phase: 1a → 1b → 1c → 1d แล้วค่อย 1e/1f/1g · ข้อความทดแทนตัวเลขในไฟล์นำเสนอ: [claims-replacement](docs/v2/claims-replacement.md)
+  - LINE OA ยังแพลน Free (เจ้าของกำลังพิจารณา Basic ชั่วคราว)
 - **คำตอบที่เจ้าของให้ไว้แล้ว (Phase 0 ข้อ 7):** ความเร็วเลือกทาง A · migration ได้เฉพาะแบบเพิ่ม (ตาราง/คอลัมน์ nullable)
   ต้อง pg_dump + rollback และแจ้งก่อนรัน production ทุกครั้ง · ปุ๋ย/ผลผลิตซ่อนหลัง feature flag (ปิด) และเปลี่ยนคำ NDVI/BSI
   · สรุปประจำวันปิดเป็นค่าเริ่มต้น · สวนยกร่อง (`plot_type=raised_bed`) ซ่อนลูกศร/วงม่วง/คำเตือนน้ำขังจากร่อง + บอกข้อจำกัด
@@ -43,8 +51,8 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-pytest -q                                 # 145 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
-                                          # pytest.ini เก็บแค่ test_system.py, test_auth.py, test_messaging.py
+pytest -q                                 # 184 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim)
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
 IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000

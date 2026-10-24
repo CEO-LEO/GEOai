@@ -224,6 +224,8 @@ def _scan_patches(prev_level, digest_users=frozenset(), monday=False, user_ids=(
         patch("scheduler.build_daily_digest_message", return_value="สรุป"),
         patch("scheduler.format_message", return_value="msg"),
         patch("scheduler._is_digest_day", return_value=monday),
+        # คำเตือนความเสี่ยงถูกหยุดชั่วคราวในโหมดกำลังปรับปรุง — test ตรรกะการเตือนจึงเปิดไว้
+        patch("scheduler.risk_display.risk_alerts_enabled", return_value=True),
     ]
 
 
