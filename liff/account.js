@@ -160,6 +160,7 @@ function showMyData() {
     <div class="form-label">ความยินยอม (ไม่บังคับ)</div>
     ${optionalChecks(p)}
     <button type="button" class="btn-primary sheet-btn" id="my-save">💾 บันทึกความยินยอม</button>`}
+    <button type="button" class="btn-secondary sheet-btn" id="my-notify">🔔 การแจ้งเตือน</button>
     <button type="button" class="btn-secondary sheet-btn" id="my-access">👁️ ใครเปิดดูแปลงของฉัน</button>
     <button type="button" class="btn-secondary sheet-btn" id="my-download">📥 ดาวน์โหลดข้อมูลของฉัน</button>
     ${pending ? "" : `<button type="button" class="btn-secondary sheet-btn" id="my-delete" style="color:#b91c1c">🗑️ ขอลบข้อมูลของฉัน</button>`}
@@ -167,6 +168,7 @@ function showMyData() {
     <button class="close-modal-btn" id="my-close">ปิด</button>`);
   box.querySelector("#my-close").onclick = closeAccountSheet;
   box.querySelector("#my-access").onclick = showAccessLog;
+  box.querySelector("#my-notify").onclick = showNotifySettings;
   box.querySelector("#my-download").onclick = downloadMyData;
   box.querySelector("#my-cancel-del")?.addEventListener("click", cancelDeletion);
   box.querySelector("#my-delete")?.addEventListener("click", () => requestDeletion(false));
@@ -176,6 +178,57 @@ function showMyData() {
     catch (e) { showToast("❌ " + e.message); }
     finally { hideSpinner(); }
   });
+}
+
+// ─── 3a: ตั้งค่าการแจ้งเตือน (เตือนฝนหนัก / ความถี่ / สรุปรายสัปดาห์) ───
+async function showNotifySettings() {
+  const box = accountSheet(`<h3>🔔 การแจ้งเตือน</h3><p class="form-hint">กำลังโหลด...</p>`);
+  let s;
+  try {
+    const res = await apiFetch(`${API_URL}/user/${encodeURIComponent(userId)}/notify-settings`);
+    if (!res.ok) throw new Error();
+    s = await res.json();
+  } catch {
+    box.innerHTML = `<h3>🔔 การแจ้งเตือน</h3><p class="form-hint">โหลดไม่สำเร็จ ลองใหม่อีกครั้ง</p><button class="close-modal-btn" id="nt-close">ปิด</button>`;
+    box.querySelector("#nt-close").onclick = showMyData;
+    return;
+  }
+  box.innerHTML = `
+    <h3>🔔 การแจ้งเตือน</h3>
+    <label class="rec-card" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+      <input type="checkbox" id="nt-rain" ${s.rain_alerts ? "checked" : ""} style="width:22px;height:22px;margin-top:3px;flex:0 0 auto">
+      <span><b>เตือนเมื่อฝนหนักกำลังมา</b><br><span class="rec-reason">ส่งเข้าแชท LINE เมื่อพยากรณ์มีฝนหนักภายใน 3 วัน พร้อมบอกจุดเสี่ยงในแปลงและสิ่งที่ควรทำ</span></span>
+    </label>
+    <div class="form-label">ความถี่</div>
+    <div class="type-row" id="nt-freq">${s.freq_options.map(o => `<button type="button" class="chip${s.rain_alert_freq === o.id ? " on" : ""}" data-freq="${o.id}">${escHtml(o.name_th)}</button>`).join("")}</div>
+    <label class="rec-card" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;margin-top:12px">
+      <input type="checkbox" id="nt-digest" ${s.weekly_digest ? "checked" : ""} style="width:22px;height:22px;margin-top:3px;flex:0 0 auto">
+      <span><b>สรุปแปลงรายสัปดาห์</b><br><span class="rec-reason">ทุกวันจันทร์ สรุปทุกแปลงพร้อมแผนที่</span></span>
+    </label>
+    <button type="button" class="btn-primary sheet-btn" id="nt-save">💾 บันทึก</button>
+    <button class="close-modal-btn" id="nt-close">กลับ</button>`;
+  let freq = s.rain_alert_freq;
+  box.querySelectorAll("[data-freq]").forEach(b => b.onclick = () => {
+    freq = b.dataset.freq;
+    box.querySelectorAll("[data-freq]").forEach(x => x.classList.toggle("on", x === b));
+  });
+  box.querySelector("#nt-close").onclick = showMyData;
+  box.querySelector("#nt-save").onclick = async () => {
+    showSpinner("⏳ กำลังบันทึก...");
+    const u = encodeURIComponent(userId);
+    try {
+      const calls = [
+        apiFetch(`${API_URL}/user/${u}/notify?enabled=${box.querySelector("#nt-rain").checked}`, { method: "PATCH" }),
+        apiFetch(`${API_URL}/user/${u}/notify-digest?enabled=${box.querySelector("#nt-digest").checked}`, { method: "PATCH" }),
+        apiFetch(`${API_URL}/user/${u}/rain-alert-freq?mode=${freq}`, { method: "PATCH" }),
+      ];
+      const results = await Promise.all(calls);
+      if (results.some(r => !r.ok)) throw new Error("บางรายการบันทึกไม่สำเร็จ");
+      showToast("💾 บันทึกการแจ้งเตือนแล้ว");
+      showMyData();
+    } catch (e) { showToast("❌ " + e.message); }
+    finally { hideSpinner(); }
+  };
 }
 
 function addAccountButton() {

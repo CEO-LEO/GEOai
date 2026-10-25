@@ -40,11 +40,12 @@ PROBLEMS_TH = {
     "flow_through_rows": "ทางน้ำไหลผ่านแนวปลูก",
     "bare_soil":         "หน้าดินเปิดโล่ง",
     "leaf_decline":      "ใบเขียวลดลง",
+    "heavy_rain_coming": "ฝนหนักกำลังมา",       # Phase 3: ใช้ในข้อความเตือนฝน
 }
 SEVERITIES = ("low", "medium", "high")
 SEVERITY_TH = {"low": "เล็กน้อย", "medium": "ควรดู", "high": "ควรดูโดยเร็ว"}
 STATUSES = ("draft", "reviewed", "retired")
-WET_PROBLEMS = {"wet_spot", "water_collect", "wetter_than_usual"}
+WET_PROBLEMS = {"wet_spot", "water_collect", "wetter_than_usual", "heavy_rain_coming"}
 SKIP_FOR_RAISED_BED = {"wet_spot", "water_collect", "flow_through_rows"}
 DRAFT_LABEL_TH = "ร่าง — รอเจ้าหน้าที่เกษตรตรวจ"
 

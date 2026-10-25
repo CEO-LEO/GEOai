@@ -85,7 +85,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY,
                       get_photo_by_client_id, insert_photo, list_photos, get_photo, delete_photo_row,
                       photo_paths_for_user, insert_validation, list_validations,
-                      get_events_since, get_users_created)
+                      get_events_since, get_users_created, set_rain_alert_freq)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -787,6 +787,26 @@ async def user_notify(user_id: str, enabled: bool, me: str = Depends(_api_user))
     if not ok:
         raise HTTPException(status_code=500, detail="อัพเดตการตั้งค่าไม่สำเร็จ")
     return {"user_id": user_id, "notify_weekly": enabled}
+
+
+@app.get("/user/{user_id}/notify-settings")
+async def user_notify_settings(user_id: str, me: str = Depends(_api_user)):
+    """การตั้งค่าแจ้งเตือนปัจจุบัน (Phase 3a) — เตือนฝน / ความถี่ / สรุปรายสัปดาห์"""
+    _require_self(user_id, me)
+    u = await get_user(me) or {}
+    return {"rain_alerts": bool(u.get("notify_weekly", True)),
+            "rain_alert_freq": u.get("rain_alert_freq") or "normal",
+            "weekly_digest": bool(u.get("notify_daily_digest", False)),
+            "freq_options": [{"id": "normal", "name_th": "ทุกครั้งที่ฝนหนัก (ไม่ซ้ำระดับเดิมใน 7 วัน)"},
+                             {"id": "weekly_max", "name_th": "สูงสุดสัปดาห์ละครั้ง"}]}
+
+
+@app.patch("/user/{user_id}/rain-alert-freq")
+async def user_rain_alert_freq(user_id: str, mode: Literal["normal", "weekly_max"], me: str = Depends(_api_user)):
+    _require_self(user_id, me)
+    if not await set_rain_alert_freq(me, mode):
+        raise HTTPException(status_code=500, detail="อัพเดตการตั้งค่าไม่สำเร็จ")
+    return {"user_id": me, "rain_alert_freq": mode}
 
 
 @app.patch("/user/{user_id}/notify-digest")

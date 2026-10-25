@@ -1017,6 +1017,52 @@ async def log_event(user_id: str | None, name: str, plot_id: int | None = None, 
         logger.warning(f"log_event failed ({type(e).__name__})")
 
 
+# ── เตือนฝน (Phase 3) ─────────────────────────────────────
+async def get_latest_grid_snapshot(plot_id: int) -> list[dict]:
+    """ตารางจุดชุดล่าสุดของแปลง (จากสแกนรายวัน) — [] ถ้าไม่มี"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/grid_snapshots", headers={**_HEADERS(), "Prefer": ""},
+                                params={"plot_id": f"eq.{plot_id}", "select": "created_at",
+                                        "order": "created_at.desc", "limit": "1"})
+        if resp.status_code != 200 or not resp.json():
+            return []
+        ts = resp.json()[0]["created_at"]
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/grid_snapshots", headers={**_HEADERS(), "Prefer": ""},
+                                params={"plot_id": f"eq.{plot_id}", "created_at": f"eq.{ts}",
+                                        "select": "lat,lng,status,swab_index", "limit": "5000"})
+    return resp.json() if resp.status_code == 200 else []
+
+
+async def get_last_user_message(user_id: str, kind: str, since_iso: str) -> dict | None:
+    """ข้อความประเภท kind ที่ส่งสำเร็จล่าสุดถึงผู้ใช้คนนี้ (ทุกแปลง) — ใช้กับ "สูงสุดสัปดาห์ละครั้ง" """
+    if not SUPABASE_URL or not SUPABASE_KEY or _message_log_available is False:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/line_message_log", headers={**_HEADERS(), "Prefer": ""},
+                                params={"user_id": f"eq.{user_id}", "kind": f"eq.{kind}", "status": "eq.sent",
+                                        "created_at": f"gte.{since_iso}", "order": "created_at.desc", "limit": "1",
+                                        "select": "kind,level,created_at"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def get_rain_freq_users(mode: str = "weekly_max") -> set[str]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return set()
+    rows = await _fetch_all("users", {"rain_alert_freq": f"eq.{mode}", "select": "user_id"})
+    return {r["user_id"] for r in rows or []}
+
+
+async def set_rain_alert_freq(user_id: str, mode: str) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/users", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                  params={"user_id": f"eq.{user_id}"}, json={"rain_alert_freq": mode})
+    return resp.status_code in (200, 204)
+
+
 # ── แดชบอร์ดจังหวัด / สถิติ (Phase 2e) ─────────────────────
 async def get_events_since(since_iso: str) -> list[dict]:
     if not SUPABASE_URL or not SUPABASE_KEY:
