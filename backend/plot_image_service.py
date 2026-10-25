@@ -55,21 +55,22 @@ _THUMB_PREFIX = "thumbnails"
 _DATE_FOLDER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-async def _upload_bytes(path: str, png_bytes: bytes, upsert: bool = False) -> bool:
+async def _upload_bytes(path: str, png_bytes: bytes, upsert: bool = False,
+                        content_type: str = "image/png", bucket: str = _STORAGE_BUCKET) -> bool:
     if not SUPABASE_URL or not SUPABASE_KEY:
         logger.warning("Supabase not configured — cannot upload plot image")
         return False
     headers = {
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "apikey": SUPABASE_KEY,
-        "Content-Type": "image/png",
+        "Content-Type": content_type,
     }
     if upsert:
         headers["x-upsert"] = "true"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"{SUPABASE_URL}/storage/v1/object/{_STORAGE_BUCKET}/{path}",
+                f"{SUPABASE_URL}/storage/v1/object/{bucket}/{path}",
                 headers=headers, content=png_bytes,
             )
         if resp.status_code not in (200, 201):
@@ -88,6 +89,51 @@ async def upload_plot_image(png_bytes: bytes) -> str | None:
     path = f"{datetime.now(timezone.utc):%Y-%m-%d}/{uuid.uuid4().hex}.png"
     ok = await _upload_bytes(path, png_bytes)
     return f"{SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}" if ok else None
+
+
+# รายงาน PDF (1f) — bucket แยกแบบ private (plot-images รับเฉพาะรูป และเป็น public) ลิงก์เป็น signed URL
+# อายุ 7 วัน · โฟลเดอร์ตามวัน → delete_old_plot_images ลบไฟล์เก่ากว่า 7 วันให้ทุกวันเหมือนรูปแผนที่
+_REPORT_BUCKET = "plot-reports"
+_REPORT_URL_TTL_S = 7 * 86400
+
+
+def _storage_headers(content_type: str = "application/json") -> dict:
+    return {"Authorization": f"Bearer {SUPABASE_KEY}", "apikey": SUPABASE_KEY, "Content-Type": content_type}
+
+
+async def _ensure_report_bucket() -> bool:
+    """สร้าง bucket private ครั้งแรกที่ต้องใช้ (ไม่ต้องตั้งมือใน Supabase dashboard)"""
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/storage/v1/bucket", headers=_storage_headers(),
+            json={"id": _REPORT_BUCKET, "name": _REPORT_BUCKET, "public": False,
+                  "allowed_mime_types": ["application/pdf"], "file_size_limit": 10 * 1024 * 1024},
+        )
+    ok = resp.status_code in (200, 201) or "already exists" in resp.text.lower()
+    if not ok:
+        logger.warning(f"create bucket {_REPORT_BUCKET} failed: {resp.status_code} — {resp.text[:200]}")
+    return ok
+
+
+async def upload_report_file(data: bytes, ext: str, content_type: str) -> str | None:
+    """อัปโหลดรายงานเข้า bucket private แล้วคืน signed URL (ใช้ได้ 7 วัน) — None ถ้าไม่สำเร็จ"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    path = f"{datetime.now(timezone.utc):%Y-%m-%d}/{uuid.uuid4().hex}.{ext}"
+    ok = await _upload_bytes(path, data, content_type=content_type, bucket=_REPORT_BUCKET)
+    if not ok and await _ensure_report_bucket():
+        ok = await _upload_bytes(path, data, content_type=content_type, bucket=_REPORT_BUCKET)
+    if not ok:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(f"{SUPABASE_URL}/storage/v1/object/sign/{_REPORT_BUCKET}/{path}",
+                                     headers=_storage_headers(), json={"expiresIn": _REPORT_URL_TTL_S})
+        signed = resp.json().get("signedURL") if resp.status_code == 200 else None
+    except Exception as e:
+        logger.warning(f"sign report url failed ({type(e).__name__})")
+        signed = None
+    return f"{SUPABASE_URL}/storage/v1{signed}" if signed else None
 
 
 def _thumbnail_path(plot_id: int) -> str:
@@ -114,23 +160,30 @@ async def delete_old_plot_images(older_than_days: int = 7) -> bool:
     ลบรูปแผนที่เก่าใน Storage — LINE ดึงรูปไปโฮสต์เองแค่ครั้งแรกไม่นานหลัง push
     เก็บต้นฉบับไว้นานเกินไม่มีประโยชน์ มีแต่กิน storage quota เปล่าๆ (ดูเหตุผล
     เดียวกับ delete_old_grid_snapshots ใน database.py) เรียกจาก daily_scan_job
+    1f: ลบรายงาน PDF เก่า (bucket plot-reports) ด้วยกติกาเดียวกัน — signed URL อายุ 7 วันเท่ากัน
     """
     if not SUPABASE_URL or not SUPABASE_KEY:
         return False
+    ok = True
+    for bucket in (_STORAGE_BUCKET, _REPORT_BUCKET):
+        ok = await _delete_old_date_folders(bucket, older_than_days) and ok
+    return ok
+
+
+async def _delete_old_date_folders(bucket: str, older_than_days: int) -> bool:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).strftime("%Y-%m-%d")
-    headers = {
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "apikey": SUPABASE_KEY,
-        "Content-Type": "application/json",
-    }
+    headers = _storage_headers()
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"{SUPABASE_URL}/storage/v1/object/list/{_STORAGE_BUCKET}",
+                f"{SUPABASE_URL}/storage/v1/object/list/{bucket}",
                 headers=headers, json={"prefix": "", "limit": 1000},
             )
             if resp.status_code != 200:
-                logger.warning(f"Plot image list failed: {resp.status_code} — {resp.text}")
+                # bucket รายงานยังไม่ถูกสร้าง (ยังไม่มีใครขอ PDF) = ไม่มีอะไรต้องลบ
+                if bucket == _REPORT_BUCKET and resp.status_code in (400, 404):
+                    return True
+                logger.warning(f"Plot image list failed ({bucket}): {resp.status_code} — {resp.text}")
                 return False
             # โฟลเดอร์ (prefix เสมือน) มี id เป็น null เสมอตาม Supabase Storage list API
             # เช็ครูปแบบ YYYY-MM-DD ด้วย ไม่ใช่แค่เทียบ string เฉยๆ — กันโฟลเดอร์อื่น
@@ -141,7 +194,7 @@ async def delete_old_plot_images(older_than_days: int = 7) -> bool:
                           and item["name"] < cutoff]
             for folder in old_folders:
                 list_resp = await client.post(
-                    f"{SUPABASE_URL}/storage/v1/object/list/{_STORAGE_BUCKET}",
+                    f"{SUPABASE_URL}/storage/v1/object/list/{bucket}",
                     headers=headers, json={"prefix": f"{folder}/", "limit": 1000},
                 )
                 if list_resp.status_code != 200:
@@ -149,14 +202,13 @@ async def delete_old_plot_images(older_than_days: int = 7) -> bool:
                 paths = [f"{folder}/{item['name']}" for item in list_resp.json()]
                 if paths:
                     await client.request(
-                        "DELETE", f"{SUPABASE_URL}/storage/v1/object/{_STORAGE_BUCKET}",
+                        "DELETE", f"{SUPABASE_URL}/storage/v1/object/{bucket}",
                         headers=headers, json={"prefixes": paths},
                     )
         return True
     except Exception as e:
-        logger.warning(f"delete_old_plot_images failed (non-fatal): {e}")
+        logger.warning(f"delete_old_plot_images failed ({bucket}, non-fatal): {e}")
         return False
-
 
 async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str = "",
                                     plot_id: int | None = None,
