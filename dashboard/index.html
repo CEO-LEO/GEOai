@@ -435,7 +435,7 @@
   // ───────── Map (Leaflet + Esri satellite) ─────────
   let map, satLayer, streetLayer, labelLayer, ndviGroup, rasterLayer = null, showNdvi = true, isSat = true;
   function initMap(){
-    map = L.map('map', { zoomControl:true, attributionControl:false }).setView([12.6, 102.1], 10);
+    map = L.map('map', { zoomControl:true, attributionControl:false }).setView([13.54, 99.82], 10);
     satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       { maxZoom:19 });
     labelLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
