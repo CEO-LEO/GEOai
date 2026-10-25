@@ -54,6 +54,7 @@ import risk_v2
 import risk_display
 import crops as crops_mod
 import boundary
+import recommendations
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -64,7 +65,9 @@ from database import (save_analysis, get_all_reports, save_plot,
                       get_recent_message_failures, get_scheduler_last_run,
                       set_scheduler_last_run, get_shadow_rows,
                       update_plot, set_plot_crops, archive_plot_boundary,
-                      merge_plot_history, get_active_plots, get_plot_crop_ids)
+                      merge_plot_history, get_active_plots, get_plot_crop_ids,
+                      list_recommendation_rules, save_recommendation_rule,
+                      get_recommendation_rule_history, get_latest_plot_signals)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -1019,6 +1022,119 @@ async def merge_plot(user_id: str, plot_id: int, req: PlotMergeRequest, me: str 
     if not await merge_plot_history(me, req.source_plot_id, plot_id):
         raise HTTPException(status_code=502, detail="ย้ายประวัติไม่สำเร็จ กรุณาลองใหม่")
     return {"status": "merged", "plot_id": plot_id, "source_plot_id": req.source_plot_id}
+
+
+# ─────────────────────────────────────────────────────────
+# คำแนะนำ "แก้อย่างไร" (Phase 1d) — มาจากตาราง recommendation_rules ที่คนเขียน/ตรวจเท่านั้น
+# ─────────────────────────────────────────────────────────
+
+@app.get("/recommendations/plot/{user_id}/{plot_id}")
+async def plot_recommendations(user_id: str, plot_id: int, me: str = Depends(_api_user)):
+    """คำแนะนำของแปลง: ปัญหาระดับแปลงที่พบตอนนี้ + คำแนะนำสำหรับแตะจุดบนแผนที่ (ทุกข้อบอกสถานะร่าง/ตรวจแล้ว)"""
+    _require_self(user_id, me)
+    plot = await _require_own_plot(plot_id, me)
+    crop_ids, signals = await asyncio.gather(get_plot_crop_ids(plot_id), get_latest_plot_signals(plot_id))
+    rules = await recommendations.get_rules()
+    out = recommendations.for_plot(rules, crop_ids, plot.get("plot_type"), signals)
+    out["status_label_th"] = risk_v2.anomaly_label_th((signals or {}).get("risk_v2"))
+    return out
+
+
+class RuleBody(BaseModel):
+    crop:       str = Field("*", max_length=40)
+    problem:    str = Field(..., max_length=40)
+    severity:   str = Field(..., max_length=10)
+    title_th:   str = Field(..., max_length=200)
+    reason_th:  str = Field("", max_length=500)
+    actions_th: list[str] = Field(..., max_length=10)
+    source:     str = Field("", max_length=300)
+    removed:    str = Field("", max_length=300)
+    editor:     str = Field(..., min_length=2, max_length=80, description="ชื่อผู้แก้ (บันทึกในประวัติ)")
+
+
+class RuleStatusBody(BaseModel):
+    status: Literal["draft", "reviewed", "retired"]
+    editor: str = Field(..., min_length=2, max_length=80, description="ชื่อผู้ตรวจ/ผู้เปลี่ยนสถานะ")
+
+
+def _clean_rule(body: RuleBody) -> dict:
+    try:
+        return recommendations.validate_rule(body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/admin/recommendations", dependencies=[Depends(verify_admin)])
+async def admin_list_rules():
+    rows = await list_recommendation_rules()
+    return {"source": "db" if rows is not None else "seed",
+            "rules": rows if rows is not None else list(recommendations.seed_rules()),
+            "problems": recommendations.PROBLEMS_TH, "severities": recommendations.SEVERITY_TH,
+            "crops": [{"id": c["id"], "name_th": c["name_th"], "group": c["group"]} for c in crops_mod.all_crops()]}
+
+
+@app.post("/admin/recommendations", dependencies=[Depends(verify_admin)])
+async def admin_create_rule(body: RuleBody):
+    row = await save_recommendation_rule(None, {**_clean_rule(body), "status": "draft"}, "create", body.editor.strip())
+    if not row:
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ (ยังไม่ได้รัน migrate_v15?)")
+    recommendations.invalidate()
+    return row
+
+
+@app.put("/admin/recommendations/{rule_id}", dependencies=[Depends(verify_admin)])
+async def admin_edit_rule(rule_id: int, body: RuleBody):
+    """แก้ข้อความ → กลับเป็น "ร่าง" เสมอ (ต้องตรวจใหม่) — กันข้อความที่ยังไม่ตรวจขึ้นป้าย "ตรวจแล้ว" """
+    fields = {**_clean_rule(body), "status": "draft", "reviewed_by": None, "reviewed_at": None}
+    row = await save_recommendation_rule(rule_id, fields, "edit", body.editor.strip())
+    if not row:
+        raise HTTPException(status_code=404, detail="ไม่พบกฎนี้")
+    recommendations.invalidate()
+    return row
+
+
+@app.post("/admin/recommendations/{rule_id}/status", dependencies=[Depends(verify_admin)])
+async def admin_rule_status(rule_id: int, body: RuleStatusBody):
+    editor = body.editor.strip()
+    if body.status == "reviewed":
+        fields = {"status": "reviewed", "reviewed_by": editor, "reviewed_at": datetime.now(timezone.utc).isoformat()}
+        action = "approve"
+    else:
+        fields = {"status": body.status, "reviewed_by": None, "reviewed_at": None}
+        action = "retire" if body.status == "retired" else "restore"
+    row = await save_recommendation_rule(rule_id, fields, action, editor)
+    if not row:
+        raise HTTPException(status_code=404, detail="ไม่พบกฎนี้")
+    recommendations.invalidate()
+    return row
+
+
+@app.get("/admin/recommendations/{rule_id}/history", dependencies=[Depends(verify_admin)])
+async def admin_rule_history(rule_id: int):
+    return {"rule_id": rule_id, "history": await get_recommendation_rule_history(rule_id)}
+
+
+@app.get("/admin/recommendations/export.csv", dependencies=[Depends(verify_admin)])
+async def admin_rules_export():
+    """ส่งให้เกษตรจังหวัดตรวจ — เปิดใน Excel ได้ (UTF-8 BOM)"""
+    rows = await list_recommendation_rules()
+    rules = rows if rows is not None else list(recommendations.seed_rules())
+    names = {c["id"]: c["name_th"] for c in crops_mod.all_crops()}
+    buf = io.StringIO()
+    buf.write("﻿")
+    w = csv.writer(buf)
+    w.writerow(["รหัส", "พืช", "ปัญหา", "ความรุนแรง", "หัวข้อ", "เหตุผล", "วิธีแก้", "สถานะ", "ตรวจโดย",
+                "ที่มา", "ตัดออกจากข้อความเดิม", "ความเห็นผู้ตรวจ"])
+    for r in rules:
+        crop = r["crop"]
+        crop_th = "ทุกพืช" if crop == "*" else ("กลุ่มผัก" if crop == "group:vegetable" else names.get(crop, crop))
+        w.writerow([r.get("id"), crop_th, recommendations.PROBLEMS_TH.get(r["problem"], r["problem"]),
+                    recommendations.SEVERITY_TH.get(r["severity"], r["severity"]), r["title_th"],
+                    r.get("reason_th", ""), "\n".join(f"- {a}" for a in r.get("actions_th") or []),
+                    {"draft": "ร่าง", "reviewed": "ตรวจแล้ว", "retired": "เลิกใช้"}.get(r.get("status"), r.get("status")),
+                    r.get("reviewed_by") or "", r.get("source", ""), r.get("removed", ""), ""])
+    return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="recommendations-for-review.csv"'})
 
 
 @app.post("/admin/boundary-check/backfill", dependencies=[Depends(verify_admin)])
