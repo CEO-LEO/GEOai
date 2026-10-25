@@ -5,6 +5,7 @@ import asyncio
 import logging
 import tempfile
 import io
+import time
 import base64
 import binascii
 import secrets
@@ -65,6 +66,7 @@ import privacy
 import photo_service
 import validation
 import province
+import seasons
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -1583,6 +1585,40 @@ async def admin_validations_export(days: int = 3650):
                     headers={"Content-Disposition": 'attachment; filename="field-validations.csv"'})
 
 
+# ── ติดตามระยะยาว: เทียบหน้าฝน/หน้าแล้ง (Phase 3c) ──
+SEASONS_TIMEOUT_S = 60
+SEASONS_CACHE_TTL_S = 12 * 3600
+_seasons_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+@app.get("/plots/{user_id}/{plot_id}/seasons")
+async def plot_seasons(user_id: str, plot_id: int, background: BackgroundTasks, months: int = 24,
+                       me: str = Depends(_grid_user)):
+    """ความชื้นรายเดือนจากเรดาร์ + เทียบหน้าฝน/หน้าแล้งกับปีก่อนของแปลงเดียวกัน (GEE ~10–30 วินาที, แคช 12 ชม.)"""
+    _require_self(user_id, me)
+    plot = await _require_plot_access(plot_id, me, audit_action="view_seasons")
+    months = min(max(months, 12), 36)
+    key = (plot_id, months, json.dumps(plot.get("polygon")))
+    hit = _seasons_cache.get(key)
+    if hit and time.monotonic() - hit[0] < SEASONS_CACHE_TTL_S:
+        return hit[1]
+    today = datetime.now(timezone.utc)
+    start = today - timedelta(days=int(months * 30.5))
+    try:
+        series = await asyncio.wait_for(
+            run_in_threadpool(risk_v2.s1_series, plot["lat"], plot["lng"], plot.get("polygon"), start, today),
+            timeout=SEASONS_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="ดึงข้อมูลย้อนหลังใช้เวลานานเกินไป กรุณาลองใหม่")
+    except Exception as e:
+        logger.error(f"seasons failed plot={plot_id}: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail="ดึงข้อมูลดาวเทียมย้อนหลังไม่สำเร็จ กรุณาลองใหม่ภายหลัง")
+    out = seasons.summarize(series, today) | {"plot_id": plot_id, "months_requested": months}
+    _seasons_cache[key] = (time.monotonic(), out)
+    background.add_task(log_event, me, "view_seasons", plot_id, None)
+    return out
+
+
 # ── แดชบอร์ดจังหวัด + สถิติการใช้งาน (Phase 2e) ──
 async def _status_labels(plot_ids: list[int]) -> dict[int, str | None]:
     """ป้ายเทียบปกติของแปลงเอง (ชื้น/แห้งกว่าปกติ) ล่าสุดต่อแปลง — ยิงพร้อมกันไม่เกิน 8"""
@@ -1643,7 +1679,7 @@ async def admin_usage(weeks: int = 12):
                        "events_counted_since": "2026-10-25"}}
 
 
-EVENT_NAMES = {"app_open", "view_map", "view_recommendation", "open_pdf", "share_line", "photo_upload",
+EVENT_NAMES = {"app_open", "view_map", "view_seasons", "view_recommendation", "open_pdf", "share_line", "photo_upload",
                "field_validation", "open_officer_tab"}
 
 

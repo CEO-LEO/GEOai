@@ -117,10 +117,16 @@ def get_wetness_anomaly(lat: float, lng: float, polygon: list | None = None,
     """เรียก GEE 1 ครั้ง (อนุกรมเวลา VV ≈ 3 ปี) แล้วคำนวณสถานะ — sync ต้องห่อด้วย threadpool"""
     if not gee_analysis._gee_ready:
         return {"method": METHOD, "status": "unavailable"}
-    ee = gee_analysis.ee
     today = today or datetime.now(timezone.utc)
-    geom = _geometry(lat, lng, polygon)
     start = today - timedelta(days=365 * BASELINE_YEARS + DOY_WINDOW + 5)
+    return compute_wetness_anomaly(s1_series(lat, lng, polygon, start, today), today)
+
+
+def s1_series(lat: float, lng: float, polygon: list | None, start: datetime, end: datetime) -> list:
+    """อนุกรมเวลา VV (dB) เฉลี่ยในแปลง [(เวลา, vv, วงโคจร)] — GEE 1 ครั้ง (sync)"""
+    ee = gee_analysis.ee
+    geom = _geometry(lat, lng, polygon)
+    today = end
     col = (ee.ImageCollection("COPERNICUS/S1_GRD").filterBounds(geom)
            .filterDate(start.strftime("%Y-%m-%d"), (today + timedelta(days=1)).strftime("%Y-%m-%d"))
            .filter(ee.Filter.eq("instrumentMode", "IW"))
@@ -131,9 +137,8 @@ def get_wetness_anomaly(lat: float, lng: float, polygon: list | None = None,
         "orb": img.get("relativeOrbitNumber_start"),
     }))
     feats = gee_analysis._retry_gee(fc.getInfo).get("features", [])
-    series = [(datetime.fromtimestamp(f["properties"]["t"] / 1000, timezone.utc),
-               f["properties"].get("vv"), f["properties"].get("orb")) for f in feats]
-    return compute_wetness_anomaly(series, today)
+    return [(datetime.fromtimestamp(f["properties"]["t"] / 1000, timezone.utc),
+             f["properties"].get("vv"), f["properties"].get("orb")) for f in feats]
 
 
 # Dynamic World (Google, 10 ม., อัปเดตต่อเนื่อง, CC-BY 4.0) — ใช้แทน ESA WorldCover 2021 ที่เก่า
