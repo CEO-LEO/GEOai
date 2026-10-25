@@ -4,26 +4,36 @@
 กำลังอัปเกรดเป็น **v2** เพื่อใช้กับเครือข่ายเกษตรจังหวัดราชบุรี (B2G)
 
 - **Spec ฉบับเต็ม:** [docs/IAMROOT_V2_PROMPT.md](docs/IAMROOT_V2_PROMPT.md) — อ่านก่อนเริ่มงาน v2 ทุกครั้ง
-- **- **โหมดทำงานอัตโนมัติ (เจ้าของสั่ง 2026-10-24 — แทนกติกา "รออนุมัติ/ห้ามทำโดยไม่ถาม" ด้านล่างทั้งหมด)**
+- **โหมดทำงานอัตโนมัติ (เจ้าของสั่ง 2026-10-24 — แทนกติกา "รออนุมัติ/ห้ามทำโดยไม่ถาม" ด้านล่างทั้งหมด)**
   - ทำงานต่อเองจนจบโดยไม่ถาม รวมถึงใช้ Render API, merge, deploy, รัน migration บน production
   - ตัดสินใจตามค่าเริ่มต้นใน spec และข้อเสนอใน `docs/v2/*` · **บันทึกทุกการตัดสินใจ** ใน [docs/v2/decisions.md](docs/v2/decisions.md)
     (วันที่ / เรื่อง / ตัดสินใจ / เหตุผล) และอัปเดตตารางความคืบหน้าที่หัวไฟล์ — เจ้าของพิมพ์ "ทำต่อ" = ทำต่อจากตารางนั้น
   - ก่อน migration ทุกครั้ง: backup อัตโนมัติ (CSV ทุกตาราง ลง `backups/<เวลา>/` gitignored) + มี `rollback_vN.sql`
   - ทุก merge: CI ผ่าน + smoke test หลัง deploy · production พัง → rollback เอง (Render API) แล้วแก้ใน branch ก่อน deploy ใหม่
+    · CI รันเฉพาะ `master` และ `feat/**` (branch เอกสารต้องตั้งชื่อ `feat/...`)
   - **ห้ามแสดงค่า secret ใด ๆ ในแชทหรือ log**
   - **หยุดถามเฉพาะ:** ต้องจ่ายเงินเพิ่ม · ต้องลบข้อมูลผู้ใช้จริงถาวร · ต้อง rewrite git history · rollback ไม่สำเร็จ
   - เครื่องมือ (ไม่อยู่ใน repo): `backend/.env` มี `RENDER_API_KEY`, `SUPABASE_DB_URL` (ห้าม commit) · ไม่มี psql → ใช้ psycopg
-- **สถานะล่าสุด (2026-10-25):** master = 1a + 1b + shadow/กำลังปรับปรุง + 1c (merge 9dae0ad) — migrate_v12/v13/v14 รันบน production แล้ว
-  - ถัดไป: 1d (ตารางคำแนะนำ + หน้า admin + "แห้งกว่าปกติ" + export xlsx) → 1e → 1f → 1g → fieldwork → final-report
+- **สถานะล่าสุด (2026-10-25):** Phase 1 (1a–1g) และ **Phase 2 (2a–2e)** อยู่บน production — migrate_v12–v19 รันแล้ว
+  - รายงาน: [docs/v2/final-report.md](docs/v2/final-report.md) (Phase 1 + งานที่ต้องให้คนทำ) · [docs/v2/phase2-report.md](docs/v2/phase2-report.md)
+    · [docs/data-governance.md](docs/data-governance.md) · ถัดไปตามแผน: Phase 3 (แจ้งเตือนผ่าน LINE OA + ติดตามระยะยาว)
+  - สิทธิ์: ใช้ `_require_plot_access(plot_id, me, action)` (เจ้าของ / เจ้าหน้าที่ในอำเภอที่เจ้าของยินยอมแบ่งปัน / ผู้ดูแล + audit log)
+    แทน `_require_own_plot` (เหลือไว้สำหรับงานเฉพาะเจ้าของ เช่น รวมประวัติ) · ตรรกะอยู่ที่ [backend/access.py](backend/access.py)
+  - PDPA: endpoint ที่สร้าง/เขียนข้อมูลแปลงต้องเรียก `_require_consent(me)` · เปลี่ยนนโยบาย = เปลี่ยน `PRIVACY_VERSION`
+    ([backend/privacy.py](backend/privacy.py)) + [liff/privacy.html](liff/privacy.html) · **ห้ามลบข้อมูลผู้ใช้ถาวรเอง** (ผู้ดูแลกดที่ users.html)
+  - คำแนะนำมาจากตาราง `recommendation_rules` ([backend/recommendations.py](backend/recommendations.py)) ห้ามเขียนข้อความแนะนำในโค้ดเอง
+  - สวนยกร่อง (`plot_type=raised_bed`) ต้องไม่ได้ลูกศร/วงม่วง/เตือนน้ำขังจากร่อง ทุกที่ที่เพิ่มใหม่
+  - LIFF แยกไฟล์ (ไม่มี build step): `account.js` (ยินยอม/ข้อมูลของฉัน) `photos.js` `validation.js` `officer.js` — ใช้ตัวแปรระดับบนของ index.html ได้
+  - หน้า admin: `/dashboard/recommendations.html` `/dashboard/users.html` `/dashboard/province.html` (X-Admin-Key)
   - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" ([backend/risk_display.py](backend/risk_display.py)) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
     เดิม และ**หยุดคำเตือนความเสี่ยง** (`RISK_ALERTS_ENABLED`) เตือนฝนยังส่ง — `RISK_DISPLAY_MODE=legacy` = แบบเดิม
   - ตรวจภาคสนาม: [field-validation-plan](docs/v2/field-validation-plan.md) — รายการแปลงมีพิกัด เก็บใน `fieldwork/` (gitignored)
     เฉพาะแปลงที่เจ้าของยินยอมหรือเจ้าหน้าที่เพิ่มเอง · ข้อความทดแทนตัวเลขในไฟล์นำเสนอ: [claims-replacement](docs/v2/claims-replacement.md)
-  - LINE OA แพลน Free — โควตาหมดถึง 2026-11-01คำตอบที่เจ้าของให้ไว้แล้ว (Phase 0 ข้อ 7):** ความเร็วเลือกทาง A · migration ได้เฉพาะแบบเพิ่ม (ตาราง/คอลัมน์ nullable)
-  ต้อง pg_dump + rollback และแจ้งก่อนรัน production ทุกครั้ง · ปุ๋ย/ผลผลิตซ่อนหลัง feature flag (ปิด) และเปลี่ยนคำ NDVI/BSI
+  - LINE OA แพลน Free — โควตาหมดถึง 2026-11-01
+- **คำตอบที่เจ้าของให้ไว้แล้ว (Phase 0 ข้อ 7):** ความเร็วเลือกทาง A · migration ได้เฉพาะแบบเพิ่ม (ตาราง/คอลัมน์ nullable)
+  ต้อง backup + rollback · ปุ๋ย/ผลผลิตซ่อนหลัง feature flag (ปิด) และเปลี่ยนคำ NDVI/BSI
   · สรุปประจำวันปิดเป็นค่าเริ่มต้น · สวนยกร่อง (`plot_type=raised_bed`) ซ่อนลูกศร/วงม่วง/คำเตือนน้ำขังจากร่อง + บอกข้อจำกัด
-  · ข้ออื่นใช้ค่าเริ่มต้นในรายงาน Phase 0
-- โค้ดเก่าเรียกตัวเองว่า "GEOai" และตั้งชื่อฟังก์ชันว่า `*_durian_*` — ชื่อที่ผู้ใช้เห็นคือ "IAM ROOT" และ "ต้นไม้"
+  · ข้ออื่นใช้ค่าเริ่มต้นในรายงาน Phase 0โค้ดเก่าเรียกตัวเองว่า "GEOai" และตั้งชื่อฟังก์ชันว่า `*_durian_*` — ชื่อที่ผู้ใช้เห็นคือ "IAM ROOT" และ "ต้นไม้"
 
 ## Stack
 
@@ -51,15 +61,15 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-pytest -q                                 # 273 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
-                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
+pytest -q                                 # 352 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g, test_roles_2a, test_privacy_2b, test_photos_2c, test_validation_2d, test_province_2e) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
 IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
 ```
 
 - **Deploy:** push `master` → Render auto-deploy. Build command จริงตั้งใน Render Dashboard (ไม่ sync กับ `render.yaml`)
-- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v15 รัน 2026-10-25) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
+- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v19 รัน 2026-10-25) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
 - ไม่มี GEE key ในเครื่อง → `analyze_durian_plot()` ใช้ mock data (`_mock_analyze`)
 
 ## Env (ค่าอยู่ใน Render Dashboard และ `backend/.env` ห้าม commit)
@@ -75,7 +85,8 @@ Migration: ก่อนรันทุกครั้ง `SUPABASE_DB_URL=... ba
 `users` (user_id = LINE userId, notify_weekly, notify_daily_digest, notify_hour) · `plots` (lat/lng, polygon JSONB `[[lng,lat],...]`, thumbnail_url,
 plot_type flat/raised_bed/vegetable_bed, boundary_check, is_active) · `plot_crops` (ชนิดพืช id จาก `backend/config/crops.json`) · `plot_boundary_history` · `plot_merges` · `line_message_log`
 · `analyses` (คอลัมน์ flat + `full_data` JSONB) · `grid_snapshots` · `iot_readings` · `field_observations` · `scheduler_runs`
-— schema: [supabase/schema.sql](supabase/schema.sql) + migrate_v3…v14 · RLS เปิดทุกตาราง policy "backend only" + anon/authenticated ไม่มีสิทธิ์ (v12)
+· Phase 1d–2: `recommendation_rules`(+history) · `user_areas` `invites` `audit_logs` `events` (v16) · `consent_logs` (v17) · `photos` (v18) · `field_validations` (v19)
+— schema: [supabase/schema.sql](supabase/schema.sql) + migrate_v3…v19 · RLS เปิดทุกตาราง policy "backend only" + anon/authenticated ไม่มีสิทธิ์ (v12)
 
 ## Auth และสิทธิ์ (ตั้งแต่ Phase 1a)
 

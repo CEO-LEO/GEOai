@@ -64,6 +64,7 @@ import areas
 import privacy
 import photo_service
 import validation
+import province
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -83,7 +84,8 @@ from database import (save_analysis, get_all_reports, save_plot,
                       get_user_privacy, save_consent, set_deletion_request, export_user_data, purge_user,
                       SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY,
                       get_photo_by_client_id, insert_photo, list_photos, get_photo, delete_photo_row,
-                      photo_paths_for_user, insert_validation, list_validations)
+                      photo_paths_for_user, insert_validation, list_validations,
+                      get_events_since, get_users_created)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -1559,6 +1561,66 @@ async def admin_validations_export(days: int = 3650):
     await log_audit(None, "admin", "export_validations", "validations", None, None, {"rows": len(rows)})
     return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="field-validations.csv"'})
+
+
+# ── แดชบอร์ดจังหวัด + สถิติการใช้งาน (Phase 2e) ──
+async def _status_labels(plot_ids: list[int]) -> dict[int, str | None]:
+    """ป้ายเทียบปกติของแปลงเอง (ชื้น/แห้งกว่าปกติ) ล่าสุดต่อแปลง — ยิงพร้อมกันไม่เกิน 8"""
+    sem = asyncio.Semaphore(8)
+
+    async def one(pid: int):
+        async with sem:
+            s = await get_latest_plot_signals(pid)
+        return pid, risk_v2.anomaly_label_th((s or {}).get("risk_v2"))
+    return dict(await asyncio.gather(*[one(p) for p in plot_ids]))
+
+
+async def _province_data() -> dict:
+    plots = await get_active_plots()
+    labels = await _status_labels([p["id"] for p in plots])
+    return province.district_summary(plots, labels)
+
+
+@app.get("/admin/province", dependencies=[Depends(verify_admin)])
+async def admin_province():
+    """ภาพรวมรายอำเภอ (ตัวเลขรวม ไม่มีชื่อ/พิกัดแปลง)"""
+    data = await _province_data()
+    await log_audit(None, "admin", "view_province", "province", "70", None, None)
+    return data | {"suppress_below": province.SUPPRESS_BELOW, "source": areas.config().get("source")}
+
+
+@app.get("/admin/province/export.csv", dependencies=[Depends(verify_admin)])
+async def admin_province_export():
+    """ไฟล์ส่งหน่วยงาน (เปิดใน Excel ได้) — อำเภอที่มีเกษตรกรน้อยกว่า 3 คนซ่อนตัวเลขเป็น "<3" """
+    data = await _province_data()
+    rows = province.suppressed(data["districts"])
+    buf = io.StringIO()
+    buf.write("﻿")
+    w = csv.writer(buf)
+    w.writerow([f"IAM ROOT — สรุปแปลงรายอำเภอ จ.ราชบุรี (ข้อมูล ณ {data['generated_at'][:10]})"])
+    w.writerow([f"อำเภอที่มีเกษตรกรน้อยกว่า {province.SUPPRESS_BELOW} คน แสดงเป็น \"<{province.SUPPRESS_BELOW}\" เพื่อคุ้มครองข้อมูลส่วนบุคคล"
+                " · ขอบเขตอำเภอ: geoBoundaries"])
+    w.writerow(["รหัสอำเภอ", "อำเภอ", "เกษตรกร (คน)", "แปลง", "พื้นที่รวม (ไร่)", "แปลงที่วาดขอบเขต",
+                "พืช (จำนวนแปลง)", "ประเภทสวน", "ความชื้นเทียบปกติของแปลง"])
+    for r in rows:
+        fmt = lambda d: " · ".join(f"{k} {v}" for k, v in d.items())   # noqa: E731
+        w.writerow([r["code"] or "", r["name_th"], r["farmers"], r["plots"], r["area_rai"], r["with_boundary"],
+                    fmt(r["crops"]), fmt(r["plot_types"]), fmt(r["status"])])
+    await log_audit(None, "admin", "export_province", "province", "70", None, {"rows": len(rows)})
+    return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="iamroot-ratchaburi-districts.csv"'})
+
+
+@app.get("/admin/usage", dependencies=[Depends(verify_admin)])
+async def admin_usage(weeks: int = 12):
+    """สถิติการใช้งานรายสัปดาห์ (สำหรับรายงาน B2G) — นับจาก events เริ่ม 25 ต.ค. 2569"""
+    weeks = min(max(weeks, 1), 52)
+    since = (datetime.now(timezone.utc) - timedelta(weeks=weeks, days=7)).isoformat()
+    events, users = await asyncio.gather(get_events_since(since), get_users_created())
+    plots = await get_active_plots()
+    return {"weeks": province.weekly_usage(events, users, weeks),
+            "totals": {"users": len(users), "active_plots": len(plots),
+                       "events_counted_since": "2026-10-25"}}
 
 
 EVENT_NAMES = {"app_open", "view_map", "view_recommendation", "open_pdf", "share_line", "photo_upload",
