@@ -509,6 +509,9 @@
     .rec-status { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 10px; margin-top: 4px; }
     .rec-status.draft { background: #fff3e0; color: #8d4b00; }
     .rec-status.reviewed { background: #e8f5e9; color: #1b5e20; }
+    .grid-summary { font-size: 13px; line-height: 1.6; color: var(--ink); background: var(--card);
+      border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
+    .grid-summary b { display: block; margin-bottom: 2px; }
     .plot-rec-btn {
       background: #fff8e1; color: #7a4f01; border: none;
       padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
@@ -591,6 +594,7 @@
     </div>
 
     <div id="grid-legend">
+      <div id="grid-summary" class="grid-summary" style="display:none"></div>
       <div class="legend-gradient-bar"></div>
       <div class="legend-gradient-labels">
         <span>🔴 แห้งกว่าส่วนอื่น</span>
@@ -598,7 +602,7 @@
         <span>🔵 ชื้นกว่าส่วนอื่น</span>
       </div>
       <span class="legend-item legend-note" id="raised-legend-note" style="display:none"></span>
-      <span class="legend-item legend-note" id="flow-legend-note">สีเทียบกันเองภายในแปลงนี้ ไม่ได้แปลว่าแห้งหรือแฉะเกินไปจริง &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
+      <span class="legend-item legend-note" id="flow-legend-note">สีเทียบกันเองภายในแปลงนี้ ไม่ได้แปลว่าแห้งหรือแฉะเกินไปจริง &nbsp;·&nbsp; 1 ช่อง ≈ 10×10 ม. &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
     </div>
   </div>
 </div>
@@ -744,6 +748,7 @@
   let gridMarkers    = [];   // sphere.Dot[]/sphere.Polygon[]/sphere.Polyline[] — จุด/หยด/เส้นทางน้ำ
   let gridPointsData = [];   // ข้อมูลดิบของแต่ละจุด (lat/lng/status/...) ไว้จับคู่ตอนแตะแผนที่
   let gridNormalizer = null;   // สเกลสีของตารางจุดล่าสุด (เทียบกันเองในแปลง)
+  let gridRelMedian = 0;   // ค่ากลางของสีเทียบในแปลง (1e) — จุด "ชื้น/แห้งกว่าส่วนอื่น" วัดห่างจากค่านี้ (ตรงกับ plot_summary.py)
   let gridRecs = null;      // คำแนะนำของแปลงที่โชว์ตารางจุดอยู่ (1d) — null = แปลงยังไม่บันทึก
   let gridRaised = false;   // ตารางจุดล่าสุดเป็นสวนยกร่อง (1c) — แตะจุดแล้วใช้คำเทียบในแปลง ไม่ใช่ "น้ำขัง"
   let gridSinkPoints = new Set();   // จุดที่มีน้ำจากรอบข้างไหลมารวม ≥2 ทิศทาง (ดู computeFlowGraph)
@@ -1730,7 +1735,7 @@
   function pointProblem(p) {
     if (gridSinkPoints.has(p)) return ["water_collect", "medium"];
     if (RISK_INTERIM || gridRaised) {
-      const rel = gridNormalizer ? gridNormalizer(p.swab_index) : 0;
+      const rel = (gridNormalizer ? gridNormalizer(p.swab_index) : 0) - gridRelMedian;
       return rel >= 0.15 ? ["wet_spot", "medium"] : rel <= -0.15 ? ["dry_spot", "medium"] : null;
     }
     return { waterlogged: ["wet_spot", "high"], wet: ["wet_spot", "medium"],
@@ -1796,7 +1801,7 @@
     }
     const sinkNote = gridSinkPoints.has(p) ? "  🎯 จุดรวมน้ำจากรอบข้าง — เหมาะขุดร่องระบายน้ำเริ่มจากตรงนี้" : "";
     if (RISK_INTERIM || gridRaised) {
-      const rel = gridNormalizer ? gridNormalizer(p.swab_index) : 0;
+      const rel = (gridNormalizer ? gridNormalizer(p.swab_index) : 0) - gridRelMedian;
       const relText = rel >= 0.15 ? "🔵 ชื้นกว่าส่วนอื่นของแปลง"
                     : rel <= -0.15 ? "🔴 แห้งกว่าส่วนอื่นของแปลง" : "🟢 ใกล้เคียงส่วนอื่นของแปลง";
       showToast(`${relText}  📍${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${sinkNote}`);
@@ -1825,7 +1830,7 @@
       const res = await apiFetch(`${API_URL}/analyze/grid`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ polygon: poly, spacing_m: 10 }),
+        body: JSON.stringify({ polygon: poly, spacing_m: 10, plot_type: plotType || null }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(friendlyErrorMessage(json.detail, "วิเคราะห์ไม่สำเร็จ"));
@@ -1840,7 +1845,10 @@
         const actualMinDist = json.points.length >= 2 ? nearestNeighborDistM(json.points) : spacingM;
         const tileSizeM = Math.min(spacingM, actualMinDist) * 0.96;
         const normalizeSwab = buildSwabNormalizer(json.points);
-        gridNormalizer = normalizeSwab;   // ใช้ตอนแตะจุด (โหมดกำลังปรับปรุง)   // ยืดสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้
+        gridNormalizer = normalizeSwab;
+        const rels = json.points.map(p => normalizeSwab(p.swab_index)).sort((a, b) => a - b);
+        const n = rels.length;
+        gridRelMedian = n ? (n % 2 ? rels[(n - 1) / 2] : (rels[n / 2 - 1] + rels[n / 2]) / 2) : 0;   // ใช้ตอนแตะจุด (โหมดกำลังปรับปรุง)   // ยืดสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้
         const { inDegree } = raised ? { inDegree: new Map() } : computeFlowGraph(json.points, spacingM);
         // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีจุดเด่น
         // กระจายเกลื่อนแทบทุกจุด (สัญญาณเสียความหมาย) ≥3 คัดเหลือแค่จุดที่รวมน้ำจาก
@@ -1895,7 +1903,17 @@
           gridMarkers.push(ring);
         });
 
-        document.getElementById("raised-legend-note").textContent = RAISED_BED_NOTE;
+        document.getElementById("raised-legend-note").textContent =
+          "สีเทียบกันเองภายในแปลงนี้ ไม่ได้แปลว่าแห้งหรือแฉะเกินไปจริง · 1 ช่อง ≈ 10×10 ม. · " + RAISED_BED_NOTE;
+        // 1e: ประโยคสรุปจาก server (plot_summary.py — เทมเพลตจากตารางจุดจริง)
+        const sumEl = document.getElementById("grid-summary");
+        if (json.summary_th) {
+          sumEl.innerHTML = `<b>📝 ${escHtml(json.summary_th)}</b>` +
+            (json.summary_lines || []).map(l => `<div>${escHtml(l)}</div>`).join("");
+          sumEl.style.display = "";
+        } else {
+          sumEl.style.display = "none";
+        }
         document.getElementById("raised-legend-note").style.display = raised ? "" : "none";
         document.getElementById("flow-legend-note").style.display = raised ? "none" : "";
         document.getElementById("grid-legend").classList.add("show");

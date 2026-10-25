@@ -20,6 +20,8 @@ import httpx
 from fastapi.concurrency import run_in_threadpool
 
 import gee_analysis
+import plot_summary
+import risk_display
 from database import SUPABASE_URL, SUPABASE_KEY, set_plot_thumbnail
 
 logger = logging.getLogger(__name__)
@@ -186,6 +188,7 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
     png_bytes = None
     url = None
     problem_points = []
+    summary_th = None
     try:
         # allow_widen=True: งานนี้เป็นการสร้างรูปแนบอัตโนมัติ (ผู้ใช้ไม่ได้กดขอ
         # แบบ interactive) ไม่มีรูปเลยแย่กว่ารูปหยาบกว่าเดิม — บั๊กที่เจอจริง:
@@ -207,10 +210,19 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
                 grid_points, exclude_statuses=("wet", "waterlogged") if raised_bed else ())
         except Exception as e:
             logger.warning(f"Problem-point selection failed (non-fatal): {e}")
+        headline = None
+        try:   # 1e: ประโยคสรุปสำหรับการ์ด LINE + หัวรูป (ตารางจุดชุดเดียวกับรูป)
+            summary = await run_in_threadpool(plot_summary.summarize, grid_points, polygon,
+                                              plot_type, actual_spacing_m)
+            summary_th = plot_summary.short_text(summary)
+            if risk_display.interim():
+                headline = plot_summary.image_headline(summary)
+        except Exception as e:
+            logger.warning(f"Plot summary failed (non-fatal): {e}")
 
         composed = await run_in_threadpool(
             render_plot_grid_image, png_bytes, bounds, grid_points, polygon, actual_spacing_m,
-            plot_name, problem_points, not raised_bed,
+            plot_name, problem_points, not raised_bed, headline,
         )
         url = await upload_plot_image(composed)
         if url:
@@ -231,4 +243,4 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
         except Exception as e:
             logger.warning(f"Plot list thumbnail failed (non-fatal, plot {plot_id}): {e}")
 
-    return {"url": url, "problem_points": problem_points}
+    return {"url": url, "problem_points": problem_points, "summary_th": summary_th}
