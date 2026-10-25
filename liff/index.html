@@ -767,6 +767,7 @@
   let gridNormalizer = null;   // สเกลสีของตารางจุดล่าสุด (เทียบกันเองในแปลง)
   let gridRelMedian = 0;   // ค่ากลางของสีเทียบในแปลง (1e) — จุด "ชื้น/แห้งกว่าส่วนอื่น" วัดห่างจากค่านี้ (ตรงกับ plot_summary.py)
   let gridRecs = null;      // คำแนะนำของแปลงที่โชว์ตารางจุดอยู่ (1d) — null = แปลงยังไม่บันทึก
+  let gridPlotId = null;    // แปลงที่โชว์ตารางจุดอยู่ (2d: ยืนยันรายจุด / แนบรูปจุด)
   let gridRaised = false;   // ตารางจุดล่าสุดเป็นสวนยกร่อง (1c) — แตะจุดแล้วใช้คำเทียบในแปลง ไม่ใช่ "น้ำขัง"
   let gridSinkPoints = new Set();   // จุดที่มีน้ำจากรอบข้างไหลมารวม ≥2 ทิศทาง (ดู computeFlowGraph)
   let persistentMarkers   = [];  // sphere.Dot[] — จุดชื้นสะสม (ชื้นซ้ำๆ หลายวัน)
@@ -1798,12 +1799,19 @@
     const status = recs.status_label_th
       ? `<div class="result-section" style="font-size:14px">ความชื้นตอนนี้เทียบกับช่วงเดียวกันของปีก่อน ๆ: <b>${escHtml(recs.status_label_th)}</b></div>` : "";
     document.getElementById("modal-body").innerHTML = status +
-      (recs.plot.length ? recs.plot.map(recCardHtml).join("")
+      (recs.plot.length ? recs.plot.map((r, i) => recCardHtml(r) +
+          (window.validationBlockHtml ? `<div data-plot-val="${i}">${window.validationBlockHtml({ scope: "plot" })}</div>` : "")).join("")
         : `<div class="result-section" style="font-size:14px;line-height:1.6">ตอนนี้ยังไม่พบเรื่องที่ต้องทำเป็นพิเศษทั้งแปลง</div>`) +
       `<div class="form-hint" style="margin-top:10px">${plot.polygon && plot.polygon.length >= 3
         ? "ดูคำแนะนำรายจุด: กด \"🔍 ตรวจ\" แล้วแตะจุดสีบนแผนที่"
         : "วาดขอบเขตแปลงเพื่อดูคำแนะนำรายจุดบนแผนที่"}</div>` +
       (recs.plot_type === "raised_bed" ? `<div class="raised-note show">${escHtml(RAISED_BED_NOTE)}</div>` : "");
+    // 2d: ยืนยันปัญหาระดับแปลงในแปลงจริง
+    recs.plot.forEach((r, i) => {
+      const el = document.querySelector(`#modal-body [data-plot-val="${i}"]`);
+      if (el) window.bindValidation?.(el, { plotId: plot.id, scope: "plot", problem: r.problem, severity: r.severity,
+                                            context: { status_label: recs.status_label_th || null } });
+    });
   }
 
   // ─── 1f: แชร์รายงานใน LINE + PDF ──────────────────
@@ -1866,7 +1874,15 @@
     if (rec) {
       const head = { wet_spot: "🔵", dry_spot: "🔴", water_collect: "🟣" }[prob[0]] || "📍";
       showPointSheet(`<h3>${head} ${escHtml(rec.problem_th)}</h3>${recCardHtml(rec)}
+        ${gridPlotId && window.validationBlockHtml ? window.validationBlockHtml({ scope: "point" }) : ""}
         <div class="form-hint">📍 ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${gridRaised ? `<br>${escHtml(RAISED_BED_NOTE)}` : ""}</div>`);
+      if (gridPlotId) {
+        const rel = gridNormalizer ? gridNormalizer(p.swab_index) - gridRelMedian : null;
+        window.bindValidation?.(document.getElementById("point-sheet-body"), {
+          plotId: gridPlotId, scope: "point", problem: prob[0], severity: prob[1], lat: p.lat, lng: p.lng,
+          context: { rel: rel == null ? null : Math.round(rel * 100) / 100, status: p.status || null,
+                     interim: RISK_INTERIM, raised_bed: gridRaised, sink: gridSinkPoints.has(p) } });
+      }
       return true;
     }
     const sinkNote = gridSinkPoints.has(p) ? "  🎯 จุดรวมน้ำจากรอบข้าง — เหมาะขุดร่องระบายน้ำเริ่มจากตรงนี้" : "";
@@ -1890,6 +1906,7 @@
     const raised = plotType === "raised_bed";
     gridRaised = raised;
     gridRecs = null;
+    gridPlotId = plotId || null;
     if (plotId) fetchPlotRecommendations(plotId).then(r => { gridRecs = r; });
     window.logEvent?.("view_map", plotId, { raised_bed: raised });
     if (!poly || poly.length < 3) {
@@ -2998,6 +3015,7 @@
 </script>
 <script src="account.js"></script>
 <script src="photos.js"></script>
+<script src="validation.js"></script>
 <script src="officer.js"></script>
 </body>
 </html>

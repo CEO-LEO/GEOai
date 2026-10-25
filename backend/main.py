@@ -63,6 +63,7 @@ import access
 import areas
 import privacy
 import photo_service
+import validation
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -82,7 +83,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       get_user_privacy, save_consent, set_deletion_request, export_user_data, purge_user,
                       SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY,
                       get_photo_by_client_id, insert_photo, list_photos, get_photo, delete_photo_row,
-                      photo_paths_for_user)
+                      photo_paths_for_user, insert_validation, list_validations)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -1476,6 +1477,88 @@ async def remove_photo(user_id: str, plot_id: int, photo_id: int, me: str = Depe
         raise HTTPException(status_code=502, detail="ลบไม่สำเร็จ กรุณาลองใหม่")
     await log_audit(me, (await _access_for(me))["role"], "delete_photo", "photo", photo_id, plot.get("user_id"), None)
     return {"status": "deleted", "photo_id": photo_id}
+
+
+# ── ยืนยันภาคสนาม (Phase 2d) ──
+class ValidationBody(BaseModel):
+    scope:           Literal["point", "plot"]
+    problem:         str = Field(..., max_length=40)
+    severity:        Literal["low", "medium", "high"] | None = None
+    answer:          Literal["true", "false", "unsure"]
+    lat:             float | None = Field(None, ge=-90, le=90)
+    lng:             float | None = Field(None, ge=-180, le=180)
+    note:            str = Field("", max_length=300)
+    photo_client_id: str | None = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    context:         dict | None = None
+
+
+def _clean_context(ctx: dict | None) -> dict | None:
+    """สิ่งที่ระบบแสดงตอนนั้น — เก็บเฉพาะค่าสั้น ๆ (กัน payload ใหญ่/ข้อมูลไม่จำเป็น)"""
+    if not ctx:
+        return None
+    return {str(k)[:30]: (v if isinstance(v, (int, float, bool)) or v is None else str(v)[:60])
+            for k, v in list(ctx.items())[:12]}
+
+
+@app.post("/plots/{user_id}/{plot_id}/validations")
+async def add_validation(user_id: str, plot_id: int, body: ValidationBody, background: BackgroundTasks,
+                         me: str = Depends(_api_user)):
+    """ตอบว่าสิ่งที่ระบบบอกตรงกับในแปลงจริงไหม (เจ้าของ / เจ้าหน้าที่ในพื้นที่ / ผู้ดูแล)"""
+    _require_self(user_id, me)
+    if body.problem not in recommendations.PROBLEMS_TH:
+        raise HTTPException(status_code=422, detail="ประเภทปัญหาไม่ถูกต้อง")
+    if body.scope == "point" and (body.lat is None or body.lng is None):
+        raise HTTPException(status_code=422, detail="การยืนยันรายจุดต้องมีพิกัดจุด")
+    await _require_consent(me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "field_validation")
+    acc = await _access_for(me)
+    row = await insert_validation({
+        "plot_id": plot_id, "user_id": me, "role": acc["role"], "scope": body.scope, "problem": body.problem,
+        "severity": body.severity, "answer": body.answer, "lat": body.lat, "lng": body.lng,
+        "note": body.note.strip(), "photo_client_id": body.photo_client_id, "context": _clean_context(body.context)})
+    if not row:
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
+    background.add_task(log_event, me, "field_validation", plot_id,
+                        {"problem": body.problem, "answer": body.answer, "role": acc["role"]})
+    return {"id": row["id"], "answer_th": validation.ANSWER_TH[body.answer],
+            "message_th": "ขอบคุณครับ — คำตอบนี้ช่วยให้ระบบแม่นขึ้น", "plot_owner_is_me": plot.get("user_id") == me}
+
+
+@app.get("/plots/{user_id}/{plot_id}/validations")
+async def plot_validations(user_id: str, plot_id: int, me: str = Depends(_api_user)):
+    _require_self(user_id, me)
+    await _require_plot_access(plot_id, me, audit_action="view_validations")
+    rows = await list_validations(plot_id)
+    return {"plot_id": plot_id, "summary": validation.summarize(rows),
+            "items": [{k: r.get(k) for k in ("scope", "problem", "severity", "answer", "note", "created_at")}
+                      | {"role_th": access.ROLE_TH.get(r.get("role"), ""), "by_me": r.get("user_id") == me}
+                      for r in rows[:50]]}
+
+
+@app.get("/admin/validations", dependencies=[Depends(verify_admin)])
+async def admin_validations(days: int = 365):
+    since = (datetime.now(timezone.utc) - timedelta(days=min(max(days, 1), 3650))).isoformat()
+    return validation.summarize(await list_validations(since_iso=since))
+
+
+@app.get("/admin/validations/export.csv", dependencies=[Depends(verify_admin)])
+async def admin_validations_export(days: int = 3650):
+    """ข้อมูลยืนยันภาคสนามทั้งหมด (มีพิกัด — ผู้ดูแลเท่านั้น) สำหรับวัดผลและเป็น label Phase 4 · ไม่มี LINE userId"""
+    since = (datetime.now(timezone.utc) - timedelta(days=min(max(days, 1), 3650))).isoformat()
+    rows = await list_validations(since_iso=since)
+    buf = io.StringIO()
+    buf.write("﻿")
+    w = csv.writer(buf)
+    w.writerow(["id", "plot_id", "role", "scope", "problem", "severity", "answer", "lat", "lng", "note",
+                "has_photo", "context", "created_at"])
+    for r in rows:
+        w.writerow([r["id"], r["plot_id"], r["role"], r["scope"], r["problem"], r.get("severity") or "",
+                    r["answer"], r.get("lat") or "", r.get("lng") or "", r.get("note") or "",
+                    "yes" if r.get("photo_client_id") else "", json.dumps(r.get("context") or {}, ensure_ascii=False),
+                    r["created_at"]])
+    await log_audit(None, "admin", "export_validations", "validations", None, None, {"rows": len(rows)})
+    return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="field-validations.csv"'})
 
 
 EVENT_NAMES = {"app_open", "view_map", "view_recommendation", "open_pdf", "share_line", "photo_upload",
