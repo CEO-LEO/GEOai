@@ -44,7 +44,8 @@ async function showCropGuess(plot, opts = {}) {
   const yesIds = g.status === "ok" && guessed[0] && cropList.some(c => c.id === guessed[0].crop_id)
     ? [guessed[0].crop_id] : (g.status === "collecting" || g.status === "unavailable") ? current : [];
   const pre = new Set(current.length ? current : (guessed[0] && cropList.some(c => c.id === guessed[0].crop_id) ? [guessed[0].crop_id] : []));
-  body.innerHTML = `
+  // overflow-wrap: ข้อความไทยยาวไม่มีเว้นวรรคในเบราว์เซอร์ที่ตัดคำไทยไม่ได้ ไม่ดันแผ่นให้กว้างเกินจอ
+  body.innerHTML = `<div style="overflow-wrap:anywhere;min-width:0">
     ${head}
     ${yesIds.length ? `<div class="sheet-actions">
       <button type="button" class="btn-primary" id="cg-yes">✅ ใช่ ${escHtml(cropNames(yesIds).join(", "))}</button>
@@ -60,7 +61,7 @@ async function showCropGuess(plot, opts = {}) {
     <div class="form-hint">คำตอบนี้ช่วยสอนระบบให้ทายชนิดพืชจากภาพดาวเทียมได้แม่นขึ้น
       ${g.is_owner && g.owner_helps_training === false
         ? ` · ถ้าต้องการให้ใช้สอนระบบ เปิดข้อ "ใช้รูปถ่ายและการยืนยันในแปลงเพื่อปรับปรุงระบบ" ใน ⚙️ ข้อมูลของฉัน` : ""}
-      ${g.attribution_th ? ` · ${escHtml(g.attribution_th)}` : ""}</div>`;
+      ${g.attribution_th ? ` · ${escHtml(g.attribution_th)}` : ""}</div></div>`;
   body.querySelectorAll("#cg-crops .chip").forEach(b => b.addEventListener("click", () => b.classList.toggle("on")));
   const send = async (answer, ids, close = true) => {
     try {
