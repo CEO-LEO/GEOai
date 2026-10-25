@@ -1,0 +1,20 @@
+{
+  "_note": "รายการพืช (spec ข้อ 4.3) — ค่าทางการเกษตร (thresholds, notes_th) เว้นว่างให้ผู้เชี่ยวชาญกรอก ห้ามเดาตัวเลข · waterlogging_sensitivity: high/medium/low หรือ null = ยังไม่ระบุ (ระบบใช้ระดับกลาง) · ลำดับแรก 6 ชนิด = พืชที่ทำก่อนตามค่าเริ่มต้นของ spec ข้อ 9",
+  "version": "2026-10-25",
+  "crops": [
+    {"id": "coconut_aromatic", "name_th": "มะพร้าวน้ำหอม", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "guava", "name_th": "ฝรั่ง", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "rose_apple", "name_th": "ชมพู่", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "grape", "name_th": "องุ่น", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "pomelo", "name_th": "ส้มโอ", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "durian", "name_th": "ทุเรียน", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": "high", "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "mango", "name_th": "มะม่วง", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "lime", "name_th": "มะนาว", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "banana", "name_th": "กล้วย", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "mangosteen", "name_th": "มังคุด", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "rambutan", "name_th": "เงาะ", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "longan", "name_th": "ลำไย", "group": "fruit_tree", "perennial": true, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "vegetables", "name_th": "ผัก (ทั่วไป)", "group": "vegetable", "perennial": false, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null},
+    {"id": "other", "name_th": "อื่น ๆ", "group": "other", "perennial": null, "waterlogging_sensitivity": null, "thresholds": {"waterlogging_risk": null, "dryness_risk": null}, "notes_th": "", "reviewed_by": null, "reviewed_at": null}
+  ]
+}

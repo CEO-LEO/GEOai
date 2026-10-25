@@ -35,6 +35,14 @@ def risk_alerts_enabled() -> bool:
     return os.environ.get("RISK_ALERTS_ENABLED", default).strip().lower() == "true"
 
 
+def agronomy_numbers() -> bool:
+    """
+    ปุ๋ย กก./ต้น และผลผลิต กก./ไร่ (สูตรของทุเรียน ยังไม่ได้สอบเทียบ — phase0-report ข้อ 2.4/คำถามข้อ 8)
+    ซ่อนจากเกษตรกรทั้งหมดเป็นค่าเริ่มต้น จนกว่าผู้เชี่ยวชาญจะตรวจ · env SHOW_UNVERIFIED_AGRONOMY=true เพื่อแสดง
+    """
+    return os.environ.get("SHOW_UNVERIFIED_AGRONOMY", "false").strip().lower() == "true"
+
+
 def relative_label(status: str | None) -> str:
     """ป้ายจุดในแปลงแบบเทียบกันเอง (ไม่ใช้คำ "น้ำขังวิกฤต/แล้งวิกฤต" จากสูตรเดิม)"""
     if status in ("waterlogged", "wet"):

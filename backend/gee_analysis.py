@@ -1018,7 +1018,8 @@ def _plot_relative_normalizer(values: list[float | None]):
     return normalize
 
 
-def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]:
+def select_problem_points(points: list[dict], max_points: int = 3,
+                          exclude_statuses: tuple[str, ...] = ()) -> list[dict]:
     """
     เลือกจุดที่ "มีปัญหา" เด่นที่สุดในแปลง (ไม่ใช่ optimal) สำหรับใส่ในการ์ดแทนคำ
     แนะนำวิธีแก้ทั่วไป — ต้องเรียก assign_grid_reference(points, polygon) ก่อนเสมอ
@@ -1037,8 +1038,10 @@ def select_problem_points(points: list[dict], max_points: int = 3) -> list[dict]
     คืน list ของ dict {"grid_label","position_desc","status","label_th",
     "swab_index","lat","lng","color_hint"} — color_hint เป็น None สำหรับจุด
     สุดขั้ว (ให้ผู้เรียกใช้สีตาม status จริงได้เลย) หรือสีเทียบสัมพัทธ์สำหรับจุดเสริม
+
+    exclude_statuses: สถานะที่ไม่นับเป็นปัญหา — สวนยกร่องส่ง ("wet", "waterlogged") เพราะน้ำในร่อง
     """
-    problem = [p for p in points if p.get("status") not in (None, "optimal")
+    problem = [p for p in points if p.get("status") not in (None, "optimal", *exclude_statuses)
               and p.get("grid_label")]
     if not problem:
         return []

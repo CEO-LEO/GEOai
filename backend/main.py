@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import traceback
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from dotenv import load_dotenv
 # test ตั้ง IAMROOT_DISABLE_DOTENV=1 (ดู conftest.py) กันไม่ให้ backend/.env ตัวจริงใน
@@ -51,6 +52,8 @@ import line_quota
 import client_telemetry as client_telemetry_mod
 import risk_v2
 import risk_display
+import crops as crops_mod
+import boundary
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -59,7 +62,9 @@ from database import (save_analysis, get_all_reports, save_plot,
                       save_field_observation, get_persistent_wet_points,
                       set_notify_digest, get_latest_risk_by_plots, get_user,
                       get_recent_message_failures, get_scheduler_last_run,
-                      set_scheduler_last_run, get_shadow_rows)
+                      set_scheduler_last_run, get_shadow_rows,
+                      update_plot, set_plot_crops, archive_plot_boundary,
+                      merge_plot_history, get_active_plots, get_plot_crop_ids)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -194,6 +199,31 @@ class AnalysisRequest(BaseModel):
         description="Polygon coordinates [[lng,lat], ...]. "
                     "Minimum 3 points. First and last must be the same (closed ring)."
     )
+    # 1c: ตรวจแปลงเดิมซ้ำ → ส่ง plot_id มา (ไม่ต้องหาแปลงใกล้เคียงซ้ำ) · แปลงใหม่ส่งชนิดพืช/ประเภทสวนมาได้
+    plot_id:   int | None = Field(None, ge=1)
+    plot_type: Literal["flat", "raised_bed", "vegetable_bed"] | None = None
+    crop_ids:  list[str] | None = Field(None, max_length=crops_mod.MAX_CROPS_PER_PLOT)
+
+
+class BoundaryCheckRequest(BaseModel):
+    lat:       float = Field(..., ge=-90, le=90)
+    lng:       float = Field(..., ge=-180, le=180)
+    polygon:   list[list[float]] | None = None
+    plot_type: Literal["flat", "raised_bed", "vegetable_bed"] | None = None
+    crop_ids:  list[str] | None = Field(None, max_length=crops_mod.MAX_CROPS_PER_PLOT)
+
+
+class PlotUpdateRequest(BaseModel):
+    """แก้แปลงเดิม — ส่งเฉพาะช่องที่เปลี่ยน · แก้ขอบเขตแล้วประวัติวิเคราะห์ยังอยู่กับแปลงเดิม"""
+    name:      str | None = Field(None, min_length=1, max_length=50)
+    plot_type: Literal["flat", "raised_bed", "vegetable_bed"] | None = None
+    crop_ids:  list[str] | None = Field(None, max_length=crops_mod.MAX_CROPS_PER_PLOT)
+    polygon:   list[list[float]] | None = Field(None, min_length=4)
+    area_rai:  float | None = Field(None, ge=0, le=10000)
+
+
+class PlotMergeRequest(BaseModel):
+    source_plot_id: int = Field(..., ge=1)
 
 
 class PlotListRequest(BaseModel):
@@ -360,6 +390,7 @@ async def liff_config():
         f'  LIFF_ID: "{liff_id()}",\n'
         f'  SPHERE_KEY: "{sphere_key}",\n'
         f'  RISK_DISPLAY: "{"interim" if risk_display.interim() else "legacy"}",\n'
+        f'  AGRONOMY_NUMBERS: "{"on" if risk_display.agronomy_numbers() else "off"}",\n'
         f"}};\n"
     )
     return Response(content=js, media_type="application/javascript")
@@ -372,8 +403,78 @@ async def liff_config():
 # Supabase Storage ตรงๆ ดูเหตุผลที่เลิกใช้แคชในแรมของโปรเซสเองที่ไฟล์นั้น)
 # ─────────────────────────────────────────────────────────
 
+BOUNDARY_BACKGROUND_TIMEOUT_S = 30   # ตรวจขอบเขตเบื้องหลัง (หลังบันทึก/แก้แปลง) ไม่มีใครรอ
+
+
+def _validated_crop_ids(crop_ids: list[str] | None) -> list[str]:
+    try:
+        return crops_mod.validate_ids(crop_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+async def _check_boundary(lat: float, lng: float, polygon: list | None,
+                          crop_ids: list[str] | None, plot_type: str | None,
+                          timeout_s: float | None = None) -> dict:
+    """
+    ตรวจคุณภาพขอบเขต (docs/v2/boundary-quality-warnings.md) — ช้าเกิน/พัง = ไม่ถามผู้ใช้ (checked=False)
+    คำเตือนที่ไม่ต้องใช้ดาวเทียม (ปักจุดเดียว / ขอบเขตเล็กมาก) ยังขึ้นได้แม้ GEE ไม่ตอบ
+    timeout_s: ค่าเริ่มต้นจาก config (ผู้ใช้รออยู่) · งานเบื้องหลังให้เวลานานกว่าได้
+    """
+    profile: dict = {}
+    try:
+        profile = await asyncio.wait_for(
+            run_in_threadpool(risk_v2.get_boundary_land_cover, lat, lng, polygon),
+            timeout=timeout_s or boundary.rules()["check_timeout_s"])
+    except Exception as e:
+        logger.warning(f"boundary check skipped ({type(e).__name__}): {e}")
+    checked = profile.get("status") == "ok"
+    is_point = not (polygon and len(polygon) >= 3)
+    area_rai = profile.get("area_rai")
+    if area_rai is None and not is_point:
+        area_rai = boundary.polygon_area_rai(polygon)
+    warnings = boundary.evaluate(profile.get("land_cover") if checked else None, is_point=is_point,
+                                 area_rai=area_rai, crop_ids=crop_ids, plot_type=plot_type)
+    return {"checked": checked, "warnings": warnings, "land_cover": profile.get("land_cover"),
+            "area_rai": area_rai, "method": profile.get("method")}
+
+
+async def _store_boundary_check(plot_id: int, lat: float, lng: float, polygon: list | None,
+                                crop_ids: list[str] | None, plot_type: str | None) -> dict | None:
+    """เก็บผลตรวจขอบเขตใน plots.boundary_check (ใช้ทำแถบบนการ์ดแปลง) — ไม่เก็บถ้าตรวจไม่สำเร็จ"""
+    try:
+        result = await _check_boundary(lat, lng, polygon, crop_ids, plot_type,
+                                       timeout_s=BOUNDARY_BACKGROUND_TIMEOUT_S)
+        if not result["checked"] and not result["warnings"]:
+            return None
+        stored = boundary.summarize_for_storage(result, result["warnings"])
+        stored["checked_at"] = datetime.now(timezone.utc).isoformat()
+        await update_plot(plot_id, {"boundary_check": stored})
+        return stored
+    except Exception as e:   # งานเบื้องหลัง — ห้ามทำให้คำขอหลักหรือ worker พัง
+        logger.error(f"store boundary check failed plot={plot_id}: {type(e).__name__}: {e}")
+        return None
+
+
+@app.get("/crops")
+async def list_crops():
+    """รายการพืช + ประเภทสวนสำหรับหน้าเลือกในแอป (จาก config/crops.json ไม่มีข้อมูลส่วนบุคคล)"""
+    return {"crops": [{"id": c["id"], "name_th": c["name_th"], "group": c["group"]}
+                      for c in crops_mod.all_crops()],
+            "plot_types": [{"id": k, "name_th": v} for k, v in crops_mod.PLOT_TYPE_LABELS_TH.items()]}
+
+
+@app.post("/plots/boundary-check")
+async def plots_boundary_check(req: BoundaryCheckRequest, me: str = Depends(_api_user)):
+    """เรียกตอนกดบันทึกแปลง — คืนคำเตือน (ถ้ามี) ผู้ใช้เลือก "บันทึกตามนี้" ได้เสมอ"""
+    crop_ids = _validated_crop_ids(req.crop_ids)
+    result = await _check_boundary(req.lat, req.lng, req.polygon, crop_ids, req.plot_type)
+    return {"checked": result["checked"], "warnings": result["warnings"], "area_rai": result["area_rai"]}
+
+
 @app.post("/analyze")
-async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
+async def analyze(req: AnalysisRequest, background: BackgroundTasks,
+                  user_id: str = Depends(_analyze_user)):
     """
     วิเคราะห์แปลงของผู้ใช้ที่ยืนยันตัวตนแล้ว (user จาก LINE token เท่านั้น)
 
@@ -382,7 +483,9 @@ async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
     ผู้ใช้ยังดูการ์ดในแชทได้จากปุ่ม "ตรวจสอบ" ใน Rich Menu (ส่งแบบ reply ไม่นับโควตา)
     """
     req.user_id = user_id
+    crop_ids = _validated_crop_ids(req.crop_ids)
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
+    existing_plot = await _require_own_plot(req.plot_id, user_id) if req.plot_id else None
     try:
         data     = await _run_gee_analysis(req.lat, req.lng, polygon=req.polygon)
         message  = format_message(data, req.lat, req.lng)
@@ -391,9 +494,19 @@ async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
         # build_plot_grid_image_url() เก็บรูปย่อของแปลงนี้ถาวรได้ (ดูเหตุผลเต็มที่
         # plot_image_service.py) สลับลำดับมาก่อนขั้นตอนสร้างรูปด้านล่าง
         await upsert_user(req.user_id, req.display_name)
-        plot_id = await save_plot(req.user_id, req.lat, req.lng,
-                                  req.plot_name, req.area_rai,
-                                  polygon=req.polygon)
+        if existing_plot:
+            plot_id = existing_plot["id"]
+            plot_type = existing_plot.get("plot_type")
+        else:
+            plot_id = await save_plot(req.user_id, req.lat, req.lng,
+                                      req.plot_name, req.area_rai,
+                                      polygon=req.polygon, plot_type=req.plot_type)
+            plot_type = req.plot_type
+            if plot_id and crop_ids:
+                await set_plot_crops(plot_id, crop_ids)
+            if plot_id:
+                background.add_task(_store_boundary_check, plot_id, req.lat, req.lng,
+                                    req.polygon, crop_ids, plot_type)
 
         # แปลงที่วาดขอบเขตไว้ (polygon) — สร้างรูปแผนที่ + รูปย่อของแปลง (รูปย่อใช้ในหน้า
         # "แปลงของฉัน") ล้มเหลวได้โดยไม่กระทบคำขอหลัก ส่ง image_url/problem_points
@@ -401,12 +514,13 @@ async def analyze(req: AnalysisRequest, user_id: str = Depends(_analyze_user)):
         image_url = None
         problem_points = []
         if req.polygon and len(req.polygon) >= 3:
-            img_result = await build_plot_grid_image_url(req.polygon, req.plot_name, plot_id=plot_id)
+            img_result = await build_plot_grid_image_url(req.polygon, req.plot_name, plot_id=plot_id,
+                                                         plot_type=plot_type)
             image_url = img_result["url"]
             problem_points = img_result["problem_points"]
 
         await save_analysis(req.user_id, data, message, plot_id=plot_id)
-        return {"status": "ok", "plot_id": plot_id, "data": data,
+        return {"status": "ok", "plot_id": plot_id, "plot_type": plot_type, "data": data,
                 "image_url": image_url, "problem_points": problem_points}
     except (asyncio.TimeoutError, ee.EEException, NoSatelliteDataError) as e:
         logger.error(f"GEE failure: lat={req.lat} lng={req.lng}: {e}")
@@ -826,6 +940,100 @@ async def remove_plot(user_id: str, plot_id: int, me: str = Depends(_api_user)):
     if not ok:
         raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้ หรือไม่มีสิทธิ์ลบ")
     return {"status": "deleted", "plot_id": plot_id}
+
+
+PLOT_MAX_AREA_RAI = 1000   # ตรงกับ LIFF (applyPlotSizeGuard) — ใหญ่กว่านี้คือวาดผิดชัดเจน
+
+
+def _closed_ring(polygon: list[list[float]]) -> list[list[float]]:
+    ring = [list(p[:2]) for p in polygon]
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    if len(ring) < 4:
+        raise HTTPException(status_code=422, detail="ขอบเขตต้องมีอย่างน้อย 3 จุด")
+    return ring
+
+
+@app.patch("/plots/{user_id}/{plot_id}")
+async def edit_plot(user_id: str, plot_id: int, req: PlotUpdateRequest,
+                    background: BackgroundTasks, me: str = Depends(_api_user)):
+    """
+    แก้แปลงเดิม (ชื่อ / ประเภทสวน / ชนิดพืช / ขอบเขต) — ประวัติวิเคราะห์ยังอยู่กับ plot_id เดิม
+    แก้ขอบเขต: เก็บขอบเขตเดิมไว้ใน plot_boundary_history แล้วตรวจคุณภาพขอบเขตใหม่เบื้องหลัง
+    """
+    _require_self(user_id, me)
+    plot = await _require_own_plot(plot_id, me)
+    fields: dict = {}
+    if req.name is not None:
+        fields["name"] = req.name.strip()
+    if "plot_type" in req.model_fields_set:
+        fields["plot_type"] = req.plot_type          # ส่ง null มา = ล้างค่า (ยังไม่ระบุ)
+    crop_ids = _validated_crop_ids(req.crop_ids) if req.crop_ids is not None else None
+    if req.polygon is not None:
+        ring = _closed_ring(req.polygon)
+        area = boundary.polygon_area_rai(ring)
+        if area is not None and area > PLOT_MAX_AREA_RAI:
+            raise HTTPException(status_code=422, detail=f"ขอบเขตใหญ่ผิดปกติ ~{area:.0f} ไร่ กรุณาวาดใหม่ให้ตรงกับสวนจริง")
+        await archive_plot_boundary(plot)
+        verts = ring[:-1]
+        fields.update({"polygon": ring,
+                       "lat": sum(p[1] for p in verts) / len(verts),
+                       "lng": sum(p[0] for p in verts) / len(verts)})
+        if req.area_rai is not None:
+            fields["area_rai"] = req.area_rai
+    elif req.area_rai is not None:
+        fields["area_rai"] = req.area_rai
+
+    if fields:
+        fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if not await update_plot(plot_id, fields):
+            raise HTTPException(status_code=502, detail="บันทึกการแก้ไขไม่สำเร็จ กรุณาลองใหม่")
+    if crop_ids is not None and not await set_plot_crops(plot_id, crop_ids):
+        raise HTTPException(status_code=502, detail="บันทึกชนิดพืชไม่สำเร็จ กรุณาลองใหม่")
+
+    new_polygon = fields.get("polygon", plot.get("polygon"))
+    new_type = fields.get("plot_type", plot.get("plot_type"))
+    if req.polygon is not None or crop_ids is not None or "plot_type" in fields:
+        final_crops = crop_ids if crop_ids is not None else await get_plot_crop_ids(plot_id)
+        background.add_task(_store_boundary_check, plot_id, fields.get("lat", plot["lat"]),
+                            fields.get("lng", plot["lng"]), new_polygon, final_crops, new_type)
+    if req.polygon is not None:
+        # รูปย่อในหน้า "แปลงของฉัน" ให้ตรงกับขอบเขตใหม่ (ทำเบื้องหลัง ใช้ GEE นาน)
+        background.add_task(build_plot_grid_image_url, new_polygon, fields.get("name", plot.get("name", "")),
+                            plot_id=plot_id, plot_type=new_type)
+    return {"status": "ok", "plot_id": plot_id, "updated": sorted(set(fields) - {"updated_at"})
+            + (["crop_ids"] if crop_ids is not None else [])}
+
+
+@app.post("/plots/{user_id}/{plot_id}/merge")
+async def merge_plot(user_id: str, plot_id: int, req: PlotMergeRequest, me: str = Depends(_api_user)):
+    """
+    ย้ายประวัติจากแปลงซ้ำ (source_plot_id — เช่นแปลงที่เคยลบ-วาดใหม่) มารวมที่แปลงนี้
+    แปลงต้นทางถูกปิดใช้งาน ไม่ลบ (ย้อนกลับได้ — supabase/rollback_v14.sql)
+    """
+    _require_self(user_id, me)
+    if req.source_plot_id == plot_id:
+        raise HTTPException(status_code=422, detail="เลือกแปลงเดียวกันไม่ได้")
+    await _require_own_plot(plot_id, me)
+    await _require_own_plot(req.source_plot_id, me)
+    if not await merge_plot_history(me, req.source_plot_id, plot_id):
+        raise HTTPException(status_code=502, detail="ย้ายประวัติไม่สำเร็จ กรุณาลองใหม่")
+    return {"status": "merged", "plot_id": plot_id, "source_plot_id": req.source_plot_id}
+
+
+@app.post("/admin/boundary-check/backfill", dependencies=[Depends(verify_admin)])
+async def admin_boundary_backfill(only_missing: bool = True):
+    """ตรวจคุณภาพขอบเขตย้อนหลังให้แปลงที่มีอยู่แล้ว (ทำแถบบนการ์ดแปลงเดิม) — คืนเฉพาะรหัสแปลง/รหัสคำเตือน"""
+    out = []
+    for p in await get_active_plots():
+        if only_missing and p.get("boundary_check"):
+            continue
+        stored = await _store_boundary_check(p["id"], p["lat"], p["lng"], p.get("polygon"),
+                                             p.get("crop_ids"), p.get("plot_type"))
+        out.append({"plot_id": p["id"], "stored": stored is not None,
+                    "checked": bool(stored and stored.get("land_cover") is not None),
+                    "warnings": [w["code"] for w in (stored or {}).get("warnings", [])]})
+    return {"count": len(out), "plots": out}
 
 
 @app.get("/admin/reports/export.csv", dependencies=[Depends(verify_admin)])

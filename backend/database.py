@@ -517,7 +517,7 @@ async def find_nearby_plot(user_id: str, lat: float, lng: float,
 
 async def save_plot(user_id: str, lat: float, lng: float,
                     name: str = "แปลงที่ 1", area_rai: float | None = None,
-                    polygon: list | None = None) -> int | None:
+                    polygon: list | None = None, plot_type: str | None = None) -> int | None:
     """บันทึกแปลงใหม่ของ user คืน plot_id — ตรวจซ้ำก่อนสร้าง"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
@@ -533,6 +533,8 @@ async def save_plot(user_id: str, lat: float, lng: float,
         payload["area_rai"] = area_rai
     if polygon is not None:
         payload["polygon"] = polygon
+    if plot_type is not None:
+        payload["plot_type"] = plot_type
 
     headers = {**_HEADERS(), "Prefer": "return=representation"}
 
@@ -573,25 +575,146 @@ async def set_plot_thumbnail(plot_id: int, url: str) -> bool:
 
 
 async def get_user_plots(user_id: str) -> list[dict]:
-    """ดึงแปลงทั้งหมดของ user"""
+    """
+    ดึงแปลงที่ใช้งานอยู่ของ user พร้อม crop_ids (จาก plot_crops — 1c)
+    แปลงที่ถูกรวมประวัติเข้าแปลงอื่นแล้ว (is_active = false) ไม่แสดง
+    ถ้ายังไม่ได้รัน migrate_v14 (ไม่มีตาราง plot_crops) จะ fallback เป็น select * แบบเดิม
+    """
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
 
+    base = {"user_id": f"eq.{user_id}", "is_active": "not.is.false", "order": "created_at.asc"}
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
             f"{SUPABASE_URL}/rest/v1/plots",
             headers={**_HEADERS(), "Prefer": ""},
-            params={
-                "user_id": f"eq.{user_id}",
-                "order":   "created_at.asc",
-                "select":  "*",
-            },
+            params={**base, "select": "*,plot_crops(crop_id)"},
         )
+        if resp.status_code == 400:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/plots",
+                headers={**_HEADERS(), "Prefer": ""},
+                params={**base, "select": "*"},
+            )
 
     if resp.status_code != 200:
         logger.error(f"Supabase get_user_plots failed: {resp.status_code}")
         return []
-    return resp.json()
+    plots = resp.json()
+    for p in plots:
+        p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
+    return plots
+
+
+async def update_plot(plot_id: int, fields: dict) -> bool:
+    """แก้ข้อมูลแปลง (ชื่อ/ประเภทสวน/ขอบเขต/boundary_check) — ผู้เรียกต้องตรวจเจ้าของแปลงก่อน"""
+    if not SUPABASE_URL or not SUPABASE_KEY or not fields:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/plots",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            params={"id": f"eq.{plot_id}"},
+            json=fields,
+        )
+    if resp.status_code not in (200, 204):
+        logger.error(f"Supabase update_plot failed: {resp.status_code} — {resp.text}")
+        return False
+    return True
+
+
+async def get_plot_crop_ids(plot_id: int) -> list[str]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/plot_crops",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={"plot_id": f"eq.{plot_id}", "select": "crop_id", "order": "created_at.asc"},
+        )
+    if resp.status_code != 200:
+        return []
+    return [r["crop_id"] for r in resp.json()]
+
+
+async def set_plot_crops(plot_id: int, crop_ids: list[str], source: str = "user") -> bool:
+    """แทนที่ชนิดพืชของแปลงทั้งชุด (ลบของเดิม แล้วใส่ชุดใหม่)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/plot_crops",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            params={"plot_id": f"eq.{plot_id}"},
+        )
+        if resp.status_code not in (200, 204):
+            logger.error(f"Supabase set_plot_crops (delete) failed: {resp.status_code} — {resp.text}")
+            return False
+        if not crop_ids:
+            return True
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/plot_crops",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            json=[{"plot_id": plot_id, "crop_id": c, "source": source} for c in crop_ids],
+        )
+    if resp.status_code not in (200, 201, 204):
+        logger.error(f"Supabase set_plot_crops failed: {resp.status_code} — {resp.text}")
+        return False
+    return True
+
+
+async def archive_plot_boundary(plot: dict) -> bool:
+    """เก็บขอบเขตเดิมไว้ใน plot_boundary_history ก่อนแก้ — ประวัติวิเคราะห์ยังผูกกับ plot_id เดิม"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/plot_boundary_history",
+            headers={**_HEADERS(), "Prefer": "return=minimal"},
+            json={"plot_id": plot["id"], "lat": plot.get("lat"), "lng": plot.get("lng"),
+                  "area_rai": plot.get("area_rai"), "polygon": plot.get("polygon")},
+        )
+    if resp.status_code not in (200, 201, 204):
+        logger.error(f"Supabase archive_plot_boundary failed: {resp.status_code} — {resp.text}")
+        return False
+    return True
+
+
+async def merge_plot_history(user_id: str, source_plot_id: int, target_plot_id: int) -> bool:
+    """
+    ย้ายประวัติวิเคราะห์ + ตารางจุดความชื้นจากแปลงซ้ำ (source) ไปแปลงที่ใช้ต่อ (target)
+    แปลงต้นทางถูกปิดใช้งาน (is_active = false) ไม่ลบ · เก็บ merged_from_plot_id ไว้ย้อนกลับได้
+    (ดู supabase/rollback_v14.sql) — ผู้เรียกต้องตรวจว่าทั้งสองแปลงเป็นของ user_id ก่อน
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    hdr = {**_HEADERS(), "Prefer": "return=minimal"}
+    async with httpx.AsyncClient(timeout=60) as client:
+        for table in ("analyses", "grid_snapshots"):
+            # แถวที่ยังไม่เคยถูกรวม → จำแปลงต้นทาง · แถวที่เคยรวมมาแล้ว → คงต้นทางเดิมไว้
+            for cond, body in (("is.null", {"plot_id": target_plot_id, "merged_from_plot_id": source_plot_id}),
+                               ("not.is.null", {"plot_id": target_plot_id})):
+                resp = await client.patch(
+                    f"{SUPABASE_URL}/rest/v1/{table}", headers=hdr,
+                    params={"plot_id": f"eq.{source_plot_id}", "merged_from_plot_id": cond},
+                    json=body,
+                )
+                if resp.status_code not in (200, 204):
+                    logger.error(f"Supabase merge {table} failed: {resp.status_code} — {resp.text}")
+                    return False
+        resp = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/plots", headers=hdr,
+            params={"id": f"eq.{source_plot_id}", "user_id": f"eq.{user_id}"},
+            json={"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        if resp.status_code not in (200, 204):
+            logger.error(f"Supabase merge deactivate failed: {resp.status_code} — {resp.text}")
+            return False
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/plot_merges", headers=hdr,
+            json={"user_id": user_id, "source_plot_id": source_plot_id, "target_plot_id": target_plot_id},
+        )
+    return True
 
 
 async def get_plot_history(plot_id: int, limit: int = 20) -> list[dict]:
@@ -702,6 +825,17 @@ async def get_all_user_ids() -> list[str]:
         return sorted({r["user_id"] for r in _demo_reports})
     rows = await _fetch_all("users", {"select": "user_id", "order": "user_id.asc"})
     return [r["user_id"] for r in rows or []]
+
+
+async def get_active_plots() -> list[dict]:
+    """แปลงที่ใช้งานอยู่ทั้งหมด (ทุกผู้ใช้) — ใช้ตรวจคุณภาพขอบเขตย้อนหลัง (admin)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    rows = await _fetch_all("plots", {"is_active": "not.is.false", "order": "id.asc",
+                                      "select": "*,plot_crops(crop_id)"})
+    for p in rows or []:
+        p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
+    return rows or []
 
 
 async def get_notifiable_users() -> set[str]:
@@ -868,7 +1002,8 @@ async def get_plot_by_id(plot_id: int) -> dict | None:
         resp = await client.get(
             f"{SUPABASE_URL}/rest/v1/plots",
             headers={**_HEADERS(), "Prefer": ""},
-            params={"id": f"eq.{plot_id}", "select": "id,user_id,lat,lng,name", "limit": "1"},
+            # select * — ได้ polygon/plot_type ไปใช้ตอนแก้ไขแปลง และไม่พังถ้ายังไม่ได้รัน migration ใหม่
+            params={"id": f"eq.{plot_id}", "select": "*", "limit": "1"},
         )
     if resp.status_code != 200 or not resp.json():
         return None

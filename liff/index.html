@@ -451,6 +451,61 @@
     /* ข้อความผิดพลาดที่ไปต่อไม่ได้ (เช่น ยืนยันตัวตนไม่สำเร็จ) — ไม่หมุน ให้รู้ว่าไม่ได้กำลังโหลด */
     #spinner.error { padding: 0 24px; text-align: center; font-size: 17px; line-height: 1.6; }
     #spinner.error::before { display: none; }
+
+    /* ── 1c: ฟอร์มข้อมูลแปลง (ชนิดพืช/ลักษณะสวน) + คำเตือนขอบเขต — แผ่นเลื่อนขึ้นแบบเดียวกับ #detail-box ── */
+    .sheet-modal {
+      display: none; position: fixed; inset: 0; z-index: 9992;
+      background: rgba(15,30,20,.5); align-items: flex-end; justify-content: center; backdrop-filter: blur(2px);
+    }
+    .sheet-modal.show { display: flex; }
+    .sheet-box {
+      background: var(--bg); width: 100%; max-height: 90dvh;
+      border-radius: 22px 22px 0 0; padding: 8px 15px calc(18px + env(safe-area-inset-bottom));
+      overflow-y: auto; box-shadow: 0 -8px 40px rgba(0,0,0,.25);
+      animation: sheetUp .28s cubic-bezier(.22,1,.36,1);
+    }
+    .sheet-box::before { content:""; display:block; width:42px; height:5px; border-radius:3px;
+      background:#cdd8d0; margin:6px auto 14px; }
+    .sheet-box h3 { font-size: 16px; color: var(--green-dk); margin-bottom: 6px; font-weight:700; }
+    .form-label { font-size: 13.5px; font-weight: 700; color: var(--green-dk); margin: 14px 0 7px; }
+    .form-hint { font-size: 12.5px; color: var(--muted); margin-top: 6px; line-height: 1.55; }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
+    .chip {
+      min-height: 42px; padding: 8px 13px; border-radius: 999px; border: 1.5px solid var(--line);
+      background: var(--card); font-size: 14px; font-family: inherit; color: var(--ink); cursor: pointer;
+    }
+    .chip.on { background: #eaf7ee; border-color: var(--green2); color: var(--green-dk); font-weight: 700; }
+    .chip.on::before { content: "✓ "; }
+    .type-row { display: flex; gap: 7px; }
+    .type-row .chip { flex: 1; border-radius: 12px; padding: 8px 6px; text-align: center; }
+    .raised-note {
+      display: none; margin-top: 9px; font-size: 12.5px; color: #37474F; background: #ECEFF1;
+      border-radius: 10px; padding: 9px 11px; line-height: 1.6;
+    }
+    .raised-note.show { display: block; }
+    .sheet-actions { display: flex; gap: 8px; margin-top: 16px; }
+    .sheet-actions button { flex: 1; min-height: 48px; }
+    .bwarn { background: #fff8e1; border-radius: 12px; padding: 11px 12px; margin: 9px 0;
+      font-size: 13.5px; line-height: 1.6; color: var(--ink); }
+    .bwarn b { display: block; margin-bottom: 3px; }
+    .plot-meta { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+    .boundary-banner {
+      margin-top: 5px; font-size: 11.5px; color: #5d4037; background: #fff8e1;
+      border-radius: 8px; padding: 6px 9px; line-height: 1.5;
+    }
+    .boundary-banner button {
+      background: none; border: none; color: var(--green); font-weight: 700; font-size: 11.5px;
+      font-family: inherit; padding: 4px 0 0; cursor: pointer; display: block; min-height: 32px;
+    }
+    .plot-edit-btn {
+      background: #f1f3f2; color: #33473b; border: none;
+      padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
+      cursor: pointer; white-space: nowrap;
+    }
+    #pf-merge-select {
+      width: 100%; padding: 11px; border-radius: 11px; border: 1px solid var(--line);
+      font-family: inherit; font-size: 14px; background: var(--card); color: var(--ink);
+    }
   </style>
 </head>
 <body>
@@ -500,6 +555,7 @@
     </div>
     <div class="btn-row" style="margin-top:8px">
       <button class="btn-grid" id="grid-btn" disabled>🌊 จุดน้ำขังในแปลง</button>
+      <button class="btn-secondary" id="cancel-redraw-btn" style="display:none">✕ ยกเลิกการแก้ขอบเขต</button>
     </div>
 
     <button type="button" class="accordion-toggle" id="more-options-toggle" aria-expanded="false">
@@ -529,7 +585,8 @@
         <span>🟢 กลาง ๆ</span>
         <span>🔵 ชื้นกว่าส่วนอื่น</span>
       </div>
-      <span class="legend-item legend-note">สีเทียบกันเองภายในแปลงนี้ ไม่ได้แปลว่าแห้งหรือแฉะเกินไปจริง &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
+      <span class="legend-item legend-note" id="raised-legend-note" style="display:none"></span>
+      <span class="legend-item legend-note" id="flow-legend-note">สีเทียบกันเองภายในแปลงนี้ ไม่ได้แปลว่าแห้งหรือแฉะเกินไปจริง &nbsp;·&nbsp; ▲ ลูกศร = ทิศทางน้ำไหล &nbsp;·&nbsp; 🟣 วงม่วง = จุดน้ำรวมมาก &nbsp;·&nbsp; แตะจุดดูรายละเอียด</span>
     </div>
   </div>
 </div>
@@ -564,6 +621,49 @@
   </div>
 </div>
 
+<!-- 1c: ข้อมูลแปลง (ตอนเพิ่มแปลงใหม่ / แก้ไขแปลงเดิม) -->
+<div id="plot-form-modal" class="sheet-modal">
+  <div class="sheet-box">
+    <h3 id="pf-title">🌱 ข้อมูลแปลง</h3>
+    <div class="form-label">ชื่อแปลง</div>
+    <div class="input-row" style="margin-bottom:0">
+      <input id="pf-name" type="text" maxlength="50" placeholder="เช่น สวนหลังบ้าน" />
+    </div>
+    <div class="form-label">ปลูกอะไรบ้าง (เลือกได้หลายอย่าง)</div>
+    <div class="chip-row" id="pf-crops"></div>
+    <div class="form-label">ลักษณะสวน</div>
+    <div class="type-row" id="pf-types"></div>
+    <div class="raised-note" id="pf-raised-note"></div>
+    <div id="pf-edit-extra" style="display:none">
+      <div class="form-label">ขอบเขตแปลง</div>
+      <button type="button" class="btn-secondary" id="pf-redraw-btn" style="width:100%">✏️ วาดขอบเขตใหม่ (ประวัติการตรวจยังอยู่)</button>
+      <div id="pf-merge-wrap" style="display:none">
+        <div class="form-label">รวมประวัติจากแปลงที่ซ้ำกัน</div>
+        <div class="form-hint" style="margin:0 0 7px">ถ้าเคยวาดสวนเดียวกันไว้หลายแปลง เลือกแปลงเดิมเพื่อย้ายประวัติการตรวจมาไว้ที่นี่ — แปลงเดิมจะถูกซ่อนจากรายการ ข้อมูลไม่ถูกลบ</div>
+        <select id="pf-merge-select"></select>
+        <button type="button" class="btn-secondary" id="pf-merge-btn" style="width:100%;margin-top:8px">📥 ย้ายประวัติมาที่แปลงนี้</button>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="pf-cancel-btn">ยกเลิก</button>
+      <button type="button" class="btn-primary" id="pf-save-btn">🔍 ตรวจสอบแปลงนี้</button>
+    </div>
+  </div>
+</div>
+
+<!-- 1c: คำเตือนคุณภาพขอบเขต (docs/v2/boundary-quality-warnings.md) — ไม่บล็อก บันทึกตามนี้ได้เสมอ -->
+<div id="bwarn-modal" class="sheet-modal">
+  <div class="sheet-box">
+    <h3>ลองดูขอบเขตอีกนิดก่อนบันทึก</h3>
+    <div id="bwarn-list"></div>
+    <div class="form-hint">ปรับหรือไม่ปรับก็ได้ — ระบบตรวจแปลงให้ตามปกติ</div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="bwarn-keep-btn">บันทึกตามนี้</button>
+      <button type="button" class="btn-primary" id="bwarn-redraw-btn">✏️ วาดใหม่</button>
+    </div>
+  </div>
+</div>
+
 <script src="config.js"></script>
 <script>
   // Config from backend (injected via /liff/config.js) or fallback
@@ -575,6 +675,36 @@
   // ความชื้นจากสูตรเดิม (อ่านทรงพุ่มเป็นน้ำ — ดู docs/v2/risk-level-review.md) ค่าเริ่มต้น = interim
   const RISK_INTERIM = (_cfg.RISK_DISPLAY || "interim") !== "legacy";
   const INTERIM_HEX = "#546E7A";
+  // ปุ๋ย กก./ต้น, ผลผลิต กก./ไร่, ค่า NDVI/BSI ดิบ — สูตรทุเรียนที่ยังไม่สอบเทียบ ซ่อนเป็นค่าเริ่มต้น (1c)
+  const AGRONOMY = _cfg.AGRONOMY_NUMBERS === "on";
+
+  // ─── 1c: ชนิดพืช / ลักษณะสวน ─────────────────────
+  // รายการจริงมาจาก GET /crops (backend/config/crops.json) — ชุดนี้ใช้เฉพาะตอนโหลดไม่สำเร็จ
+  let cropList = [
+    ["coconut_aromatic", "มะพร้าวน้ำหอม"], ["guava", "ฝรั่ง"], ["rose_apple", "ชมพู่"], ["grape", "องุ่น"],
+    ["pomelo", "ส้มโอ"], ["durian", "ทุเรียน"], ["mango", "มะม่วง"], ["lime", "มะนาว"], ["banana", "กล้วย"],
+    ["vegetables", "ผัก (ทั่วไป)"], ["other", "อื่น ๆ"],
+  ].map(([id, name_th]) => ({ id, name_th }));
+  let plotTypes = [
+    { id: "flat", name_th: "แปลงเรียบ" }, { id: "raised_bed", name_th: "สวนยกร่อง" },
+    { id: "vegetable_bed", name_th: "ยกแปลงผัก" },
+  ];
+  const RAISED_BED_NOTE =
+    "สวนยกร่อง: น้ำในร่องทำให้ภาพดาวเทียมเห็นเป็นจุดชื้น และภาพละเอียด 10 เมตรยังแยกร่องน้ำกับสันร่องไม่ได้ " +
+    "แผนที่จึงไม่แสดงลูกศรทางน้ำ วงม่วง และไม่เตือนน้ำขัง — ดูได้ว่าจุดไหนแห้งกว่าส่วนอื่นของแปลง";
+  async function loadCrops() {
+    try {
+      const res = await fetch(`${API_URL}/crops`);
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json.crops?.length) cropList = json.crops;
+      if (json.plot_types?.length) plotTypes = json.plot_types;
+    } catch {}
+  }
+  function cropNames(ids) {
+    return (ids || []).map(id => cropList.find(c => c.id === id)?.name_th).filter(Boolean);
+  }
+  function plotTypeName(id) { return plotTypes.find(t => t.id === id)?.name_th || ""; }
 
   // ─── State ────────────────────────────────────────
   let userId         = null;
@@ -594,6 +724,7 @@
   let gridMarkers    = [];   // sphere.Dot[]/sphere.Polygon[]/sphere.Polyline[] — จุด/หยด/เส้นทางน้ำ
   let gridPointsData = [];   // ข้อมูลดิบของแต่ละจุด (lat/lng/status/...) ไว้จับคู่ตอนแตะแผนที่
   let gridNormalizer = null;   // สเกลสีของตารางจุดล่าสุด (เทียบกันเองในแปลง)
+  let gridRaised = false;   // ตารางจุดล่าสุดเป็นสวนยกร่อง (1c) — แตะจุดแล้วใช้คำเทียบในแปลง ไม่ใช่ "น้ำขัง"
   let gridSinkPoints = new Set();   // จุดที่มีน้ำจากรอบข้างไหลมารวม ≥2 ทิศทาง (ดู computeFlowGraph)
   let persistentMarkers   = [];  // sphere.Dot[] — จุดชื้นสะสม (ชื้นซ้ำๆ หลายวัน)
   let persistentPointsData = []; // ข้อมูลดิบของแต่ละจุดชื้นสะสม ไว้จับคู่ตอนแตะแผนที่
@@ -759,6 +890,8 @@
       }
 
       showSpinner("⏳ กำลังโหลดแปลงของคุณ...");
+      // ไม่ต้องรอ — มีรายการสำรองในหน้าอยู่แล้ว (โหลดเสร็จแล้ววาดการ์ดใหม่ให้ชื่อพืชครบ)
+      loadCrops().then(() => { if (userPlots.length) renderPlotList(); });
       const cached = readPlotsCache(userId);
       if (cached) { userPlots = cached.plots; renderPlotList(); }   // แสดงของเดิมทันที แล้วค่อยอัปเดต
       const [profile] = await Promise.all([profilePromise, loadUserPlots()]);
@@ -885,6 +1018,15 @@
     return `<div class="oversize-warn">⚠️ ใหญ่ผิดปกติ ~${areaRai.toFixed(0)} ไร่ — น่าจะวาดคลาดเคลื่อน แนะนำกด "🗑️ ลบ" แล้ววาดใหม่ให้ตรงกับสวนจริง</div>`;
   }
 
+  function formatPlotMeta(plot) {
+    const names = cropNames(plot.crop_ids);
+    const type = plotTypeName(plot.plot_type);
+    if (!names.length && !type) {
+      return `<div class="plot-meta">🌱 ยังไม่ได้ระบุพืช — แตะ "✏️ แก้ไข" เพื่อเลือก</div>`;
+    }
+    return `<div class="plot-meta">🌱 ${escHtml(names.join(", ") || "ยังไม่ได้ระบุพืช")}${type ? ` · ${escHtml(type)}` : ""}</div>`;
+  }
+
   // ─── Load user plots ──────────────────────────────
   async function loadUserPlots() {
     try {
@@ -926,20 +1068,24 @@
           <div class="plot-coords">📍 ${plot.lat.toFixed(4)}, ${plot.lng.toFixed(4)}</div>
           ${plot.area_rai ? `<div class="plot-area">📐 ${plot.area_rai} ไร่</div>` : ""}
           ${formatPlotCreated(plot.created_at)}
+          ${formatPlotMeta(plot)}
           ${formatOversizedWarning(plot.polygon)}
+          ${plot.boundary_check?.banner ? `<div class="boundary-banner">${escHtml(plot.boundary_check.banner)}
+            <button type="button" class="banner-redraw-btn">✏️ ${plot.polygon && plot.polygon.length >= 3 ? "วาดขอบเขตใหม่" : "วาดขอบเขต"}</button></div>` : ""}
         </div>
         <div class="plot-btn-col">
           <button class="plot-check-btn" data-lat="${plot.lat}" data-lng="${plot.lng}"
                   data-name="${escHtml(plot.name || "")}">
             🔍 ตรวจ
           </button>
+          ${plot.id ? `<button class="plot-edit-btn">✏️ แก้ไข</button>` : ""}
           ${plot.id ? `<button class="plot-hist-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
             📊 ประวัติ
           </button>` : ""}
           ${plot.id ? `<button class="plot-ts-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
-            📈 NDVI 2ปี
+            📈 ความเขียว 2ปี
           </button>` : ""}
           ${plot.id && plot.polygon && plot.polygon.length >= 3 ? `<button class="plot-wet-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
@@ -959,8 +1105,17 @@
           parseFloat(btn.dataset.lng),
           btn.dataset.name,
           plot.area_rai || null,
-          plot.polygon || null
+          plot.polygon || null,
+          plot.id ? { plot_id: plot.id } : {}
         );
+      });
+      card.querySelector(".plot-edit-btn")?.addEventListener("click", e => {
+        e.stopPropagation();
+        openPlotForm("edit", plot);
+      });
+      card.querySelector(".banner-redraw-btn")?.addEventListener("click", e => {
+        e.stopPropagation();
+        startRedraw(plot);
       });
       const histBtn = card.querySelector(".plot-hist-btn");
       if (histBtn) {
@@ -1548,7 +1703,7 @@
     const p = findNearestGridPoint(lat, lng);
     if (!p) return false;
     const sinkNote = gridSinkPoints.has(p) ? "  🎯 จุดรวมน้ำจากรอบข้าง — เหมาะขุดร่องระบายน้ำเริ่มจากตรงนี้" : "";
-    if (RISK_INTERIM) {
+    if (RISK_INTERIM || gridRaised) {
       const rel = gridNormalizer ? gridNormalizer(p.swab_index) : 0;
       const relText = rel >= 0.15 ? "🔵 ชื้นกว่าส่วนอื่นของแปลง"
                     : rel <= -0.15 ? "🔴 แห้งกว่าส่วนอื่นของแปลง" : "🟢 ใกล้เคียงส่วนอื่นของแปลง";
@@ -1562,8 +1717,11 @@
     return true;
   }
 
-  async function showMoistureGrid(polyOverride) {
-    const poly = polyOverride || polygonCoords;
+  // plotType = "raised_bed" (1c): ไม่วาดลูกศรทางน้ำ/วงม่วง ไม่นับจุดชื้นเป็นปัญหา (น้ำในร่อง) — ดู RAISED_BED_NOTE
+  async function showMoistureGrid(polyOverride, plotType) {
+    const poly = Array.isArray(polyOverride) ? polyOverride : polygonCoords;
+    const raised = plotType === "raised_bed";
+    gridRaised = raised;
     if (!poly || poly.length < 3) {
       return showToast("❌ กรุณาวาดขอบเขตแปลงก่อน");
     }
@@ -1589,7 +1747,7 @@
         const tileSizeM = Math.min(spacingM, actualMinDist) * 0.96;
         const normalizeSwab = buildSwabNormalizer(json.points);
         gridNormalizer = normalizeSwab;   // ใช้ตอนแตะจุด (โหมดกำลังปรับปรุง)   // ยืดสีให้เต็ม scale ตามข้อมูลจริงของแปลงนี้
-        const { inDegree } = computeFlowGraph(json.points, spacingM);
+        const { inDegree } = raised ? { inDegree: new Map() } : computeFlowGraph(json.points, spacingM);
         // ≥3 ทาง ไม่ใช่ ≥2 — ทดสอบแล้วบนกริดหนาแน่นจริง ≥2 ติดง่ายเกินไปจนมีจุดเด่น
         // กระจายเกลื่อนแทบทุกจุด (สัญญาณเสียความหมาย) ≥3 คัดเหลือแค่จุดที่รวมน้ำจาก
         // รอบข้างชัดเจนจริงๆ ไม่กี่จุดต่อแปลง
@@ -1616,7 +1774,7 @@
         const usedChevronBuckets = new Set();
         let flowCount = 0;
         json.points.forEach(p => {
-          if (!p.flow_to) return;
+          if (raised || !p.flow_to) return;
           flowCount++;
           const key = Math.round(p.lat / chevronBucketDeg) + "_" + Math.round(p.lng / chevronBucketDeg);
           if (usedChevronBuckets.has(key)) return;
@@ -1643,6 +1801,9 @@
           gridMarkers.push(ring);
         });
 
+        document.getElementById("raised-legend-note").textContent = RAISED_BED_NOTE;
+        document.getElementById("raised-legend-note").style.display = raised ? "" : "none";
+        document.getElementById("flow-legend-note").style.display = raised ? "none" : "";
         document.getElementById("grid-legend").classList.add("show");
       });
 
@@ -1655,7 +1816,9 @@
       const waterlogged = json.points.filter(p => p.status === "waterlogged" || p.status === "drought").length;
       const sinkCount = gridSinkPoints.size;
       showToast(
-        waterlogged > 0
+        raised
+          ? "✅ ตรวจแล้ว — สวนยกร่อง: ดูจุดที่แห้งกว่าส่วนอื่นได้จากสี (ไม่เตือนน้ำขังจากร่อง)"
+          : waterlogged > 0
           ? `🌊 ตรวจแล้ว พบจุดเสี่ยงน้ำขัง/แล้งจัด ${waterlogged} จุด` +
             (sinkCount ? ` — 🎯 ${sinkCount} จุดควรขุดร่องน้ำก่อน` : "") +
             ` · ดูสีบนแผนที่ได้เลย`
@@ -1668,7 +1831,9 @@
     }
   }
 
-  document.getElementById("grid-btn").addEventListener("click", showMoistureGrid);
+  // เดิมส่ง showMoistureGrid ตรงๆ → event ถูกส่งเข้าไปเป็น polygon (ตอนนี้กันไว้ในฟังก์ชันแล้วด้วย)
+  document.getElementById("grid-btn").addEventListener("click", () =>
+    showMoistureGrid(null, redrawPlot ? redrawPlot.plot_type : null));
 
   // ─── จุดชื้นสะสม (persistent wet points) ──────────
   // ต่างจาก showMoistureGrid: ไม่ได้ยิง GEE สดๆ ตอนนี้ แต่ดึงประวัติ grid ที่
@@ -1799,22 +1964,249 @@
   });
 
   // ─── Submit (new plot from map) ───────────────────
+  // 1c: กดตรวจแปลงใหม่ → ฟอร์มชื่อ/ชนิดพืช/ลักษณะสวน → ตรวจขอบเขต → วิเคราะห์
+  //     ระหว่างแก้ขอบเขตแปลงเดิม (redrawPlot) → ตรวจขอบเขต → บันทึกขอบเขตใหม่ (PATCH) → วิเคราะห์
   document.getElementById("submit-btn").addEventListener("click", () => {
     if (!selLat || !selLng) return;
-    const name = document.getElementById("plot-name-input").value.trim()
-                 || `แปลงที่ ${userPlots.length + 1}`;
-    const area = parseFloat(document.getElementById("plot-area-input").value) || null;
-    submitAnalysis(selLat, selLng, name, area, polygonCoords);
+    if (redrawPlot) { saveRedraw(); return; }
+    openPlotForm("new", null);
   });
 
+  // ─── 1c: ฟอร์มข้อมูลแปลง ─────────────────────────
+  let pf = { mode: "new", plot: null, crops: new Set(), type: null };
+  let redrawPlot = null;       // แปลงเดิมที่กำลังวาดขอบเขตใหม่ — null = วาดแปลงใหม่
+  let redrawRefOverlay = null; // เส้นขอบเขตเดิม (จาง) ไว้เทียบตอนวาดใหม่
+
+  function renderPlotForm() {
+    const cropsEl = document.getElementById("pf-crops");
+    cropsEl.innerHTML = "";
+    cropList.forEach(c => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (pf.crops.has(c.id) ? " on" : "");
+      b.textContent = c.name_th;
+      b.setAttribute("aria-pressed", pf.crops.has(c.id) ? "true" : "false");
+      b.addEventListener("click", () => {
+        pf.crops.has(c.id) ? pf.crops.delete(c.id) : pf.crops.add(c.id);
+        renderPlotForm();
+      });
+      cropsEl.appendChild(b);
+    });
+    const typesEl = document.getElementById("pf-types");
+    typesEl.innerHTML = "";
+    plotTypes.forEach(t => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (pf.type === t.id ? " on" : "");
+      b.textContent = t.name_th;
+      b.setAttribute("aria-pressed", pf.type === t.id ? "true" : "false");
+      b.addEventListener("click", () => { pf.type = pf.type === t.id ? null : t.id; renderPlotForm(); });
+      typesEl.appendChild(b);
+    });
+    const note = document.getElementById("pf-raised-note");
+    note.textContent = RAISED_BED_NOTE;
+    note.classList.toggle("show", pf.type === "raised_bed");
+  }
+
+  function openPlotForm(mode, plot) {
+    pf = { mode, plot, crops: new Set(plot?.crop_ids || []), type: plot?.plot_type || null };
+    document.getElementById("pf-title").textContent =
+      mode === "edit" ? `✏️ แก้ไขแปลง "${plot.name || "แปลง"}"` : "🌱 ข้อมูลแปลงใหม่";
+    document.getElementById("pf-name").value = mode === "edit"
+      ? (plot.name || "")
+      : (document.getElementById("plot-name-input").value.trim() || `แปลงที่ ${userPlots.length + 1}`);
+    document.getElementById("pf-save-btn").textContent = mode === "edit" ? "💾 บันทึก" : "🔍 ตรวจสอบแปลงนี้";
+    document.getElementById("pf-edit-extra").style.display = mode === "edit" ? "" : "none";
+    if (mode === "edit") {
+      const others = userPlots.filter(p => p.id && p.id !== plot.id);
+      document.getElementById("pf-merge-wrap").style.display = others.length ? "" : "none";
+      document.getElementById("pf-merge-select").innerHTML =
+        `<option value="">— เลือกแปลงเดิม —</option>` +
+        others.map(p => `<option value="${p.id}">${escHtml(p.name || "แปลง")} · ${formatPlotCreated(p.created_at).replace(/<[^>]+>/g, "").trim()}</option>`).join("");
+    }
+    renderPlotForm();
+    document.getElementById("plot-form-modal").classList.add("show");
+  }
+  function closePlotForm() { document.getElementById("plot-form-modal").classList.remove("show"); }
+
+  document.getElementById("pf-cancel-btn").addEventListener("click", closePlotForm);
+  document.getElementById("plot-form-modal").addEventListener("click", e => {
+    if (e.target === document.getElementById("plot-form-modal")) closePlotForm();
+  });
+
+  document.getElementById("pf-save-btn").addEventListener("click", async () => {
+    const name = document.getElementById("pf-name").value.trim()
+                 || (pf.mode === "edit" ? pf.plot.name : `แปลงที่ ${userPlots.length + 1}`);
+    const cropIds = [...pf.crops];
+    const plotType = pf.type;
+    closePlotForm();
+    if (pf.mode === "edit") {
+      await patchPlot(pf.plot.id, { name, crop_ids: cropIds, plot_type: plotType }, "💾 บันทึกแล้ว");
+      return;
+    }
+    const lat = selLat, lng = selLng, poly = polygonCoords;
+    const area = parseFloat(document.getElementById("plot-area-input").value) || null;
+    await checkBoundaryThen(lat, lng, poly, cropIds, plotType, () =>
+      submitAnalysis(lat, lng, name, area, poly, { crop_ids: cropIds, plot_type: plotType }));
+  });
+
+  async function patchPlot(plotId, fields, okMsg) {
+    showSpinner("⏳ กำลังบันทึก...");
+    try {
+      const res = await apiFetch(`${API_URL}/plots/${encodeURIComponent(userId)}/${plotId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+      if (!res.ok) throw new Error(friendlyErrorMessage(await res.text(), "บันทึกไม่สำเร็จ"));
+      if (okMsg) showToast(okMsg);
+      await loadUserPlots();
+      if (map) addPlotOverlays();
+      return true;
+    } catch (e) {
+      showToast("❌ " + e.message);
+      return false;
+    } finally {
+      hideSpinner();
+    }
+  }
+
+  document.getElementById("pf-redraw-btn").addEventListener("click", () => {
+    const plot = pf.plot;
+    closePlotForm();
+    startRedraw(plot);
+  });
+
+  document.getElementById("pf-merge-btn").addEventListener("click", async () => {
+    const sourceId = parseInt(document.getElementById("pf-merge-select").value);
+    if (!sourceId) return showToast("เลือกแปลงเดิมก่อน");
+    const source = userPlots.find(p => p.id === sourceId);
+    const target = pf.plot;
+    if (!confirm(`ย้ายประวัติการตรวจของ "${source?.name || "แปลง"}" มารวมที่ "${target.name || "แปลง"}"?\n` +
+                 `"${source?.name || "แปลง"}" จะถูกซ่อนจากรายการ (ข้อมูลไม่ถูกลบ)`)) return;
+    closePlotForm();
+    showSpinner("⏳ กำลังย้ายประวัติ...");
+    try {
+      const res = await apiFetch(`${API_URL}/plots/${encodeURIComponent(userId)}/${target.id}/merge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_plot_id: sourceId }),
+      });
+      if (!res.ok) throw new Error(friendlyErrorMessage(await res.text(), "ย้ายประวัติไม่สำเร็จ"));
+      showToast("📥 ย้ายประวัติแล้ว");
+      await loadUserPlots();
+      if (map) addPlotOverlays();
+    } catch (e) {
+      showToast("❌ " + e.message);
+    } finally {
+      hideSpinner();
+    }
+  });
+
+  // ─── 1c: คำเตือนคุณภาพขอบเขต ─────────────────────
+  // ถามเฉพาะตอนบันทึก · server ช้าเกิน/ล่ม = ข้ามไม่ถาม · ผู้ใช้กด "บันทึกตามนี้" ได้เสมอ
+  async function checkBoundaryThen(lat, lng, poly, cropIds, plotType, proceed) {
+    let warnings = [];
+    showSpinner("⏳ กำลังดูขอบเขตแปลง...");
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      const res = await apiFetch(`${API_URL}/plots/boundary-check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat, lng, polygon: poly || null, crop_ids: cropIds || [], plot_type: plotType || null }),
+        signal: ctl.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) warnings = (await res.json()).warnings || [];
+    } catch {} finally {
+      hideSpinner();
+    }
+    if (!warnings.length) return proceed();
+
+    document.getElementById("bwarn-list").innerHTML = warnings.map(w =>
+      `<div class="bwarn"><b>${escHtml(w.title)}</b>${escHtml(w.body)}</div>`).join("");
+    document.getElementById("bwarn-keep-btn").textContent = warnings[0].secondary || "บันทึกตามนี้";
+    document.getElementById("bwarn-redraw-btn").textContent = warnings[0].primary || "✏️ วาดใหม่";
+    const modal = document.getElementById("bwarn-modal");
+    modal.classList.add("show");
+    return new Promise(resolve => {
+      const done = (fn) => {
+        modal.classList.remove("show");
+        keep.onclick = redraw.onclick = null;
+        resolve(fn ? fn() : undefined);
+      };
+      const keep = document.getElementById("bwarn-keep-btn");
+      const redraw = document.getElementById("bwarn-redraw-btn");
+      keep.onclick = () => done(proceed);
+      redraw.onclick = () => done(() => {
+        switchTab("new-plot");
+        startDrawing();
+        if (redrawRefOverlay) showCoordsDisplay(`✏️ วาดขอบเขตใหม่ของ "${escHtml(redrawPlot?.name || "แปลง")}" — เส้นจางคือขอบเขตเดิม`);
+      });
+    });
+  }
+
+  // ─── 1c: แก้ขอบเขตแปลงเดิม (ประวัติการตรวจยังอยู่กับแปลงเดิม) ──
+  function startRedraw(plot) {
+    redrawPlot = plot;
+    switchTab("new-plot");
+    clearGridOverlay();
+    if (!map) return showToast("⏳ แผนที่ยังไม่พร้อม ลองใหม่อีกครั้ง");
+    if (redrawRefOverlay) { try { map.Overlays.remove(redrawRefOverlay); } catch {} redrawRefOverlay = null; }
+    if (plot.polygon && plot.polygon.length >= 3) {
+      redrawRefOverlay = new sphere.Polyline(plot.polygon.map(c => ({ lon: c[0], lat: c[1] })), {
+        lineWidth: 2, lineColor: "rgba(255,255,255,0.85)", lineStyle: sphere.LineStyle?.Dashed,
+      });
+      map.Overlays.add(redrawRefOverlay);
+    }
+    map.location({ lon: plot.lng, lat: plot.lat }, false);
+    map.zoom(18, false);
+    startDrawing();
+    document.getElementById("submit-btn").textContent = "💾 บันทึกขอบเขตใหม่";
+    document.getElementById("cancel-redraw-btn").style.display = "";
+    showCoordsDisplay(`✏️ วาดขอบเขตใหม่ของ "${escHtml(plot.name || "แปลง")}" — เส้นจางคือขอบเขตเดิม`);
+  }
+
+  function endRedraw() {
+    redrawPlot = null;
+    if (redrawRefOverlay && map) { try { map.Overlays.remove(redrawRefOverlay); } catch {} }
+    redrawRefOverlay = null;
+    document.getElementById("submit-btn").textContent = "🔍 ตรวจสอบแปลงนี้";
+    document.getElementById("cancel-redraw-btn").style.display = "none";
+  }
+
+  document.getElementById("cancel-redraw-btn").addEventListener("click", () => {
+    endRedraw();
+    clearDrawing();
+    switchTab("my-plots");
+  });
+
+  async function saveRedraw() {
+    if (!polygonCoords || polygonCoords.length < 4) return showToast("✏️ วาดขอบเขตให้ครบอย่างน้อย 3 จุดก่อน");
+    const plot = redrawPlot;
+    const lat = selLat, lng = selLng, poly = polygonCoords;
+    await checkBoundaryThen(lat, lng, poly, plot.crop_ids, plot.plot_type, async () => {
+      const ok = await patchPlot(plot.id, { polygon: poly }, null);
+      if (!ok) return;
+      endRedraw();
+      showToast(`💾 บันทึกขอบเขตใหม่ของ "${plot.name || "แปลง"}" แล้ว — กำลังตรวจแปลง...`);
+      await submitAnalysis(lat, lng, plot.name, null, poly, { plot_id: plot.id });
+    });
+  }
+
   // ─── Core submit ─────────────────────────────────
-  async function submitAnalysis(lat, lng, plotName, areaRai, polyCoords) {
+  // extra (1c): { plot_id } = ตรวจแปลงเดิมซ้ำ · { crop_ids, plot_type } = แปลงใหม่
+  async function submitAnalysis(lat, lng, plotName, areaRai, polyCoords, extra = {}) {
     showSpinner("⏳ กำลังวิเคราะห์ข้อมูลดาวเทียม...");
     try {
       // ไม่ส่ง user_id แล้ว — server ใช้เจ้าของ token เท่านั้น
       const body = { lat, lng, display_name: displayName, plot_name: plotName };
       if (areaRai) body.area_rai = areaRai;
       if (polyCoords) body.polygon = polyCoords;
+      if (extra.plot_id) body.plot_id = extra.plot_id;
+      if (extra.crop_ids?.length) body.crop_ids = extra.crop_ids;
+      if (extra.plot_type) body.plot_type = extra.plot_type;
 
       const res = await apiFetch(`${API_URL}/analyze`, {
         method: "POST",
@@ -1852,7 +2244,7 @@
         map.location({ lon: sumLng, lat: sumLat }, false);
         map.zoom(18, false);
         showToast(`${status.icon} "${plotName}" — ${status.text} · กำลังปักจุดน้ำขัง/ความชื้น...`);
-        await showMoistureGrid(polyCoords);
+        await showMoistureGrid(polyCoords, json.plot_type);
       } else {
         // ไม่มีขอบเขตแปลง (ปักหมุดจุดเดียว) — ไม่มีจุดตารางให้โชว์บนแผนที่
         // ใช้หน้าต่างผลวิเคราะห์แบบเต็มตามเดิม
@@ -1913,7 +2305,7 @@
 
       document.getElementById("modal-body").innerHTML =
         `<div class="sparkline-wrap">
-           <div class="sparkline-label">แนวโน้ม NDVI (${sparkRows.length} ครั้งล่าสุด)</div>
+           <div class="sparkline-label">แนวโน้มความเขียวของใบ (${sparkRows.length} ครั้งล่าสุด)</div>
            ${svg}
          </div>` +
         rows.map(r => {
@@ -1941,12 +2333,12 @@
         return `<div class="hist-row">
           <div class="hist-date">📅 ${date}</div>
           <span class="hist-badge ${cls}">${label}</span>
-          NDVI ${(r.ndvi_now || 0).toFixed(3)}
+          ใบ ${r.ndvi_change >= 0 ? "เขียวเท่าเดิมหรือดีขึ้น" : "เขียวลดลง"}
           &nbsp;<small style="color:#888">(${arrow}${Math.abs(+change)}%)</small>
           <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;font-size:11px;color:#666">
             <span>${dispIcon} ดิน ${stability}%</span>
-            <span>📊 ผลผลิต ${yieldKg} กก./ไร่</span>
-            <span>🧪 ปุ๋ย ${fertLabel}</span>
+            ${AGRONOMY ? `<span>📊 ผลผลิต ${yieldKg} กก./ไร่</span>
+            <span>🧪 ปุ๋ย ${fertLabel}</span>` : ""}
           </div>
         </div>`;
       }).join("");
@@ -1999,7 +2391,7 @@
   let tsChart = null;
 
   async function showNDVITimeseries(plotId, plotName) {
-    document.getElementById("modal-title").textContent = `📈 NDVI รายเดือน — ${plotName}`;
+    document.getElementById("modal-title").textContent = `📈 ความเขียวของใบรายเดือน — ${plotName}`;
     document.getElementById("modal-body").innerHTML =
       `<p style="color:#888;font-size:13px">⏳ กำลังดึงข้อมูลจากดาวเทียม 2 ปี...</p>`;
     document.getElementById("detail-modal").classList.add("show");
@@ -2043,7 +2435,7 @@
         data: {
           labels: series.map(s => s.month),
           datasets: [{
-            label: "NDVI",
+            label: "ความเขียวของใบ",
             data: series.map(s => s.ndvi),
             borderColor: "#1a7a3c",
             backgroundColor: grad,
@@ -2059,7 +2451,7 @@
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
-              label: ctx => `NDVI: ${ctx.parsed.y.toFixed(3)}`
+              label: ctx => `ความเขียว: ${ctx.parsed.y.toFixed(2)}`
             }}
           },
           scales: {
@@ -2068,7 +2460,7 @@
             },
             y: {
               min: 0, max: 1,
-              title: { display: true, text: "NDVI", font: { size: 11 } },
+              title: { display: true, text: "ความเขียว (0–1)", font: { size: 11 } },
               ticks: { font: { size: 10 } }
             }
           }
@@ -2076,7 +2468,7 @@
       });
     } catch {
       document.getElementById("modal-body").innerHTML =
-        `<p style="color:#e53935;font-size:13px">ไม่สามารถโหลดข้อมูล NDVI ได้</p>`;
+        `<p style="color:#e53935;font-size:13px">ไม่สามารถโหลดข้อมูลความเขียวของใบได้</p>`;
     }
   }
 
@@ -2247,8 +2639,8 @@
           <span class="value">${ndviLabel}</span>
         </div>
         <div class="result-row">
-          <span class="label">ค่า NDVI</span>
-          <span class="value">${d.ndvi_now.toFixed(2)} (${ndviArrow} ${ndviChangePct}%)</span>
+          <span class="label">เทียบกับปีก่อน</span>
+          <span class="value">${ndviArrow}${AGRONOMY ? ` ${ndviChangePct}% (NDVI ${d.ndvi_now.toFixed(2)})` : ""}</span>
         </div>
         <div class="result-meter">
           <div class="result-meter-fill" style="width:${ndviPct}%;background:${d.ndvi_now >= 0.5 ? '#1a7a3c' : d.ndvi_now >= 0.3 ? '#fb8c00' : '#e53935'}"></div>
@@ -2342,11 +2734,11 @@
 
       <!-- สภาพหน้าดิน (Topsoil) -->
       <div class="result-section ${topsoilClass}">
-        <div class="result-section-title">🌱 สภาพหน้าดิน (Topsoil)</div>
-        <div class="result-row">
+        <div class="result-section-title">🌱 สภาพหน้าดิน</div>
+        ${AGRONOMY ? `<div class="result-row">
           <span class="label">ค่า BSI</span>
           <span class="value">${topsoilBsiText}</span>
-        </div>
+        </div>` : ""}
         <div class="result-row">
           <span class="label">สถานะ</span>
           <span class="value" style="color:${topsoilRiskColor};font-weight:bold">${topsoilRiskLabel}</span>
@@ -2356,7 +2748,8 @@
         </div>` : ''}
       </div>
 
-      <!-- ผลผลิตประเมิน -->
+      <!-- ผลผลิตประเมิน + คำแนะนำปุ๋ย: สูตรทุเรียนที่ยังไม่สอบเทียบ — แสดงเฉพาะเมื่อเปิด AGRONOMY (1c) -->
+      ${AGRONOMY ? `
       <div class="result-section">
         <div class="result-section-title">📊 ประเมินผลผลิต</div>
         ${d.predicted_yield_kg_per_rai != null ? `
@@ -2400,7 +2793,7 @@
         ${fert.ca_kg_per_tree > 0 ? `<div class="result-row"><span class="label">แคลเซียม (Ca)</span><span class="value">${fert.ca_kg_per_tree} กก.</span></div>` : ''}
         ${fert.mg_kg_per_tree > 0 ? `<div class="result-row"><span class="label">แมกนีเซียม (Mg)</span><span class="value">${fert.mg_kg_per_tree} กก.</span></div>` : ''}
         <div class="result-advice">${escHtml(fert.note || '')}</div>
-      </div>
+      </div>` : ""}
 
       <!-- ผลกระทบ -->
       ${impacts ? `<div class="result-section ${impClass}">
