@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ผู้ใช้และสิทธิ์ — IAM ROOT</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* หน้าผู้ดูแล (Phase 2a): บทบาท/พื้นที่ของผู้ใช้, รหัสเชิญเจ้าหน้าที่, audit log — ใช้ X-Admin-Key ชุดเดียวกับ dashboard */
+    :root { --bg:#f4f7f4; --card:#fff; --ink:#1f2a24; --muted:#5f7066; --line:#dfe7e1; --green:#15803d;
+            --green-bg:#eaf7ee; --amber:#92400e; --amber-bg:#fef3c7; --red:#b91c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg:#101613; --card:#18211c; --ink:#e6efe9; --muted:#a2b3a8; --line:#2b3a31;
+        --green:#22c55e; --green-bg:#173322; --amber:#fcd34d; --amber-bg:#3a2f12; --red:#f87171; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Sarabun', sans-serif; background: var(--bg); color: var(--ink); font-size: 15px; }
+    header { background: #14532d; color: #fff; padding: 14px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 200px; }
+    header a { color: #bbf7d0; }
+    main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+    h2 { font-size: 16px; margin: 0 0 10px; color: var(--green); }
+    select, input, button { font-family: inherit; font-size: 14.5px; }
+    select, input { padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink); }
+    button { padding: 8px 13px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; min-height: 40px; }
+    button.primary { background: var(--green); color: #fff; border-color: var(--green); font-weight: 700; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    .areas { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; }
+    .areas label { white-space: nowrap; }
+    .note { background: var(--amber-bg); color: var(--amber); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; line-height: 1.6; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .code { font-family: ui-monospace, monospace; font-size: 16px; font-weight: 700; letter-spacing: 1px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+    #login { max-width: 420px; margin: 40px auto; background: var(--card); padding: 18px; border-radius: 12px; border: 1px solid var(--line); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>👥 ผู้ใช้ สิทธิ์ และรหัสเชิญ</h1>
+  <a href="/dashboard/">← กลับหน้าหลัก</a>
+</header>
+<main>
+  <div id="login" hidden>
+    <div class="row"><input id="key-input" type="password" placeholder="รหัสผู้ดูแล (Admin key)" style="flex:1" autocomplete="off"></div>
+    <button class="primary" id="key-btn">เข้าสู่ระบบ</button>
+  </div>
+
+  <div id="app" hidden>
+    <div class="note">
+      เจ้าหน้าที่เห็นแปลงในอำเภอที่รับผิดชอบ <b>เฉพาะของเกษตรกรที่ยินยอมแบ่งปันกับเจ้าหน้าที่</b> และแปลงที่ตัวเองวาด ·
+      ทุกการเข้าดูแปลงของคนอื่นและการเปลี่ยนสิทธิ์ถูกบันทึกใน audit log
+    </div>
+
+    <section>
+      <h2>สร้างรหัสเชิญเจ้าหน้าที่</h2>
+      <div class="row">
+        <select id="inv-role"><option value="officer">เจ้าหน้าที่</option><option value="admin">ผู้ดูแลระบบ</option></select>
+        <label>หมดอายุใน <input id="inv-days" type="number" min="1" max="90" value="14" style="width:70px"> วัน</label>
+        <label>ใช้ได้ <input id="inv-uses" type="number" min="1" max="100" value="1" style="width:70px"> คน</label>
+        <input id="inv-note" placeholder="หมายเหตุ เช่น ชื่อเจ้าหน้าที่" maxlength="200" style="flex:1;min-width:180px">
+      </div>
+      <div class="areas" id="inv-areas"></div>
+      <div class="row" style="margin-top:10px"><button class="primary" id="inv-create">➕ สร้างรหัสเชิญ</button></div>
+      <div id="inv-result"></div>
+    </section>
+
+    <section>
+      <h2>ผู้ใช้</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ชื่อ</th><th>บทบาท</th><th>อำเภอที่รับผิดชอบ</th><th>แปลง</th><th>แบ่งปันกับเจ้าหน้าที่</th><th>ใช้ล่าสุด</th><th></th></tr></thead>
+        <tbody id="users"></tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>รหัสเชิญ</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>รหัส</th><th>บทบาท</th><th>อำเภอ</th><th>ใช้แล้ว</th><th>หมดอายุ</th><th>หมายเหตุ</th><th></th></tr></thead>
+        <tbody id="invites"></tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>Audit log (7 วันล่าสุด)</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>เวลา</th><th>ผู้กระทำ</th><th>การกระทำ</th><th>เป้าหมาย</th><th>เจ้าของข้อมูล</th></tr></thead>
+        <tbody id="audit"></tbody>
+      </table></div>
+    </section>
+  </div>
+</main>
+
+<script>
+  const KEY_STORE = "geoai_admin_key";
+  let ADMIN_KEY = "", DISTRICTS = [], ROLES = {};
+  try { ADMIN_KEY = localStorage.getItem(KEY_STORE) || ""; } catch {}
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // ไม่แสดง LINE userId เต็ม (ข้อมูลส่วนบุคคล) — แสดง 4 ตัวท้ายพอแยกคนได้
+  const shortId = id => id ? "…" + String(id).slice(-4) : "-";
+  const fmt = iso => iso ? new Date(iso).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" }) : "-";
+  const areaName = c => DISTRICTS.find(d => d.code === c)?.name_th || c;
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Admin-Key": ADMIN_KEY, ...(opts.headers || {}) } });
+    if (res.status === 403) { $("login").hidden = false; $("app").hidden = true; throw new Error("รหัสผู้ดูแลไม่ถูกต้อง"); }
+    if (!res.ok) { let d = ""; try { d = (await res.json()).detail; } catch {} throw new Error(typeof d === "string" && d ? d : `HTTP ${res.status}`); }
+    return res.json();
+  }
+  $("key-btn").onclick = () => { ADMIN_KEY = $("key-input").value.trim(); try { localStorage.setItem(KEY_STORE, ADMIN_KEY); } catch {} load(); };
+
+  function areaChecks(name, selected) {
+    return DISTRICTS.map(d => `<label><input type="checkbox" name="${name}" value="${d.code}" ${selected.includes(d.code) ? "checked" : ""}> ${esc(d.name_th)}</label>`).join("");
+  }
+  const checked = (root, name) => [...root.querySelectorAll(`input[name="${name}"]:checked`)].map(i => i.value);
+
+  async function load() {
+    try {
+      DISTRICTS = (await api("/admin/areas")).districts;
+      const u = await api("/admin/users");
+      ROLES = u.roles;
+      $("login").hidden = true; $("app").hidden = false;
+      if (!$("inv-areas").innerHTML) $("inv-areas").innerHTML = areaChecks("inv-area", []);
+      renderUsers(u.users);
+      renderInvites((await api("/admin/invites")).invites);
+      renderAudit((await api("/admin/audit-logs?days=7")).logs);
+    } catch (e) { if ($("app").hidden && !$("login").hidden) return; alert("โหลดไม่สำเร็จ: " + e.message); }
+  }
+
+  function renderUsers(users) {
+    $("users").innerHTML = users.map(u => `
+      <tr data-id="${esc(u.user_id)}">
+        <td>${esc(u.display_name || "(ไม่มีชื่อ)")}<div class="muted">${shortId(u.user_id)}</div></td>
+        <td><select class="role">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${u.role === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></td>
+        <td><div class="areas">${areaChecks("ua-" + esc(u.user_id), u.areas || [])}</div></td>
+        <td>${u.plot_count}</td>
+        <td>${u.share_with_officers ? "ยินยอม" : "-"}</td>
+        <td class="muted">${fmt(u.last_seen_at)}</td>
+        <td><button class="save">บันทึก</button></td>
+      </tr>`).join("") || `<tr><td colspan="7" class="muted">ยังไม่มีผู้ใช้</td></tr>`;
+  }
+  $("users").addEventListener("click", async e => {
+    const b = e.target.closest("button.save"); if (!b) return;
+    const tr = b.closest("tr"), id = tr.dataset.id, role = tr.querySelector(".role").value;
+    const areasSel = checked(tr, "ua-" + id);
+    if (role === "officer" && !areasSel.length) return alert("เจ้าหน้าที่ต้องมีอำเภอที่รับผิดชอบอย่างน้อย 1 อำเภอ");
+    if (!confirm(`ตั้งบทบาท "${ROLES[role]}" ให้ผู้ใช้นี้?`)) return;
+    try { await api(`/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ role, areas: areasSel }) }); await load(); }
+    catch (err) { alert("ไม่สำเร็จ: " + err.message); }
+  });
+
+  function renderInvites(list) {
+    const now = Date.now();
+    $("invites").innerHTML = list.map(i => {
+      const expired = new Date(i.expires_at).getTime() <= now || i.used_count >= i.max_uses;
+      return `<tr>
+        <td class="code">${esc(i.code)}</td><td>${esc(ROLES[i.role] || i.role)}</td>
+        <td>${(i.area_codes || []).map(areaName).map(esc).join(", ") || "-"}</td>
+        <td>${i.used_count}/${i.max_uses}</td><td class="muted">${fmt(i.expires_at)}${expired ? " (ใช้ไม่ได้แล้ว)" : ""}</td>
+        <td>${esc(i.note)}</td>
+        <td>${expired ? "" : `<button data-expire="${esc(i.code)}">ยกเลิก</button>`}</td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="muted">ยังไม่มีรหัสเชิญ</td></tr>`;
+  }
+  $("invites").addEventListener("click", async e => {
+    const code = e.target.dataset?.expire; if (!code) return;
+    if (!confirm(`ยกเลิกรหัส ${code}?`)) return;
+    try { await api(`/admin/invites/${code}/expire`, { method: "POST" }); await load(); } catch (err) { alert(err.message); }
+  });
+
+  $("inv-create").onclick = async () => {
+    const body = { role: $("inv-role").value, area_codes: checked(document, "inv-area"),
+                   expires_days: +$("inv-days").value || 14, max_uses: +$("inv-uses").value || 1, note: $("inv-note").value.trim() };
+    try {
+      const r = await api("/admin/invites", { method: "POST", body: JSON.stringify(body) });
+      $("inv-result").innerHTML = `<div class="note" style="margin-top:10px">รหัสเชิญ <span class="code">${esc(r.code)}</span>
+        · ส่งลิงก์นี้ให้เจ้าหน้าที่เปิดในมือถือ (LINE): <div style="word-break:break-all"><a href="${esc(r.link)}">${esc(r.link)}</a></div>
+        <button id="copy-link" style="margin-top:6px">📋 คัดลอกลิงก์</button></div>`;
+      $("copy-link").onclick = () => navigator.clipboard?.writeText(r.link).then(() => alert("คัดลอกแล้ว"));
+      renderInvites((await api("/admin/invites")).invites);
+    } catch (err) { alert("สร้างไม่สำเร็จ: " + err.message); }
+  };
+
+  const ACTION_TH = { view_plot: "ดูแปลง", edit_plot: "แก้แปลง", analyze_plot: "ตรวจแปลง", view_recommendations: "ดูคำแนะนำ",
+    create_report: "ทำรายงาน", list_area_plots: "ดูรายการแปลงในพื้นที่", set_role: "ตั้งบทบาท", create_invite: "สร้างรหัสเชิญ",
+    redeem_invite: "ใช้รหัสเชิญ", expire_invite: "ยกเลิกรหัส", list_users: "ดูรายชื่อผู้ใช้" };
+  function renderAudit(logs) {
+    $("audit").innerHTML = logs.slice(0, 300).map(l => `<tr>
+      <td class="muted">${fmt(l.created_at)}</td><td>${esc(ROLES[l.actor_role] || l.actor_role)} ${shortId(l.actor_user_id)}</td>
+      <td>${esc(ACTION_TH[l.action] || l.action)}</td><td>${esc(l.target_type || "")} ${esc(l.target_id || "")}</td>
+      <td>${shortId(l.target_owner)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">ไม่มีรายการ</td></tr>`;
+  }
+
+  if (ADMIN_KEY) load(); else { $("login").hidden = false; }
+</script>
+</body>
+</html>

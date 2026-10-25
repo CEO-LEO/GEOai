@@ -903,13 +903,13 @@ class TestPolygon:
 @pytest.mark.asyncio
 class TestNDVITimeseries:
     async def test_ndvi_timeseries_endpoint(self, client):
-        mock_plots = [{"id": 1, "name": "แปลง 1", "lat": 12.6, "lng": 102.1}]
+        mock_plot = {"id": 1, "user_id": "Utest", "name": "แปลง 1", "lat": 12.6, "lng": 102.1}
         mock_series = [
             {"month": "2024-06", "ndvi": 0.55},
             {"month": "2024-07", "ndvi": 0.58},
         ]
-        with patch("main.get_user_plots",
-                   new_callable=AsyncMock, return_value=mock_plots):
+        with patch("main.get_plot_by_id",
+                   new_callable=AsyncMock, return_value=mock_plot):
             with patch("main.get_ndvi_timeseries",
                        return_value=mock_series):
                 resp = await client.get("/plots/Utest/1/ndvi-timeseries", headers=auth_as("Utest"))
@@ -919,7 +919,7 @@ class TestNDVITimeseries:
         assert len(data["series"]) == 2
 
     async def test_ndvi_timeseries_plot_not_found(self, client):
-        with patch("main.get_user_plots",
-                   new_callable=AsyncMock, return_value=[]):
+        with patch("main.get_plot_by_id",
+                   new_callable=AsyncMock, return_value=None):
             resp = await client.get("/plots/Utest/999/ndvi-timeseries", headers=auth_as("Utest"))
         assert resp.status_code == 404

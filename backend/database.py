@@ -509,7 +509,8 @@ async def find_nearby_plot(user_id: str, lat: float, lng: float,
 
 async def save_plot(user_id: str, lat: float, lng: float,
                     name: str = "แปลงที่ 1", area_rai: float | None = None,
-                    polygon: list | None = None, plot_type: str | None = None) -> int | None:
+                    polygon: list | None = None, plot_type: str | None = None,
+                    extra: dict | None = None) -> int | None:
     """บันทึกแปลงใหม่ของ user คืน plot_id — ตรวจซ้ำก่อนสร้าง"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
@@ -527,6 +528,8 @@ async def save_plot(user_id: str, lat: float, lng: float,
         payload["polygon"] = polygon
     if plot_type is not None:
         payload["plot_type"] = plot_type
+    if extra:   # 2a: created_by / owner_label (คอลัมน์จาก migrate_v16)
+        payload.update(extra)
 
     headers = {**_HEADERS(), "Prefer": "return=representation"}
 
@@ -828,6 +831,189 @@ async def get_active_plots() -> list[dict]:
     for p in rows or []:
         p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
     return rows or []
+
+
+# ── บทบาท/พื้นที่/รหัสเชิญ/audit/events (Phase 2a — migrate_v16) ─────────────
+_FARMER = {"role": "farmer", "areas": [], "share_with_officers": False}
+
+
+async def get_user_access(user_id: str) -> dict:
+    """{"role", "areas", "share_with_officers"} — ยังไม่ได้รัน v16 / ไม่มีผู้ใช้ = farmer (ปลอดภัยไว้ก่อน)"""
+    if not SUPABASE_URL or not SUPABASE_KEY or not user_id:
+        return dict(_FARMER)
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/users", headers={**_HEADERS(), "Prefer": ""},
+            params={"user_id": f"eq.{user_id}", "select": "role,share_with_officers,user_areas(area_code)", "limit": "1"},
+        )
+    if resp.status_code != 200 or not resp.json():
+        return dict(_FARMER)
+    r = resp.json()[0]
+    return {"role": r.get("role") or "farmer", "share_with_officers": bool(r.get("share_with_officers")),
+            "areas": [a["area_code"] for a in r.get("user_areas") or []]}
+
+
+async def get_share_flags(user_ids: list[str]) -> dict[str, bool]:
+    """เจ้าของแปลงคนไหนยินยอมแบ่งปันกับเจ้าหน้าที่"""
+    ids = sorted({u for u in user_ids if u})
+    if not ids or not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+    rows = await _fetch_all("users", {"user_id": f"in.({','.join(ids)})", "select": "user_id,share_with_officers"})
+    return {r["user_id"]: bool(r.get("share_with_officers")) for r in rows or []}
+
+
+async def get_plots_for_officer(user_id: str, area_codes: list[str]) -> list[dict]:
+    """แปลงที่เจ้าหน้าที่วาดเอง + แปลงในอำเภอที่รับผิดชอบ (ยังไม่กรองความยินยอม — ผู้เรียกกรอง)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    sel = "*,plot_crops(crop_id)"
+    filters = [f"created_by.eq.{user_id}"] + ([f"area_code.in.({','.join(area_codes)})"] if area_codes else [])
+    rows = await _fetch_all("plots", {"is_active": "not.is.false", "or": f"({','.join(filters)})",
+                                      "order": "area_code.asc,created_at.asc", "select": sel})
+    for p in rows or []:
+        p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
+    return rows or []
+
+
+async def list_users_admin() -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    users = await _fetch_all("users", {"select": "user_id,display_name,role,share_with_officers,created_at,last_seen_at,"
+                                                 "user_areas(area_code)", "order": "created_at.asc"}) or []
+    plots = await _fetch_all("plots", {"is_active": "not.is.false", "select": "user_id"}) or []
+    counts: dict[str, int] = {}
+    for p in plots:
+        counts[p["user_id"]] = counts.get(p["user_id"], 0) + 1
+    for u in users:
+        u["areas"] = [a["area_code"] for a in u.pop("user_areas", None) or []]
+        u["plot_count"] = counts.get(u["user_id"], 0)
+    return users
+
+
+async def set_user_role(user_id: str, role: str, areas: list[str]) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    hdr = {**_HEADERS(), "Prefer": "return=minimal"}
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/users", headers=hdr,
+                                  params={"user_id": f"eq.{user_id}"}, json={"role": role})
+        if resp.status_code not in (200, 204):
+            logger.error(f"Supabase set_user_role failed: {resp.status_code} — {resp.text}")
+            return False
+        await client.delete(f"{SUPABASE_URL}/rest/v1/user_areas", headers=hdr, params={"user_id": f"eq.{user_id}"})
+        if areas:
+            resp = await client.post(f"{SUPABASE_URL}/rest/v1/user_areas", headers=hdr,
+                                     json=[{"user_id": user_id, "area_code": a} for a in areas])
+            if resp.status_code not in (200, 201, 204):
+                logger.error(f"Supabase set user_areas failed: {resp.status_code} — {resp.text}")
+                return False
+    return True
+
+
+async def set_share_with_officers(user_id: str, enabled: bool) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/users", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                  params={"user_id": f"eq.{user_id}"}, json={"share_with_officers": enabled})
+    return resp.status_code in (200, 204)
+
+
+async def create_invite(row: dict) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(f"{SUPABASE_URL}/rest/v1/invites",
+                                 headers={**_HEADERS(), "Prefer": "return=minimal"}, json=row)
+    if resp.status_code not in (200, 201, 204):
+        logger.error(f"Supabase create_invite failed: {resp.status_code} — {resp.text}")
+        return False
+    return True
+
+
+async def get_invite(code: str) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/invites", headers={**_HEADERS(), "Prefer": ""},
+                                params={"code": f"eq.{code}", "select": "*", "limit": "1"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def record_invite_use(code: str, user_id: str, used_count: int) -> bool:
+    """บันทึกการใช้รหัส — UNIQUE(code, user_id) กันคนเดิมใช้ซ้ำนับเกิน"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    hdr = {**_HEADERS(), "Prefer": "return=minimal"}
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(f"{SUPABASE_URL}/rest/v1/invite_redemptions", headers=hdr,
+                                 json={"code": code, "user_id": user_id})
+        if resp.status_code not in (200, 201, 204):
+            return False
+        await client.patch(f"{SUPABASE_URL}/rest/v1/invites", headers=hdr,
+                           params={"code": f"eq.{code}", "used_count": f"eq.{used_count}"},
+                           json={"used_count": used_count + 1})
+    return True
+
+
+async def list_invites(limit: int = 100) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/invites", headers={**_HEADERS(), "Prefer": ""},
+                                params={"select": "*", "order": "created_at.desc", "limit": str(limit)})
+    return resp.json() if resp.status_code == 200 else []
+
+
+async def expire_invite(code: str) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/invites", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                  params={"code": f"eq.{code}"}, json={"expires_at": datetime.now(timezone.utc).isoformat()})
+    return resp.status_code in (200, 204)
+
+
+async def log_audit(actor_user_id: str | None, actor_role: str, action: str, target_type: str | None = None,
+                    target_id=None, target_owner: str | None = None, detail: dict | None = None) -> None:
+    """บันทึก audit — ล้มเหลวได้โดยไม่ทำให้คำขอหลักพัง (log ERROR ไว้ตรวจ)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{SUPABASE_URL}/rest/v1/audit_logs",
+                                     headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                     json={"actor_user_id": actor_user_id, "actor_role": actor_role, "action": action,
+                                           "target_type": target_type,
+                                           "target_id": None if target_id is None else str(target_id),
+                                           "target_owner": target_owner, "detail": detail})
+        if resp.status_code not in (200, 201, 204):
+            logger.error(f"audit log failed: {resp.status_code} — {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"audit log failed ({type(e).__name__})")
+
+
+async def list_audit_logs(since_iso: str, target_owner: str | None = None, limit: int = 500) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    params = {"created_at": f"gte.{since_iso}", "order": "created_at.desc", "limit": str(limit), "select": "*"}
+    if target_owner:
+        params["target_owner"] = f"eq.{target_owner}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/audit_logs", headers={**_HEADERS(), "Prefer": ""}, params=params)
+    return resp.json() if resp.status_code == 200 else []
+
+
+async def log_event(user_id: str | None, name: str, plot_id: int | None = None, props: dict | None = None) -> None:
+    """สถิติการใช้งาน (B2G) — ล้มเหลวเงียบ ๆ ได้ ไม่กระทบผู้ใช้"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(f"{SUPABASE_URL}/rest/v1/events", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                              json={"user_id": user_id, "name": name, "plot_id": plot_id, "props": props})
+    except Exception as e:
+        logger.warning(f"log_event failed ({type(e).__name__})")
 
 
 # ── คำแนะนำ (Phase 1d — migrate_v15) ─────────────────────

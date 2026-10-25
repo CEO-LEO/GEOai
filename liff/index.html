@@ -651,6 +651,12 @@
     <div class="input-row" style="margin-bottom:0">
       <input id="pf-name" type="text" maxlength="50" placeholder="เช่น สวนหลังบ้าน" />
     </div>
+    <div id="pf-owner-wrap" style="display:none">
+      <div class="form-label">ชื่อเกษตรกร (ถ้าเจ้าหน้าที่วาดแทน)</div>
+      <div class="input-row" style="margin-bottom:0">
+        <input id="pf-owner-label" type="text" maxlength="60" placeholder="เช่น ลุงสมชาย — ไม่บังคับ" />
+      </div>
+    </div>
     <div class="form-label">ปลูกอะไรบ้าง (เลือกได้หลายอย่าง)</div>
     <div class="chip-row" id="pf-crops"></div>
     <div class="form-label">ลักษณะสวน</div>
@@ -952,6 +958,7 @@
 
       hideSpinner();
       bootMark("ready");
+      window.phase2Init?.();   // officer.js: แท็บเจ้าหน้าที่ / รหัสเชิญ / สถิติการใช้งาน (ไม่ต้องรอ)
       sendTelemetry({ kind: "timing", marks: bootMarks, cached: !!cached, tab: initialTab });
     });
 
@@ -1816,11 +1823,14 @@
       ${share ? `<button type="button" class="btn-primary sheet-btn" id="share-line-btn">💬 แชร์ให้เพื่อนใน LINE</button>` : ""}
       ${json.pdf_url ? `<button type="button" class="btn-secondary sheet-btn" id="open-pdf-btn">📄 เปิดรายงาน PDF</button>` : ""}
       <div class="form-hint">${share ? "" : "แชร์ผ่าน LINE ยังไม่เปิดใช้ — เปิด PDF แล้วแชร์จากเบราว์เซอร์ได้ · "}ลิงก์ PDF ใช้ได้ 7 วัน · รายงานไม่มีพิกัดแปลง</div>`);
-    document.getElementById("open-pdf-btn")?.addEventListener("click", () => openExternal(json.pdf_url));
+    document.getElementById("open-pdf-btn")?.addEventListener("click", () => {
+      window.logEvent?.("open_pdf", plot.id);
+      openExternal(json.pdf_url);
+    });
     document.getElementById("share-line-btn")?.addEventListener("click", async () => {
       try {
         const r = await liff.shareTargetPicker([json.share], { isMultiple: true });
-        if (r) showToast("✅ แชร์แล้ว");
+        if (r) { showToast("✅ แชร์แล้ว"); window.logEvent?.("share_line", plot.id); }
       } catch (e) {
         showToast("❌ แชร์ไม่สำเร็จ — ลองเปิด PDF แทน");
         sendTelemetry({ kind: "error", source: "shareTargetPicker", message: String(e && e.message || e).slice(0, 200) });
@@ -1871,6 +1881,7 @@
     gridRaised = raised;
     gridRecs = null;
     if (plotId) fetchPlotRecommendations(plotId).then(r => { gridRecs = r; });
+    window.logEvent?.("view_map", plotId, { raised_bed: raised });
     if (!poly || poly.length < 3) {
       return showToast("❌ กรุณาวาดขอบเขตแปลงก่อน");
     }
@@ -2179,9 +2190,13 @@
       : (document.getElementById("plot-name-input").value.trim() || `แปลงที่ ${userPlots.length + 1}`);
     document.getElementById("pf-save-btn").textContent = mode === "edit" ? "💾 บันทึก" : "🔍 ตรวจสอบแปลงนี้";
     document.getElementById("pf-edit-extra").style.display = mode === "edit" ? "" : "none";
+    const staff = window.IAMROOT_ROLE === "officer" || window.IAMROOT_ROLE === "admin";
+    document.getElementById("pf-owner-wrap").style.display = mode === "new" && staff ? "" : "none";
+    document.getElementById("pf-owner-label").value = "";
     if (mode === "edit") {
       const others = userPlots.filter(p => p.id && p.id !== plot.id);
-      document.getElementById("pf-merge-wrap").style.display = others.length ? "" : "none";
+      // รวมประวัติได้เฉพาะแปลงของตัวเอง (เจ้าหน้าที่แก้แปลงของเกษตรกรได้ แต่รวม/ลบไม่ได้)
+      document.getElementById("pf-merge-wrap").style.display = others.length && plot.is_mine !== false ? "" : "none";
       document.getElementById("pf-merge-select").innerHTML =
         `<option value="">— เลือกแปลงเดิม —</option>` +
         others.map(p => `<option value="${p.id}">${escHtml(p.name || "แปลง")} · ${formatPlotCreated(p.created_at).replace(/<[^>]+>/g, "").trim()}</option>`).join("");
@@ -2201,6 +2216,7 @@
                  || (pf.mode === "edit" ? pf.plot.name : `แปลงที่ ${userPlots.length + 1}`);
     const cropIds = [...pf.crops];
     const plotType = pf.type;
+    const ownerLabel = document.getElementById("pf-owner-label").value.trim();
     closePlotForm();
     if (pf.mode === "edit") {
       await patchPlot(pf.plot.id, { name, crop_ids: cropIds, plot_type: plotType }, "💾 บันทึกแล้ว");
@@ -2209,7 +2225,7 @@
     const lat = selLat, lng = selLng, poly = polygonCoords;
     const area = parseFloat(document.getElementById("plot-area-input").value) || null;
     await checkBoundaryThen(lat, lng, poly, cropIds, plotType, () =>
-      submitAnalysis(lat, lng, name, area, poly, { crop_ids: cropIds, plot_type: plotType }));
+      submitAnalysis(lat, lng, name, area, poly, { crop_ids: cropIds, plot_type: plotType, owner_label: ownerLabel }));
   });
 
   async function patchPlot(plotId, fields, okMsg) {
@@ -2369,6 +2385,7 @@
       if (extra.plot_id) body.plot_id = extra.plot_id;
       if (extra.crop_ids?.length) body.crop_ids = extra.crop_ids;
       if (extra.plot_type) body.plot_type = extra.plot_type;
+      if (extra.owner_label) body.owner_label = extra.owner_label;
 
       const res = await apiFetch(`${API_URL}/analyze`, {
         method: "POST",
@@ -2969,5 +2986,6 @@
     document.getElementById("detail-modal").classList.add("show");
   }
 </script>
+<script src="officer.js"></script>
 </body>
 </html>
