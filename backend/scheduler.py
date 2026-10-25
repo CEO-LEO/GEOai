@@ -20,7 +20,8 @@ from database import (get_all_user_ids, save_analysis, get_user_plots,
                       delete_old_grid_snapshots, get_swab_level_days_ago,
                       get_scheduler_last_run, set_scheduler_last_run,
                       PRESET_NOTIFY_HOURS, get_plot_analysis_since,
-                      get_previous_risk_level, get_last_sent_message)
+                      get_previous_risk_level, get_last_sent_message,
+                      get_latest_grid_snapshot, get_last_user_message, get_rain_freq_users)
 from gee_analysis import analyze_durian_plot, get_moisture_grid
 from rule_engine import format_message, compute_risk_level
 from flex_messages import (build_weekly_alert_flex,
@@ -30,6 +31,9 @@ from plot_image_service import build_plot_grid_image_url, delete_old_plot_images
 from line_sender import send_line_message
 import risk_v2
 import risk_display
+import rain_alerts
+import recommendations
+from auth import liff_id
 from weather_alert import (
     get_7day_rain,
     build_rain_alert_flex,
@@ -512,11 +516,14 @@ async def _send_grouped_rain_alert(user_id: str, pending: list[dict]) -> None:
 
 async def rain_alert_job(hour: int | None = None):
     """
-    ตรวจพยากรณ์ฝน 7 วัน + ผนวกข้อมูลดิน → แจ้งเตือนรวม
+    Phase 3b: เตือนฝนหนักที่กำลังมา พร้อมบอกจุดเสี่ยงของแปลง (rain_alerts.py)
 
+    เตือนเมื่อพยากรณ์มีวันฝน ≥ 35 มม. ภายใน 3 วัน (เดิม: ฝน 7 วัน + ดินเสี่ยงจากสูตร SWAB เดิม ซึ่งติดเกือบทุกแปลง
+    — 25 ต.ค. 2569 พยายามส่ง 19 แปลงในวันเดียว ดู docs/v2/line-quota-estimate.md) · รวมทุกแปลงเป็น push เดียวต่อคน
+    · ไม่ซ้ำระดับเดิมใน 7 วันต่อแปลง · ผู้ใช้ที่เลือก "สูงสุดสัปดาห์ละครั้ง" ได้ไม่เกิน 1 ครั้ง/7 วัน
     hour: เหมือน daily_scan_job() — กรองเฉพาะผู้ใช้ที่ตั้ง notify_hour ตรงกับค่านี้
     """
-    logger.info(f"🌧️ Combined weather+soil alert scan started (hour={hour})")
+    logger.info(f"🌧️ Rain alert scan started (hour={hour})")
 
     # ไม่หลุดเมื่อแปลงเกิน 1,000 (ดู daily_scan_job)
     seen_users: set[str] = set(await get_all_user_ids())
@@ -526,12 +533,11 @@ async def rain_alert_job(hour: int | None = None):
         if hour_users is not None:
             seen_users &= hour_users
 
-    counters = {"alerted": 0, "combined_alerts": 0}
+    counters = {"alerted": 0, "users": 0, "capped": 0}
     notifiable = await get_notifiable_users()
-    # งานนี้ไม่ได้เรียก GEE ตรงๆ (ใช้ weather API + อ่านผลดินที่ analyze ไว้แล้วจาก
-    # Supabase) แต่โครงสร้างเดิมเป็น sequential ทีละคนเหมือน daily_scan_job — ใช้
-    # semaphore ผูกจำนวนความขนานเดียวกันเพื่อความสม่ำเสมอ กันยิง weather API/Supabase
-    # พร้อมกันมากเกินไปตอนผู้ใช้เยอะขึ้นด้วย
+    weekly_max = await get_rain_freq_users("weekly_max")
+    rules = await recommendations.get_rules()
+    liff_url = f"https://liff.line.me/{liff_id()}"
     semaphore = asyncio.Semaphore(GEE_CONCURRENCY)
 
     async def _process_user(user_id: str):
@@ -539,84 +545,42 @@ async def rain_alert_job(hour: int | None = None):
             return
         async with semaphore:
             try:
+                if user_id in weekly_max:
+                    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+                    last = await get_last_user_message(user_id, "rain_alert", since)
+                    if rain_alerts.weekly_cap_reached(last.get("created_at") if last else None):
+                        counters["capped"] += 1
+                        return
                 plots = await get_user_plots(user_id)
-                if not plots:
-                    return
-
-                # Phase 1b: เก็บคำเตือนของทุกแปลงก่อน แล้วส่งรวมเป็น push เดียวต่อคน
                 pending: list[dict] = []
                 for plot in plots:
-                    lat     = float(plot["lat"])
-                    lng     = float(plot["lng"])
-                    name    = plot.get("name", "แปลงของคุณ")
                     plot_id = plot.get("id")
-                    polygon = plot.get("polygon")
-
-                    forecast = await get_7day_rain(lat, lng)
-
-                    # ── ดึงข้อมูลดินล่าสุด (ถ้ามี) ──
-                    soil_data = None
-                    if plot_id:
-                        soil_data = await get_latest_plot_analysis(plot_id)
-
-                    # สวนยกร่อง (1c): ความชื้นดินจากดาวเทียมรวมน้ำในร่อง → ไม่ใช้ประเมินเสี่ยงน้ำขัง
-                    # เตือนเฉพาะฝนหนักจากพยากรณ์ (ทางเดียวกับแปลงที่ยังไม่มีข้อมูลดิน)
-                    if soil_data and plot.get("plot_type") != "raised_bed":
-                        # ── Combined alert: อากาศ + ดิน ──
-                        soil_risk = assess_soil_waterlog_risk(soil_data)
-                        alert = evaluate_combined_risk(forecast, soil_risk)
-
-                        # Gap 1: combined_score >= 60 → force critical + notify immediately
-                        if alert["combined_score"] >= 60 and alert["alert_level"] != "critical":
-                            alert = dict(alert)
-                            alert["alert_level"] = "critical"
-                            alert["should_notify"] = True
-                            alert["alert_title"] = "🔴 วิกฤต: คะแนนความเสี่ยงสูง — ต้องดำเนินการทันที"
-                            logger.warning(
-                                f"🚨 Critical threshold override: {user_id} plot '{name}' "
-                                f"combined_score={alert['combined_score']}"
-                            )
-
-                        if alert["should_notify"] and await _rain_alert_is_new(plot_id, alert["alert_level"]):
-                            pending.append({
-                                "flex": build_combined_alert_flex(forecast, soil_risk, alert,
-                                                                  lat, lng, plot_name=name),
-                                "msg": build_combined_alert_message(forecast, soil_risk, alert,
-                                                                    lat, lng, plot_name=name),
-                                "plot_id": plot_id, "level": alert["alert_level"],
-                                "polygon": polygon, "name": name, "plot_type": plot.get("plot_type"),
-                            })
-                            counters["combined_alerts"] += 1
-                            logger.info(
-                                f"{alert['alert_title']} → {user_id} plot '{name}' "
-                                f"rain={forecast['total_rain_mm']}mm "
-                                f"soil_score={soil_risk['soil_risk_score']} "
-                                f"level={alert['alert_level']}"
-                            )
-                    else:
-                        # ── Fallback: ไม่มีข้อมูลดิน → ใช้ rain-only alert ──
-                        if forecast["is_heavy_rain"] and await _rain_alert_is_new(plot_id, "warning"):
-                            pending.append({
-                                "flex": build_rain_alert_flex(forecast, lat, lng, plot_name=name),
-                                "msg": build_rain_alert_message(forecast, lat, lng, plot_name=name),
-                                "plot_id": plot_id, "level": "warning",
-                                "polygon": polygon, "name": name, "plot_type": plot.get("plot_type"),
-                            })
-                            counters["alerted"] += 1
-                            logger.info(
-                                f"🌧️ Rain-only alert → {user_id} plot '{name}' "
-                                f"— {forecast['total_rain_mm']}mm"
-                            )
-
+                    forecast = await get_7day_rain(float(plot["lat"]), float(plot["lng"]))
+                    soon = rain_alerts.heavy_rain_soon(forecast)
+                    if not soon or not await _rain_alert_is_new(plot_id, soon["level"]):
+                        continue
+                    snapshot = await get_latest_grid_snapshot(plot_id) if plot_id else []
+                    risk = rain_alerts.risk_points(snapshot, plot.get("polygon"), plot.get("plot_type"))
+                    rec = recommendations.recommend(rules, plot.get("crop_ids"), plot.get("plot_type"),
+                                                    "heavy_rain_coming",
+                                                    "high" if soon["level"] == "critical" else "medium")
+                    note = rain_alerts.crop_note(plot.get("crop_ids"))
+                    pending.append({
+                        "flex": rain_alerts.build_flex(plot, soon, risk, rec, note, liff_url),
+                        "msg": rain_alerts.build_text(plot, soon, risk, rec, note),
+                        "plot_id": plot_id, "level": soon["level"], "polygon": plot.get("polygon"),
+                        "name": plot.get("name") or "แปลงของคุณ", "plot_type": plot.get("plot_type"),
+                    })
+                    logger.info(f"🌧️ rain alert → plot {plot_id}: day+{soon['day_offset']} {soon['mm']}mm "
+                                f"wet_points={risk['wet']} level={soon['level']}")
                 if pending:
                     await _send_grouped_rain_alert(user_id, pending)
-
+                    counters["alerted"] += len(pending)
+                    counters["users"] += 1
             except Exception as e:
                 logger.error(f"Rain alert failed for {user_id}: {e}")
 
     await asyncio.gather(*(_process_user(u) for u in seen_users))
 
-    logger.info(
-        f"✅ Weather+soil alert scan done — "
-        f"{counters['combined_alerts']} combined + {counters['alerted']} rain-only alerts sent"
-    )
+    logger.info(f"✅ Rain alert scan done — {counters['alerted']} plots / {counters['users']} users "
+                f"(weekly cap skipped {counters['capped']})")

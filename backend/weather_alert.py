@@ -49,6 +49,7 @@ class WeatherForecast(TypedDict):
     rainy_days:      int
     is_heavy_rain:   bool
     source:          str   # "weathernext" | "open-meteo" — ใช้ debug/แสดงผลว่าข้อมูลมาจากไหน
+    daily_mm:        list[float] | None   # Phase 3: ฝนรายวัน (วันนี้เป็นตัวแรก) — None ถ้าแหล่งไม่มีรายวัน
 
 
 async def _get_7day_rain_weathernext(lat: float, lng: float) -> WeatherForecast:
@@ -69,6 +70,7 @@ async def _get_7day_rain_weathernext(lat: float, lng: float) -> WeatherForecast:
         rainy_days    = result["rainy_days"],
         is_heavy_rain = result["is_heavy_rain"],
         source        = "weathernext",
+        daily_mm      = result.get("daily_mm"),
     )
 
 
@@ -99,6 +101,7 @@ async def _get_7day_rain_openmeteo(lat: float, lng: float) -> WeatherForecast:
         rainy_days     = rainy_days,
         is_heavy_rain  = total >= RAIN_THRESHOLD_MM or max_daily >= 40.0,
         source         = "open-meteo",
+        daily_mm       = [round(v, 1) for v in daily_rain],
     )
 
 
