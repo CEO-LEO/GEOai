@@ -59,6 +59,7 @@ import plot_summary
 import report_service
 import access
 import areas
+import privacy
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -74,7 +75,9 @@ from database import (save_analysis, get_all_reports, save_plot,
                       get_recommendation_rule_history, get_latest_plot_signals,
                       get_user_access, get_share_flags, get_plots_for_officer, list_users_admin,
                       set_user_role, create_invite, get_invite, record_invite_use, list_invites,
-                      expire_invite, log_audit, list_audit_logs, log_event)
+                      expire_invite, log_audit, list_audit_logs, log_event,
+                      get_user_privacy, save_consent, set_deletion_request, export_user_data, purge_user,
+                      SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -458,6 +461,9 @@ async def liff_config():
 BOUNDARY_BACKGROUND_TIMEOUT_S = 30   # ตรวจขอบเขตเบื้องหลัง (หลังบันทึก/แก้แปลง) ไม่มีใครรอ
 
 
+SUPABASE_CONFIGURED = bool(_SUPABASE_URL and _SUPABASE_KEY)   # dev/test ไม่มี Supabase → ข้ามการตรวจความยินยอม
+
+
 def _validated_crop_ids(crop_ids: list[str] | None) -> list[str]:
     try:
         return crops_mod.validate_ids(crop_ids)
@@ -535,6 +541,7 @@ async def analyze(req: AnalysisRequest, background: BackgroundTasks,
     ผู้ใช้ยังดูการ์ดในแชทได้จากปุ่ม "ตรวจสอบ" ใน Rich Menu (ส่งแบบ reply ไม่นับโควตา)
     """
     req.user_id = user_id
+    await _require_consent(user_id)
     crop_ids = _validated_crop_ids(req.crop_ids)
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
     existing_plot = await _require_plot_access(req.plot_id, user_id, access.EDIT, "analyze_plot") if req.plot_id else None
@@ -1258,7 +1265,115 @@ async def me_info(me: str = Depends(_api_user)):
     """บทบาทและพื้นที่ของผู้ใช้ (ใช้แสดงแท็บเจ้าหน้าที่ในแอป)"""
     acc = await _access_for(me)
     return {"user_id": me, "role": acc["role"], "role_th": access.ROLE_TH.get(acc["role"], acc["role"]),
-            "areas": _area_list(acc["areas"]), "share_with_officers": acc.get("share_with_officers", False)}
+            "areas": _area_list(acc["areas"]), "share_with_officers": acc.get("share_with_officers", False),
+            "privacy": privacy.consent_payload(await get_user_privacy(me)) if SUPABASE_CONFIGURED
+            else {**privacy.consent_payload(None), "needs_consent": False}}
+
+
+# ── PDPA (Phase 2b) ──
+async def _require_consent(user_id: str) -> None:
+    """
+    สร้าง/วิเคราะห์แปลงได้เมื่อยอมรับนโยบายฉบับปัจจุบันแล้ว และไม่ได้ขอลบข้อมูลไว้
+    dev/test ที่ไม่มี Supabase ข้ามการตรวจ (ไม่มีที่เก็บความยินยอม)
+    """
+    if not SUPABASE_CONFIGURED:
+        return
+    u = await get_user_privacy(user_id)
+    if u and u.get("deletion_requested_at"):
+        raise HTTPException(status_code=409, detail="คุณขอลบข้อมูลไว้ — ยกเลิกคำขอในเมนู \"ข้อมูลของฉัน\" ก่อนจึงใช้งานต่อได้")
+    if privacy.consent_payload(u)["needs_consent"]:
+        raise HTTPException(status_code=428, detail="กรุณาอ่านและยอมรับนโยบายความเป็นส่วนตัวก่อนใช้งาน")
+
+
+class ConsentBody(BaseModel):
+    version:             str = Field(..., max_length=20)
+    share_with_officers: bool = False
+    photos_research:     bool = False
+
+
+@app.get("/me/privacy")
+async def me_privacy(me: str = Depends(_api_user)):
+    return privacy.consent_payload(await get_user_privacy(me))
+
+
+@app.post("/me/consent")
+async def me_consent(body: ConsentBody, me: str = Depends(_api_user)):
+    """ยอมรับนโยบาย + เลือกข้อที่ไม่บังคับ (เปลี่ยนภายหลังได้) — บันทึกประวัติทุกครั้ง"""
+    if body.version != privacy.PRIVACY_VERSION:
+        raise HTTPException(status_code=409, detail="นโยบายมีฉบับใหม่ กรุณาเปิดแอปใหม่แล้วอ่านอีกครั้ง")
+    before = await get_user_privacy(me)
+    if not before:
+        await upsert_user(me, "")
+    action = "update" if before and before.get("consent_version") == body.version else "accept"
+    if not await save_consent(me, body.version, body.share_with_officers, body.photos_research, action):
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
+    access.invalidate(me)
+    await log_audit(me, "farmer", f"consent_{action}", "user", me, me,
+                    {"share_with_officers": body.share_with_officers, "photos_research": body.photos_research})
+    return privacy.consent_payload(await get_user_privacy(me))
+
+
+@app.get("/me/data")
+async def me_data(me: str = Depends(_api_user)):
+    """ดาวน์โหลดข้อมูลทั้งหมดของฉัน (JSON) รวมรายการว่าใครเคยเปิดดูแปลงของฉัน"""
+    data = await export_user_data(me)
+    await log_audit(me, "farmer", "export_data", "user", me, me, None)
+    return Response(content=json.dumps(data, ensure_ascii=False, indent=1, default=str),
+                    media_type="application/json; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="iamroot-my-data.json"'})
+
+
+@app.get("/me/access-log")
+async def me_access_log(me: str = Depends(_api_user)):
+    """ใครเปิดดู/แก้แปลงของฉัน 90 วันล่าสุด (บอกบทบาท ไม่บอกตัวบุคคลของเจ้าหน้าที่)"""
+    since = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    rows = [r for r in await list_audit_logs(since, me, limit=200) if r.get("actor_user_id") != me]
+    return {"entries": [{"role_th": access.ROLE_TH.get(r["actor_role"], r["actor_role"]), "action": r["action"],
+                         "plot_id": r.get("target_id") if r.get("target_type") == "plot" else None,
+                         "at": r["created_at"]} for r in rows]}
+
+
+@app.post("/me/deletion-request")
+async def me_deletion_request(me: str = Depends(_api_user)):
+    """ขอลบข้อมูล: ซ่อนแปลงและหยุดแจ้งเตือนทันที ยกเลิกได้ภายใน 30 วัน หลังจากนั้นผู้ดูแลลบถาวร"""
+    if not await set_deletion_request(me, True, privacy.PRIVACY_VERSION):
+        raise HTTPException(status_code=502, detail="บันทึกคำขอไม่สำเร็จ กรุณาลองใหม่")
+    access.invalidate(me)
+    await log_audit(me, "farmer", "deletion_request", "user", me, me, None)
+    return {"status": "requested", "grace_days": privacy.DELETION_GRACE_DAYS}
+
+
+@app.post("/me/deletion-request/cancel")
+async def me_deletion_cancel(me: str = Depends(_api_user)):
+    u = await get_user_privacy(me)
+    if not u or not u.get("deletion_requested_at"):
+        raise HTTPException(status_code=404, detail="ไม่มีคำขอลบข้อมูล")
+    if not await set_deletion_request(me, False, privacy.PRIVACY_VERSION):
+        raise HTTPException(status_code=502, detail="ยกเลิกไม่สำเร็จ กรุณาลองใหม่")
+    access.invalidate(me)
+    await log_audit(me, "farmer", "deletion_cancel", "user", me, me, None)
+    return {"status": "cancelled"}
+
+
+class PurgeBody(BaseModel):
+    confirm_user_id: str = Field(..., max_length=100)
+
+
+@app.post("/admin/users/{user_id}/purge", dependencies=[Depends(verify_admin)])
+async def admin_purge_user(user_id: str, body: PurgeBody):
+    """
+    ลบข้อมูลผู้ใช้ถาวร — ทำได้เฉพาะผู้ใช้ที่ขอลบไว้แล้ว และต้องพิมพ์ userId ยืนยันซ้ำ (กันกดผิดคน)
+    ⚠️ ย้อนกลับไม่ได้ — ผู้ดูแลกดเองเท่านั้น
+    """
+    if body.confirm_user_id != user_id:
+        raise HTTPException(status_code=422, detail="userId ยืนยันไม่ตรงกัน")
+    u = await get_user_privacy(user_id)
+    if not u or not u.get("deletion_requested_at"):
+        raise HTTPException(status_code=409, detail="ผู้ใช้นี้ไม่ได้ขอลบข้อมูล")
+    counts = await purge_user(user_id)
+    access.invalidate(user_id)
+    await log_audit(None, "admin", "purge_user", "user", None, None, {"counts": counts})
+    return {"status": "purged", "deleted_rows": counts}
 
 
 EVENT_NAMES = {"app_open", "view_map", "view_recommendation", "open_pdf", "share_line", "photo_upload",

@@ -71,7 +71,7 @@
     <section>
       <h2>ผู้ใช้</h2>
       <div class="table-wrap"><table>
-        <thead><tr><th>ชื่อ</th><th>บทบาท</th><th>อำเภอที่รับผิดชอบ</th><th>แปลง</th><th>แบ่งปันกับเจ้าหน้าที่</th><th>ใช้ล่าสุด</th><th></th></tr></thead>
+        <thead><tr><th>ชื่อ</th><th>บทบาท</th><th>อำเภอที่รับผิดชอบ</th><th>แปลง</th><th>ความยินยอม / แบ่งปันกับเจ้าหน้าที่</th><th>ใช้ล่าสุด</th><th></th></tr></thead>
         <tbody id="users"></tbody>
       </table></div>
     </section>
@@ -131,19 +131,36 @@
     } catch (e) { if ($("app").hidden && !$("login").hidden) return; alert("โหลดไม่สำเร็จ: " + e.message); }
   }
 
+  let USERS = [];
   function renderUsers(users) {
+    USERS = users;
     $("users").innerHTML = users.map(u => `
       <tr data-id="${esc(u.user_id)}">
         <td>${esc(u.display_name || "(ไม่มีชื่อ)")}<div class="muted">${shortId(u.user_id)}</div></td>
         <td><select class="role">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${u.role === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></td>
         <td><div class="areas">${areaChecks("ua-" + esc(u.user_id), u.areas || [])}</div></td>
         <td>${u.plot_count}</td>
-        <td>${u.share_with_officers ? "ยินยอม" : "-"}</td>
+        <td>${u.consent_version ? "ยอมรับฉบับ " + esc(u.consent_version) : "ยังไม่ยอมรับ"}<br>${u.share_with_officers ? "แบ่งปันกับเจ้าหน้าที่" : "ไม่แบ่งปัน"}
+          ${u.deletion_requested_at ? `<div style="color:var(--red);font-weight:700">ขอลบข้อมูล ${fmt(u.deletion_requested_at)}</div>` : ""}</td>
         <td class="muted">${fmt(u.last_seen_at)}</td>
-        <td><button class="save">บันทึก</button></td>
+        <td><button class="save">บันทึก</button>
+          ${u.deletion_requested_at ? `<button class="purge" style="color:var(--red);margin-top:6px">ลบถาวร</button>` : ""}</td>
       </tr>`).join("") || `<tr><td colspan="7" class="muted">ยังไม่มีผู้ใช้</td></tr>`;
   }
   $("users").addEventListener("click", async e => {
+    const pg = e.target.closest("button.purge");
+    if (pg) {
+      const id = pg.closest("tr").dataset.id;
+      const days = (Date.now() - new Date(USERS.find(u => u.user_id === id)?.deletion_requested_at).getTime()) / 864e5;
+      const warn = days < 30 ? `\n⚠️ ผู้ใช้ขอลบมาเพียง ${Math.floor(days)} วัน (ยกเลิกได้ภายใน 30 วัน)` : "";
+      if (prompt(`ลบข้อมูลผู้ใช้ ${shortId(id)} ถาวร — ย้อนกลับไม่ได้${warn}\nพิมพ์คำว่า ลบถาวร เพื่อยืนยัน`) !== "ลบถาวร") return;
+      try {
+        const r = await api(`/admin/users/${encodeURIComponent(id)}/purge`, { method: "POST", body: JSON.stringify({ confirm_user_id: id }) });
+        alert("ลบแล้ว: " + Object.entries(r.deleted_rows).map(([k, v]) => `${k} ${v}`).join(", "));
+        await load();
+      } catch (err) { alert("ไม่สำเร็จ: " + err.message); }
+      return;
+    }
     const b = e.target.closest("button.save"); if (!b) return;
     const tr = b.closest("tr"), id = tr.dataset.id, role = tr.querySelector(".role").value;
     const areasSel = checked(tr, "ua-" + id);
@@ -186,7 +203,9 @@
 
   const ACTION_TH = { view_plot: "ดูแปลง", edit_plot: "แก้แปลง", analyze_plot: "ตรวจแปลง", view_recommendations: "ดูคำแนะนำ",
     create_report: "ทำรายงาน", list_area_plots: "ดูรายการแปลงในพื้นที่", set_role: "ตั้งบทบาท", create_invite: "สร้างรหัสเชิญ",
-    redeem_invite: "ใช้รหัสเชิญ", expire_invite: "ยกเลิกรหัส", list_users: "ดูรายชื่อผู้ใช้" };
+    redeem_invite: "ใช้รหัสเชิญ", expire_invite: "ยกเลิกรหัส", list_users: "ดูรายชื่อผู้ใช้",
+    consent_accept: "ยอมรับนโยบาย", consent_update: "เปลี่ยนความยินยอม", export_data: "ดาวน์โหลดข้อมูลตัวเอง",
+    deletion_request: "ขอลบข้อมูล", deletion_cancel: "ยกเลิกคำขอลบ", purge_user: "ลบข้อมูลผู้ใช้ถาวร" };
   function renderAudit(logs) {
     $("audit").innerHTML = logs.slice(0, 300).map(l => `<tr>
       <td class="muted">${fmt(l.created_at)}</td><td>${esc(ROLES[l.actor_role] || l.actor_role)} ${shortId(l.actor_user_id)}</td>
