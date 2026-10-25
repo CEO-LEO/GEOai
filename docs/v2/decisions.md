@@ -14,9 +14,9 @@
 | 3 | RLS audit + backup + migrate_v12 | ✅ เสร็จ (รันแล้ว 2026-10-25) |
 | 4 | merge 1b → migrate_v13 → merge shadow/กำลังปรับปรุง → ลบรูปย่อชื่อเดิม | ✅ เสร็จ (deploy live, smoke ผ่าน) |
 | 5 | คำเตือนขอบเขตแปลง | ✅ ทำรวมใน 1c (deploy 2026-10-25) |
-| 6 | 1c → 1d → 1e → 1f → 1g | 🔄 1c (9dae0ad), 1d (a956128) merge + deploy แล้ว — กำลังทำ 1e |
-| 7 | ไฟล์สำหรับเกษตรจังหวัด | ⏳ |
-| 8 | รายงานสุดท้าย docs/v2/final-report.md | ⏳ |
+| 6 | 1c → 1d → 1e → 1f → 1g | ✅ merge + deploy ครบ (master e718622) smoke ผ่านทุกครั้ง |
+| 7 | ไฟล์สำหรับเกษตรจังหวัด | ✅ fieldwork/ อัปเดต (ในเครื่อง) + officer-guide.md + claims-replacement ครบ |
+| 8 | รายงานสุดท้าย docs/v2/final-report.md | ✅ |
 
 ## การตัดสินใจ
 
@@ -66,3 +66,7 @@
 | 2026-10-25 | merge 1f | CI ผ่าน (269 tests) → merge a0ec2a8 → deploy → smoke ผ่าน · ทดสอบสร้างรายงานจริงกับแปลงหนึ่ง: PDF อัปโหลดเข้า bucket private + ดาวน์โหลดผ่าน signed URL ได้ | — |
 | 2026-10-25 | งานพื้นฐาน (1g) | ข้อมูลตัวอย่างใน dev = แปลงสมมติราชบุรี 8 แปลง ครบ 3 ประเภทสวน มีสวนผสม (config/demo_plots_ratchaburi.json) + seed_demo_ratchaburi.sql สำหรับฐานข้อมูลทดสอบเท่านั้น (ไม่รันบน production — จะเข้าสแกนรายวันและสถิติจริง) · จุดเริ่มแผนที่ LIFF/dashboard ย้ายจากจันทบุรีมาราชบุรี · README เขียนใหม่ (Render, ราชบุรี, ฟีเจอร์ v2) · /health บอก text_layout ของ Pillow · error logging ฝั่ง LIFF มีแล้วตั้งแต่ 1b (/client/telemetry) | phase0-report 1g |
 | 2026-10-25 | ไฟล์ค้าง (railway/vercel/docker ฯลฯ) | ยังไม่ลบ ระบุใน README ว่าไม่ได้ใช้ | ค่าเริ่มต้นคำถามข้อ 11 |
+| 2026-10-25 | merge 1g | CI ผ่าน (273 tests) → merge e718622 → deploy → smoke ผ่าน · /health: Pillow บน Render = raqm (ภาษาไทยในรูป/PDF ถูกต้อง) | — |
+| 2026-10-25 | ไฟล์ภาคสนาม (ขั้น 7) | อัปเดต fieldwork/ จากข้อมูลวันนี้ (ฉบับเก่าไว้ใน fieldwork/archive) เพิ่มคอลัมน์ประเภทสวน/พืชในแอป, สิ่งที่ต้องแก้ขอบเขต, สถานะวิธีใหม่รวม "แห้งกว่าปกติ" · คงค่า owner_consent เดิม · ไม่พิมพ์พิกัดในแชท · คู่มือเจ้าหน้าที่ docs/v2/officer-guide.md | — |
+| 2026-10-25 | claims-replacement | สแกนข้อความในไฟล์นำเสนอทั้งหมดอีกรอบ เพิ่ม 10 แถว (ต้นทุนแฝง 186,303 บาท, น้ำหนักตัวแปร 60.7%, MAE, "ล่วงหน้า 8 วัน" + ตัวอย่างสวน A/B, ทะลุเมฆ 100%, ฐานข้อมูล 96%, ผู้ใช้ 5 ราย, LINE > 90%, เกณฑ์ SWAB) · เอาแถบ "ดาวเทียม LIVE/ฐานข้อมูล 96%" (ค่าคงที่) ออกจาก dashboard | ห้ามแสดงตัวเลขที่ยังไม่ได้ทดสอบ |
+| 2026-10-25 | incident-report.md | เก็บในเครื่องเท่านั้น (.git/info/exclude) ไม่ commit | repo เป็น public และคำสั่งคือ "ไม่ส่ง" |
