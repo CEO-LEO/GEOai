@@ -700,7 +700,8 @@ async def merge_plot_history(user_id: str, source_plot_id: int, target_plot_id: 
         resp = await client.patch(
             f"{SUPABASE_URL}/rest/v1/plots", headers=hdr,
             params={"id": f"eq.{source_plot_id}", "user_id": f"eq.{user_id}"},
-            json={"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()},
+            json={"is_active": False, "deactivated_reason": "merged",
+                  "updated_at": datetime.now(timezone.utc).isoformat()},
         )
         if resp.status_code not in (200, 204):
             logger.error(f"Supabase merge deactivate failed: {resp.status_code} — {resp.text}")
@@ -879,7 +880,7 @@ async def list_users_admin() -> list[dict]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
     users = await _fetch_all("users", {"select": "user_id,display_name,role,share_with_officers,created_at,last_seen_at,"
-                                                 "user_areas(area_code)", "order": "created_at.asc"}) or []
+                                                 "consent_version,deletion_requested_at,user_areas(area_code)", "order": "created_at.asc"}) or []
     plots = await _fetch_all("plots", {"is_active": "not.is.false", "select": "user_id"}) or []
     counts: dict[str, int] = {}
     for p in plots:
@@ -1014,6 +1015,140 @@ async def log_event(user_id: str | None, name: str, plot_id: int | None = None, 
                               json={"user_id": user_id, "name": name, "plot_id": plot_id, "props": props})
     except Exception as e:
         logger.warning(f"log_event failed ({type(e).__name__})")
+
+
+# ── PDPA (Phase 2b — migrate_v17) ─────────────────────────
+_PRIVACY_COLS = "user_id,display_name,consent_version,consent_at,share_with_officers,consent_photos_research,deletion_requested_at"
+
+
+async def get_user_privacy(user_id: str) -> dict | None:
+    """สถานะความยินยอมของผู้ใช้ — None ถ้าไม่มีผู้ใช้/อ่านไม่ได้"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/users", headers={**_HEADERS(), "Prefer": ""},
+                                params={"user_id": f"eq.{user_id}", "select": _PRIVACY_COLS, "limit": "1"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def _log_consent(client: httpx.AsyncClient, user_id: str, version: str, action: str, choices: dict) -> None:
+    resp = await client.post(f"{SUPABASE_URL}/rest/v1/consent_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                             json={"user_id": user_id, "version": version, "action": action, "choices": choices})
+    if resp.status_code not in (200, 201, 204):
+        logger.error(f"consent log failed: {resp.status_code} — {resp.text[:200]}")
+
+
+async def save_consent(user_id: str, version: str, share: bool, photos: bool, action: str) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/users", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                  params={"user_id": f"eq.{user_id}"},
+                                  json={"consent_version": version, "consent_at": datetime.now(timezone.utc).isoformat(),
+                                        "share_with_officers": share, "consent_photos_research": photos})
+        if resp.status_code not in (200, 204):
+            logger.error(f"save_consent failed: {resp.status_code} — {resp.text[:200]}")
+            return False
+        await _log_consent(client, user_id, version, action,
+                           {"share_with_officers": share, "photos_research": photos})
+    return True
+
+
+async def set_deletion_request(user_id: str, requested: bool, version: str) -> bool:
+    """
+    ขอลบ: ซ่อนแปลงทั้งหมด + หยุดแจ้งเตือนทันที (ข้อมูลยังอยู่จนผู้ดูแลลบถาวร) · ยกเลิก: คืนเฉพาะแปลงที่ซ่อนเพราะคำขอนี้
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    hdr = {**_HEADERS(), "Prefer": "return=minimal"}
+    now = datetime.now(timezone.utc).isoformat()
+    async with httpx.AsyncClient(timeout=20) as client:
+        user_fields = ({"deletion_requested_at": now, "notify_weekly": False, "notify_daily_digest": False,
+                        "share_with_officers": False}
+                       if requested else {"deletion_requested_at": None})
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/users", headers=hdr,
+                                  params={"user_id": f"eq.{user_id}"}, json=user_fields)
+        if resp.status_code not in (200, 204):
+            logger.error(f"deletion request failed: {resp.status_code} — {resp.text[:200]}")
+            return False
+        if requested:
+            params = {"user_id": f"eq.{user_id}", "is_active": "not.is.false"}
+            body = {"is_active": False, "deactivated_reason": "user_deletion_request", "updated_at": now}
+        else:
+            params = {"user_id": f"eq.{user_id}", "deactivated_reason": "eq.user_deletion_request"}
+            body = {"is_active": True, "deactivated_reason": None, "updated_at": now}
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/plots", headers=hdr, params=params, json=body)
+        if resp.status_code not in (200, 204):
+            logger.error(f"deletion request (plots) failed: {resp.status_code} — {resp.text[:200]}")
+            return False
+        await _log_consent(client, user_id, version, "deletion_request" if requested else "deletion_cancel", {})
+    return True
+
+
+async def export_user_data(user_id: str) -> dict:
+    """ข้อมูลทั้งหมดของผู้ใช้ (สิทธิ์เข้าถึงข้อมูล PDPA) — รวมว่าใครเคยเปิดดูแปลงของผู้ใช้"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+    eq = f"eq.{user_id}"
+    profile = await _fetch_all("users", {"user_id": eq, "select": "user_id,display_name,created_at,last_seen_at,role,"
+                                         "notify_weekly,notify_daily_digest,consent_version,consent_at,"
+                                         "share_with_officers,consent_photos_research,deletion_requested_at"}) or []
+    plots = await _fetch_all("plots", {"user_id": eq, "select": "id,name,lat,lng,area_rai,polygon,plot_type,area_name,"
+                                       "owner_label,is_active,created_at,updated_at,plot_crops(crop_id)",
+                                       "order": "id.asc"}) or []
+    plot_ids = [p["id"] for p in plots]
+    analyses = []
+    if plot_ids:
+        analyses = await _fetch_all("analyses", {"plot_id": f"in.({','.join(map(str, plot_ids))})", "order": "created_at.desc",
+                                                 "select": "plot_id,created_at,ndvi_now,ndvi_change,soil_moisture_vv,"
+                                                           "elevation_diff,risk_level"}) or []
+    consents = await _fetch_all("consent_logs", {"user_id": eq, "order": "created_at.desc",
+                                                 "select": "version,action,choices,created_at"}) or []
+    accesses = await _fetch_all("audit_logs", {"target_owner": eq, "order": "created_at.desc",
+                                               "select": "actor_role,action,target_type,target_id,created_at"}) or []
+    events = await _fetch_all("events", {"user_id": eq, "select": "name,created_at", "order": "created_at.desc"}) or []
+    for p in plots:
+        p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
+    return {"exported_at": datetime.now(timezone.utc).isoformat(), "profile": profile[0] if profile else None,
+            "plots": plots, "analyses": analyses, "consent_history": consents,
+            "who_accessed_my_plots": accesses, "usage_events": events}
+
+
+async def purge_user(user_id: str) -> dict:
+    """
+    ลบข้อมูลผู้ใช้ถาวร (ผู้ดูแลกดเองหลังผู้ใช้ขอลบ — ห้ามเรียกอัตโนมัติ) · คืนจำนวนแถวที่ลบต่อตาราง
+    เก็บ audit_logs ไว้ (หลักฐานการเข้าถึง) แต่แทน LINE userId ด้วยค่าแฮช
+    """
+    import hashlib
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+    hdr = {**_HEADERS(), "Prefer": "return=representation,count=exact"}
+    eq = f"eq.{user_id}"
+    gone = f"deleted:{hashlib.sha256(user_id.encode()).hexdigest()[:16]}"
+    out: dict[str, int] = {}
+    plots = await _fetch_all("plots", {"user_id": eq, "select": "id"}) or []
+    ids = ",".join(str(p["id"]) for p in plots)
+    async with httpx.AsyncClient(timeout=60) as client:
+        async def delete(table: str, params: dict):
+            r = await client.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers={**hdr, "Prefer": "return=minimal,count=exact"},
+                                    params=params)
+            total = r.headers.get("content-range", "*/0").split("/")[-1]
+            out[table] = out.get(table, 0) + (int(total) if total.isdigit() else 0)
+        if ids:
+            await delete("grid_snapshots", {"plot_id": f"in.({ids})"})
+            await delete("analyses", {"plot_id": f"in.({ids})"})
+            await delete("line_message_log", {"plot_id": f"in.({ids})"})
+        await delete("analyses", {"user_id": eq})
+        await delete("line_message_log", {"user_id": eq})
+        await delete("events", {"user_id": eq})
+        await delete("consent_logs", {"user_id": eq})
+        await delete("plots", {"user_id": eq})
+        await delete("users", {"user_id": eq})
+        await client.patch(f"{SUPABASE_URL}/rest/v1/audit_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                           params={"target_owner": eq}, json={"target_owner": gone})
+        await client.patch(f"{SUPABASE_URL}/rest/v1/audit_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                           params={"actor_user_id": eq}, json={"actor_user_id": gone})
+    return out
 
 
 # ── คำแนะนำ (Phase 1d — migrate_v15) ─────────────────────

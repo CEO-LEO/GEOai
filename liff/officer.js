@@ -147,6 +147,7 @@ async function phase2Init() {
   const me = await loadMe();
   if (!me) return;
   window.IAMROOT_ROLE = me.role;
+  window.accountInit?.(me.privacy);   // account.js: ขอความยินยอม (PDPA) + เมนูข้อมูลของฉัน
   if (me.role === "officer" || me.role === "admin") ensureOfficerTab(me);
 }
 window.phase2Init = phase2Init;
