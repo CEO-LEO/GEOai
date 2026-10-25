@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>จำแนกชนิดพืช — IAM ROOT</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ระบบจำแนกพืช (Phase 4a): จำนวน label, เวอร์ชันโมเดล + ผลประเมินแบบแบ่งเชิงพื้นที่, เปิดใช้, นำเข้าทะเบียน — ไม่มีพิกัด/ผู้ใช้ */
+    :root { --bg:#f4f7f4; --card:#fff; --ink:#1f2a24; --muted:#5f7066; --line:#dfe7e1; --green:#15803d;
+            --amber:#92400e; --amber-bg:#fef3c7; --bad:#b91c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg:#101613; --card:#18211c; --ink:#e6efe9; --muted:#a2b3a8; --line:#2b3a31;
+        --green:#4ade80; --amber:#fcd34d; --amber-bg:#3a2f12; --bad:#f87171; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Sarabun', sans-serif; background: var(--bg); color: var(--ink); font-size: 15px; }
+    header { background: #14532d; color: #fff; padding: 14px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 200px; }
+    header a { color: #bbf7d0; }
+    main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+    h2 { font-size: 16px; margin: 0 0 10px; color: var(--green); }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+    .tile .n { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .tile .l { color: var(--muted); font-size: 13px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .note { background: var(--amber-bg); color: var(--amber); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; line-height: 1.6; }
+    .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    button { font-family: inherit; font-size: 14.5px; padding: 8px 13px; border-radius: 9px; border: 1px solid var(--line);
+             background: var(--card); color: var(--ink); cursor: pointer; min-height: 40px; }
+    button.primary { background: var(--green); color: #fff; border-color: var(--green); font-weight: 700; }
+    button:disabled { opacity: .5; cursor: default; }
+    #login { max-width: 420px; margin: 40px auto; background: var(--card); padding: 18px; border-radius: 12px; border: 1px solid var(--line); }
+    input, textarea { font-family: inherit; font-size: 14.5px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px;
+                      background: var(--card); color: var(--ink); width: 100%; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px; }
+    pre { white-space: pre-wrap; font-size: 13px; background: var(--bg); padding: 10px; border-radius: 9px; max-height: 360px; overflow: auto; }
+    .ok { color: var(--green); font-weight: 700; } .no { color: var(--bad); font-weight: 700; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🌱 ระบบจำแนกชนิดพืช</h1>
+  <a href="/dashboard/">← กลับหน้าหลัก</a>
+</header>
+<main>
+  <div id="login" hidden>
+    <div class="bar"><input id="key-input" type="password" placeholder="รหัสผู้ดูแล (Admin key)" autocomplete="off"></div>
+    <button class="primary" id="key-btn">เข้าสู่ระบบ</button>
+  </div>
+
+  <div id="app" hidden>
+    <div class="note" id="status-note"></div>
+    <div class="tiles" id="tiles"></div>
+
+    <section>
+      <h2>ชุดข้อมูลฝึก (เฉพาะแปลงของผู้ที่ยินยอม "ใช้ปรับปรุงระบบ" + แปลงอ้างอิง)</h2>
+      <div class="bar">
+        <button id="feat-btn">🛰️ คำนวณข้อมูลดาวเทียมของแปลงที่ยังไม่มี</button>
+        <button class="primary" id="train-btn">🧪 ประเมิน + เทรนโมเดลเวอร์ชันใหม่</button>
+        <span class="muted" id="job-msg"></span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ชนิดพืช (label)</th><th class="num">แปลง</th><th class="num">อำเภอ</th><th>ใช้เป็นคลาส</th></tr></thead>
+        <tbody id="classes"></tbody>
+      </table></div>
+      <div class="muted" id="gate-note" style="margin-top:8px"></div>
+    </section>
+
+    <section>
+      <h2>เวอร์ชันโมเดล</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>เวอร์ชัน</th><th>สร้างเมื่อ</th><th class="num">แปลง</th><th class="num">macro-F1 (LR / RF)</th><th>ผ่านเกณฑ์</th><th>สถานะ</th><th></th></tr></thead>
+        <tbody id="models"></tbody>
+      </table></div>
+      <div class="bar" style="margin-top:10px"><button id="off-btn">⏸ ปิดการทาย (ไม่มีโมเดลที่ใช้งาน)</button></div>
+      <pre id="report" hidden></pre>
+    </section>
+
+    <section>
+      <h2>นำเข้าแปลงอ้างอิง (เช่น ทะเบียนเกษตรกรผ่านเกษตรจังหวัด)</h2>
+      <div class="muted">CSV คอลัมน์ <code>ref, crop, lat, lng, district</code> — crop เป็นชื่อไทยหรือรหัสพืช หลายชนิดคั่นด้วย <code>|</code> ·
+        ใช้เทรนเท่านั้น ไม่แสดงในแอป · <b>ต้องมีข้อตกลงการใช้ข้อมูล (DPA) กับหน่วยงานเจ้าของข้อมูลก่อนนำเข้า</b></div>
+      <label for="ref-source">ชื่อชุดข้อมูล (อังกฤษ/ตัวเลข เช่น farmer_registry_2569)</label>
+      <input id="ref-source" maxlength="60">
+      <label for="ref-basis">ที่มาทางกฎหมายของข้อมูล (เช่น "DPA กับ สนง.เกษตรจังหวัดราชบุรี ลงวันที่ …")</label>
+      <input id="ref-basis" maxlength="200">
+      <label for="ref-file">ไฟล์ CSV</label>
+      <input id="ref-file" type="file" accept=".csv,text/csv">
+      <div class="bar" style="margin-top:10px"><button class="primary" id="ref-btn">⬆ นำเข้า</button><span class="muted" id="ref-msg"></span></div>
+    </section>
+  </div>
+</main>
+<script>
+  const KEY_STORE = "geoai_admin_key";
+  let ADMIN_KEY = "";
+  try { ADMIN_KEY = localStorage.getItem(KEY_STORE) || ""; } catch {}
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  let CROP_NAMES = { mixed: "สวนผสม", other: "อื่น ๆ" };
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, { ...opts, headers: { "X-Admin-Key": ADMIN_KEY, ...(opts.headers || {}) } });
+    if (res.status === 403) { $("login").hidden = false; $("app").hidden = true; throw new Error("รหัสผู้ดูแลไม่ถูกต้อง"); }
+    if (!res.ok) {
+      let d = ""; try { d = (await res.json()).detail; } catch {}
+      throw new Error(typeof d === "string" && d ? d : `HTTP ${res.status}`);
+    }
+    return res;
+  }
+  $("key-btn").onclick = () => { ADMIN_KEY = $("key-input").value.trim(); try { localStorage.setItem(KEY_STORE, ADMIN_KEY); } catch {} load(); };
+
+  function render(d) {
+    const ds = d.dataset || {}, g = d.gate || {};
+    $("status-note").innerHTML = (d.active_version && d.guess_enabled_env
+      ? `ผู้ใช้เห็นผลทายจากโมเดล <b>${esc(d.active_version)}</b>`
+      : `<b>ผู้ใช้ยังไม่เห็นผลทาย</b> — แอปถาม "แปลงนี้ปลูกอะไร" เพื่อเก็บข้อมูลแทน · ต้องมีโมเดลที่ผ่านเกณฑ์และเปิดใช้
+         ${d.guess_enabled_env ? "" : "และตั้ง <code>CROP_GUESS_ENABLED=1</code> บนเซิร์ฟเวอร์ (หลังตกลงเรื่องไลเซนส์ Earth Engine — docs/v2/license-review.md)"}`);
+    const fb = d.labels || {};
+    $("tiles").innerHTML = [
+      [ds.n ?? 0, "แปลงในชุดฝึก (มีพืช + ข้อมูลดาวเทียม)"], [ds.consented_plots ?? 0, "แปลงของผู้ที่ยินยอม"],
+      [ds.without_features ?? 0, "มีพืชแต่ยังไม่มีข้อมูลดาวเทียม"], [ds.groups ?? 0, "กลุ่มพื้นที่ (อำเภอ)"],
+      [fb.feedback_total ?? 0, "คำตอบยืนยันพืชทั้งหมด"], [fb.references_total ?? 0, "แปลงอ้างอิงที่นำเข้า"],
+    ].map(([n, l]) => `<div class="tile"><div class="n">${Number(n).toLocaleString("th-TH")}</div><div class="l">${l}</div></div>`).join("");
+    const pc = Object.entries(ds.per_class || {});
+    $("classes").innerHTML = pc.length ? pc.map(([c, v]) => `<tr><td>${esc(CROP_NAMES[c] || c)}</td><td class="num">${v.plots}</td>
+        <td class="num">${v.districts}</td><td>${v.kept ? '<span class="ok">ใช่</span>' : "รวมเป็น \"อื่น ๆ\""}</td></tr>`).join("")
+      : `<tr><td colspan="4" class="muted">ยังไม่มีแปลงที่มีชนิดพืช + ข้อมูลดาวเทียม</td></tr>`;
+    $("gate-note").textContent = `เกณฑ์: คลาสต้องมี ≥ ${g.min_plots_per_class} แปลงจาก ≥ 2 อำเภอ · เปิดใช้โมเดลได้เมื่อประเมินแบบแบ่งตามพื้นที่ได้ macro-F1 ≥ ${g.min_macro_f1}`
+      + ` จาก ≥ ${g.min_plots} แปลงใน ≥ ${g.min_groups} อำเภอ · ปีข้อมูลดาวเทียม ${ds.year ?? "-"} · ชุดข้อมูล ${String(ds.sha256 || "").slice(0, 12)}`;
+    $("models").innerHTML = (d.models || []).length ? d.models.map(m => {
+      const lr = m.metrics?.logreg?.macro_f1, rf = m.metrics?.random_forest?.macro_f1;
+      return `<tr><td>${esc(m.version)}</td><td>${new Date(m.created_at).toLocaleString("th-TH")}</td>
+        <td class="num">${m.dataset?.n ?? "-"}</td><td class="num">${lr ?? "-"} / ${rf ?? "-"}</td>
+        <td>${m.passes_gate ? '<span class="ok">ผ่าน</span>' : '<span class="no">ไม่ผ่าน</span>'}</td>
+        <td>${m.active ? "<b>ใช้งานอยู่</b>" : "-"}</td>
+        <td><button data-report="${esc(m.version)}">รายงาน</button>
+            ${m.passes_gate && !m.active ? `<button class="primary" data-activate="${esc(m.version)}">เปิดใช้</button>` : ""}</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="muted">ยังไม่มีโมเดล</td></tr>`;
+  }
+
+  async function load() {
+    try {
+      const [d, crops] = await Promise.all([(await api("/admin/crop-model")).json(), fetch("/crops").then(r => r.json()).catch(() => ({}))]);
+      (crops.crops || []).forEach(c => CROP_NAMES[c.id] = c.name_th);
+      $("login").hidden = true; $("app").hidden = false;
+      render(d);
+    } catch (e) { if (!$("app").hidden) alert(e.message); else $("login").hidden = false; }
+  }
+
+  $("feat-btn").onclick = async () => {
+    const btn = $("feat-btn"); btn.disabled = true;
+    try {
+      let total = 0;
+      for (let i = 0; i < 50; i++) {
+        $("job-msg").textContent = `⏳ กำลังคำนวณ… (เสร็จแล้ว ${total} แปลง)`;
+        const r = await (await api("/admin/crop-model/features?limit=5", { method: "POST" })).json();
+        if (r.status !== "ok") { $("job-msg").textContent = "Earth Engine ใช้งานไม่ได้ตอนนี้"; return; }
+        total += r.computed;
+        if (!r.remaining || r.computed === 0) { $("job-msg").textContent = `✓ คำนวณเพิ่ม ${total} แปลง${r.failed ? ` · ไม่สำเร็จ ${r.failed}` : ""}`; break; }
+      }
+      load();
+    } catch (e) { $("job-msg").textContent = e.message; } finally { btn.disabled = false; }
+  };
+  $("train-btn").onclick = async () => {
+    const btn = $("train-btn"); btn.disabled = true; $("job-msg").textContent = "⏳ กำลังประเมินและเทรน…";
+    try {
+      const r = await (await api("/admin/crop-model/train", { method: "POST" })).json();
+      $("job-msg").textContent = r.status === "insufficient" ? r.message_th
+        : `✓ สร้าง ${r.version} — ${r.passes_gate ? "ผ่านเกณฑ์ (กดเปิดใช้ได้)" : "ไม่ผ่านเกณฑ์: " + (r.gate_reasons || []).join(" · ")}`;
+      if (r.report_md) { $("report").hidden = false; $("report").textContent = r.report_md; }
+      load();
+    } catch (e) { $("job-msg").textContent = e.message; } finally { btn.disabled = false; }
+  };
+  $("off-btn").onclick = async () => {
+    if (!confirm("ปิดการทายชนิดพืชให้ผู้ใช้ทั้งหมด?")) return;
+    try { await api("/admin/crop-model/activate", { method: "POST" }); load(); } catch (e) { alert(e.message); }
+  };
+  document.addEventListener("click", async e => {
+    const rep = e.target.closest("[data-report]"), act = e.target.closest("[data-activate]");
+    try {
+      if (rep) { $("report").hidden = false; $("report").textContent = await (await api(`/admin/crop-model/report.md?version=${encodeURIComponent(rep.dataset.report)}`)).text(); }
+      if (act && confirm(`เปิดใช้โมเดล ${act.dataset.activate}?`)) {
+        await api(`/admin/crop-model/activate?version=${encodeURIComponent(act.dataset.activate)}`, { method: "POST" }); load();
+      }
+    } catch (err) { alert(err.message); }
+  });
+  $("ref-btn").onclick = async () => {
+    const f = $("ref-file").files[0];
+    if (!f || !$("ref-source").value.trim() || $("ref-basis").value.trim().length < 5) { alert("กรอกชื่อชุดข้อมูล ที่มาทางกฎหมาย และเลือกไฟล์"); return; }
+    try {
+      const r = await (await api("/admin/crop-model/references", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: $("ref-source").value.trim(), consent_basis: $("ref-basis").value.trim(), csv: await f.text() }) })).json();
+      $("ref-msg").textContent = `นำเข้า ${r.imported} แถว${r.error_count ? ` · ข้าม ${r.error_count} แถว: ${r.errors.slice(0, 3).join(" / ")}` : ""}`;
+      load();
+    } catch (e) { $("ref-msg").textContent = e.message; }
+  };
+  if (ADMIN_KEY) load(); else $("login").hidden = false;
+</script>
+</body>
+</html>

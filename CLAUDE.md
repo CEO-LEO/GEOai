@@ -14,10 +14,14 @@
   - **ห้ามแสดงค่า secret ใด ๆ ในแชทหรือ log**
   - **หยุดถามเฉพาะ:** ต้องจ่ายเงินเพิ่ม · ต้องลบข้อมูลผู้ใช้จริงถาวร · ต้อง rewrite git history · rollback ไม่สำเร็จ
   - เครื่องมือ (ไม่อยู่ใน repo): `backend/.env` มี `RENDER_API_KEY`, `SUPABASE_DB_URL` (ห้าม commit) · ไม่มี psql → ใช้ psycopg
-- **สถานะล่าสุด (2026-10-25):** Phase 1, **Phase 2** และ **Phase 3** อยู่บน production — migrate_v12–v20 รันแล้ว
+- **สถานะล่าสุด (2026-10-25):** Phase 1, 2, 3 และ **Phase 4a (โครง)** อยู่บน production — migrate_v12–v21 รันแล้ว
   - รายงาน: [docs/v2/final-report.md](docs/v2/final-report.md) (Phase 1 + งานที่ต้องให้คนทำ) · [docs/v2/phase2-report.md](docs/v2/phase2-report.md)
     · [docs/v2/phase3-report.md](docs/v2/phase3-report.md) · [docs/data-governance.md](docs/data-governance.md)
-    · ถัดไปตามแผน: Phase 4a (จำแนกชนิดพืช — ต้องรอ label จากภาคสนาม + ตรวจไลเซนส์ Earth Engine ก่อน)
+    · [docs/v2/phase4a-report.md](docs/v2/phase4a-report.md) · [docs/v2/license-review.md](docs/v2/license-review.md)
+  - จำแนกพืช: แพ็กเกจ [backend/crop_classifier/](backend/crop_classifier/) (interface = `service.py`) · **การทายปิดอยู่**
+    (`CROP_GUESS_ENABLED` ไม่ได้ตั้ง + ไม่มีโมเดลที่ผ่านเกณฑ์) — ห้ามเปิดก่อนเจ้าของตอบเรื่องไลเซนส์ Earth Engine
+    · ชุดฝึกใช้เฉพาะแปลงของผู้ยินยอม `consent_photos_research` · โมเดลเก็บเป็น JSON ห้ามใช้ pickle · ห้ามสร้าง label เอง
+    · หน้า admin `/dashboard/crop-model.html`
   - เตือนฝน: [backend/rain_alerts.py](backend/rain_alerts.py) (ฝน ≥ 35 มม. ใน 3 วัน + จุดเสี่ยงจากตารางจุดล่าสุด) · ห้ามเพิ่ม push ชนิดใหม่
     โดยไม่ประเมินโควตา ([docs/v2/line-quota-estimate.md](docs/v2/line-quota-estimate.md)) · แหล่งพยากรณ์รอเจ้าของเลือก ([weather-source-options](docs/v2/weather-source-options.md))
   - สิทธิ์: ใช้ `_require_plot_access(plot_id, me, action)` (เจ้าของ / เจ้าหน้าที่ในอำเภอที่เจ้าของยินยอมแบ่งปัน / ผู้ดูแล + audit log)
@@ -26,8 +30,8 @@
     ([backend/privacy.py](backend/privacy.py)) + [liff/privacy.html](liff/privacy.html) · **ห้ามลบข้อมูลผู้ใช้ถาวรเอง** (ผู้ดูแลกดที่ users.html)
   - คำแนะนำมาจากตาราง `recommendation_rules` ([backend/recommendations.py](backend/recommendations.py)) ห้ามเขียนข้อความแนะนำในโค้ดเอง
   - สวนยกร่อง (`plot_type=raised_bed`) ต้องไม่ได้ลูกศร/วงม่วง/เตือนน้ำขังจากร่อง ทุกที่ที่เพิ่มใหม่
-  - LIFF แยกไฟล์ (ไม่มี build step): `account.js` (ยินยอม/ข้อมูลของฉัน/การแจ้งเตือน) `photos.js` `validation.js` `seasons.js` `officer.js` — ใช้ตัวแปรระดับบนของ index.html ได้
-  - หน้า admin: `/dashboard/recommendations.html` `/dashboard/users.html` `/dashboard/province.html` (X-Admin-Key)
+  - LIFF แยกไฟล์ (ไม่มี build step): `account.js` (ยินยอม/ข้อมูลของฉัน/การแจ้งเตือน) `photos.js` `validation.js` `seasons.js` `cropguess.js` `officer.js` — ใช้ตัวแปรระดับบนของ index.html ได้
+  - หน้า admin: `/dashboard/recommendations.html` `/dashboard/users.html` `/dashboard/province.html` `/dashboard/crop-model.html` (X-Admin-Key)
   - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" ([backend/risk_display.py](backend/risk_display.py)) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
     เดิม และ**หยุดคำเตือนความเสี่ยง** (`RISK_ALERTS_ENABLED`) เตือนฝนยังส่ง — `RISK_DISPLAY_MODE=legacy` = แบบเดิม
   - ตรวจภาคสนาม: [field-validation-plan](docs/v2/field-validation-plan.md) — รายการแปลงมีพิกัด เก็บใน `fieldwork/` (gitignored)
@@ -64,15 +68,15 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-pytest -q                                 # 377 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
-                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g, test_roles_2a, test_privacy_2b, test_photos_2c, test_validation_2d, test_province_2e, test_rain_alerts_3a, test_seasons_3c) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
+pytest -q                                 # 406 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g, test_roles_2a, test_privacy_2b, test_photos_2c, test_validation_2d, test_province_2e, test_rain_alerts_3a, test_seasons_3c, test_crops_4a) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
 IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
 ```
 
 - **Deploy:** push `master` → Render auto-deploy. Build command จริงตั้งใน Render Dashboard (ไม่ sync กับ `render.yaml`)
-- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v20 รัน 2026-10-25) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
+- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v21 รัน 2026-10-25) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
 - ไม่มี GEE key ในเครื่อง → `analyze_durian_plot()` ใช้ mock data (`_mock_analyze`)
 
 ## Env (ค่าอยู่ใน Render Dashboard และ `backend/.env` ห้าม commit)
@@ -80,7 +84,7 @@ IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
 `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEE_SERVICE_ACCOUNT`, `GEE_KEY_JSON`, `SUPABASE_URL`,
 `SUPABASE_SERVICE_ROLE_KEY`, `LIFF_URL`, `API_BASE_URL`, `ADMIN_API_KEY`, `SPHERE_KEY` — ดู [backend/.env.example](backend/.env.example)
 ไม่บังคับ: `LINE_LOGIN_CHANNEL_ID` (ค่าเริ่มต้น = ส่วนหน้าของ LIFF ID), `RATE_LIMIT_IP_PER_MIN`, `CORS_ALLOW_ORIGINS`,
-`IAMROOT_DEV_AUTH_USER` (dev เท่านั้น), `IAMROOT_DISABLE_DOTENV` (test)
+`IAMROOT_DEV_AUTH_USER` (dev เท่านั้น), `IAMROOT_DISABLE_DOTENV` (test), `CROP_GUESS_ENABLED=1` (แสดงผลทายพืช — ยังไม่เปิด)
 Migration: ก่อนรันทุกครั้ง `SUPABASE_DB_URL=... bash scripts/backup_db.sh` + มีไฟล์ `supabase/rollback_vN.sql` คู่กัน
 
 ## Data model ปัจจุบัน (Supabase)
@@ -89,7 +93,8 @@ Migration: ก่อนรันทุกครั้ง `SUPABASE_DB_URL=... ba
 plot_type flat/raised_bed/vegetable_bed, boundary_check, is_active) · `plot_crops` (ชนิดพืช id จาก `backend/config/crops.json`) · `plot_boundary_history` · `plot_merges` · `line_message_log`
 · `analyses` (คอลัมน์ flat + `full_data` JSONB) · `grid_snapshots` · `iot_readings` · `field_observations` · `scheduler_runs`
 · Phase 1d–2: `recommendation_rules`(+history) · `user_areas` `invites` `audit_logs` `events` (v16) · `consent_logs` (v17) · `photos` (v18) · `field_validations` (v19)
-— schema: [supabase/schema.sql](supabase/schema.sql) + migrate_v3…v19 · RLS เปิดทุกตาราง policy "backend only" + anon/authenticated ไม่มีสิทธิ์ (v12)
+· Phase 4a (v21): `reference_labels` `crop_features` `crop_models` `crop_predictions` `crop_label_feedback`
+— schema: [supabase/schema.sql](supabase/schema.sql) + migrate_v3…v21 · RLS เปิดทุกตาราง policy "backend only" + anon/authenticated ไม่มีสิทธิ์ (v12)
 
 ## Auth และสิทธิ์ (ตั้งแต่ Phase 1a)
 

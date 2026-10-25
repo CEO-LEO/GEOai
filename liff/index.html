@@ -1067,7 +1067,7 @@
     const names = cropNames(plot.crop_ids);
     const type = plotTypeName(plot.plot_type);
     if (!names.length && !type) {
-      return `<div class="plot-meta">🌱 ยังไม่ได้ระบุพืช — แตะ "✏️ แก้ไข" เพื่อเลือก</div>`;
+      return `<div class="plot-meta">🌱 ยังไม่ได้ระบุพืช — แตะ "🌱 ชนิดพืช" เพื่อบอกระบบ</div>`;
     }
     return `<div class="plot-meta">🌱 ${escHtml(names.join(", ") || "ยังไม่ได้ระบุพืช")}${type ? ` · ${escHtml(type)}` : ""}</div>`;
   }
@@ -1127,6 +1127,7 @@
           ${plot.id ? `<button class="plot-share-btn">📤 แชร์ / PDF</button>` : ""}
           ${plot.id ? `<button class="plot-photo-btn">📷 รูป</button>` : ""}
           ${plot.id ? `<button class="plot-ts-btn plot-season-btn">📅 เทียบฤดู</button>` : ""}
+          ${plot.id ? `<button class="plot-ts-btn plot-crop-btn">🌱 ชนิดพืช</button>` : ""}
           ${plot.id ? `<button class="plot-edit-btn">✏️ แก้ไข</button>` : ""}
           ${plot.id ? `<button class="plot-hist-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
@@ -1161,6 +1162,10 @@
       card.querySelector(".plot-season-btn")?.addEventListener("click", e => {
         e.stopPropagation();
         window.showSeasons?.(plot);
+      });
+      card.querySelector(".plot-crop-btn")?.addEventListener("click", e => {
+        e.stopPropagation();
+        window.showCropGuess?.(plot, { onSaved: () => { writePlotsCache(userId, userPlots); renderPlotList(); } });
       });
       card.querySelector(".plot-photo-btn")?.addEventListener("click", e => {
         e.stopPropagation();
@@ -3022,6 +3027,7 @@
 <script src="photos.js"></script>
 <script src="validation.js"></script>
 <script src="seasons.js"></script>
+<script src="cropguess.js"></script>
 <script src="officer.js"></script>
 </body>
 </html>

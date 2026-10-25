@@ -112,6 +112,7 @@ async function loadOfficerPlots() {
           <button class="plot-share-btn" data-act="report">📤 รายงาน</button>
           <button class="plot-photo-btn" data-act="photo">📷 รูป</button>
           <button class="plot-ts-btn" data-act="seasons">📅 เทียบฤดู</button>
+          <button class="plot-ts-btn" data-act="crop">🌱 ยืนยันพืช</button>
         </div>
       </div>`).join("")}`).join("");
 }
@@ -143,6 +144,8 @@ document.addEventListener("click", async e => {
     window.openPhotoSheet?.(plot);
   } else if (act === "seasons") {
     window.showSeasons?.(plot);
+  } else if (act === "crop") {
+    window.showCropGuess?.(plot, { onSaved: loadOfficerPlots });   // เจ้าหน้าที่ยืนยัน = label น้ำหนักสูงสุด
   }
 });
 

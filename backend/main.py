@@ -67,6 +67,8 @@ import photo_service
 import validation
 import province
 import seasons
+from crop_classifier import service as crop_service, store as crop_store, evaluate as crop_evaluate, \
+    labels as crop_labels, references as crop_references
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -1617,6 +1619,117 @@ async def plot_seasons(user_id: str, plot_id: int, background: BackgroundTasks, 
     _seasons_cache[key] = (time.monotonic(), out)
     background.add_task(log_event, me, "view_seasons", plot_id, None)
     return out
+
+
+# ── จำแนกชนิดพืช: ทาย + ยืนยัน (Phase 4a — crop_classifier) ──
+class CropFeedbackBody(BaseModel):
+    answer:        Literal["yes", "no", "other", "unsure"]
+    crop_ids:      list[str] = Field(default_factory=list, max_length=crops_mod.MAX_CROPS_PER_PLOT)
+    prediction_id: int | None = Field(None, ge=1)
+
+
+@app.get("/plots/{user_id}/{plot_id}/crop-guess")
+async def plot_crop_guess(user_id: str, plot_id: int, me: str = Depends(_grid_user)):
+    """
+    ระบบทายว่าแปลงนี้น่าจะปลูกอะไร (top-3 + ความมั่นใจ) — ยังไม่เปิดใช้ = status "collecting" (แอปถามผู้ใช้แทน)
+    ห้ามตัดสินเอง: ผลทายไม่เปลี่ยนชนิดพืชของแปลง จนกว่าผู้ใช้กดยืนยัน
+    """
+    _require_self(user_id, me)
+    plot = await _require_plot_access(plot_id, me, audit_action="view_crop_guess")
+    out = await crop_service.guess(plot)
+    crop_ids = await get_plot_crop_ids(plot_id)
+    is_owner = plot.get("user_id") == me
+    helps = bool((await get_user_privacy(me) or {}).get("consent_photos_research")) if is_owner else None
+    return out | {"plot_id": plot_id, "current_crop_ids": crop_ids, "current_names_th": crops_mod.names_th(crop_ids),
+                  "is_owner": is_owner, "owner_helps_training": helps}
+
+
+@app.post("/plots/{user_id}/{plot_id}/crop-feedback")
+async def plot_crop_feedback(user_id: str, plot_id: int, body: CropFeedbackBody, background: BackgroundTasks,
+                             me: str = Depends(_api_user)):
+    """ใช่ / ไม่ใช่ / เลือกพืชอื่น / ไม่แน่ใจ — เป็น label ของรอบเทรนถัดไป · ใช่/เลือกพืชอื่น = บันทึกชนิดพืชของแปลงด้วย"""
+    _require_self(user_id, me)
+    await _require_consent(me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "crop_feedback")
+    ids = _validated_crop_ids(body.crop_ids)
+    if body.answer in ("yes", "other") and not ids:
+        raise HTTPException(status_code=422, detail="เลือกพืชอย่างน้อย 1 ชนิด")
+    acc = await _access_for(me)
+    role = acc["role"] if acc["role"] in ("officer", "admin") else "farmer"
+    if body.answer in ("yes", "other") and sorted(ids) != sorted(await get_plot_crop_ids(plot_id)):
+        if not await set_plot_crops(plot_id, ids, source="user" if role == "farmer" else "officer"):
+            raise HTTPException(status_code=502, detail="บันทึกชนิดพืชไม่สำเร็จ กรุณาลองใหม่")
+    row = await crop_store.insert_feedback({"plot_id": plot_id, "prediction_id": body.prediction_id,
+                                            "answer": body.answer, "crop_ids": ids, "by_user": me, "role": role})
+    if not row:
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
+    background.add_task(log_event, me, "crop_feedback", plot_id, {"answer": body.answer, "role": role})
+    return {"id": row["id"], "crop_ids": ids, "names_th": crops_mod.names_th(ids),
+            "message_th": "ขอบคุณครับ — คำตอบนี้ช่วยสอนระบบให้ทายชนิดพืชได้แม่นขึ้น"}
+
+
+@app.get("/admin/crop-model", dependencies=[Depends(verify_admin)])
+async def admin_crop_model():
+    """สถานะระบบจำแนกพืช: เปิดทายหรือยัง, โมเดลแต่ละเวอร์ชัน, จำนวน label (ไม่มีพิกัด/ผู้ใช้)"""
+    _, ds = await crop_service.build_dataset()
+    models, active, counts = await asyncio.gather(crop_store.list_models(), crop_store.get_active_model(),
+                                                  crop_store.label_counts())
+    return {"guess_enabled_env": crop_service.guess_enabled(), "active_version": (active or {}).get("version"),
+            "models": models, "dataset": ds, "labels": counts,
+            "gate": {"min_plots": crop_evaluate.GATE_MIN_PLOTS, "min_macro_f1": crop_evaluate.GATE_MIN_MACRO_F1,
+                     "min_groups": crop_evaluate.GATE_MIN_GROUPS, "min_plots_per_class": crop_labels.MIN_PLOTS_PER_CLASS}}
+
+
+@app.post("/admin/crop-model/features", dependencies=[Depends(verify_admin)])
+async def admin_crop_features(limit: int = 5):
+    """สกัด feature ชุดฝึกทีละไม่กี่แปลง (GEE ~10 วินาที/แปลง) — เรียกซ้ำจน remaining = 0"""
+    return await crop_service.batch_features(min(max(limit, 1), 20))
+
+
+@app.post("/admin/crop-model/train", dependencies=[Depends(verify_admin)])
+async def admin_crop_train():
+    """ประเมินแบบแบ่งเชิงพื้นที่ + เทรน + เก็บเป็นเวอร์ชันใหม่ (ไม่เปิดใช้เอง)"""
+    out = await crop_service.train("admin")
+    await log_audit(None, "admin", "crop_model_train", "crop_model", None, None,
+                    {"status": out["status"], "version": out.get("version"), "n": out["dataset"]["n"]})
+    return out
+
+
+@app.post("/admin/crop-model/activate", dependencies=[Depends(verify_admin)])
+async def admin_crop_activate(version: str | None = None):
+    """เปิดใช้โมเดลที่ผ่านเกณฑ์ (ไม่ส่ง version = ปิดการทาย) · ผู้ใช้เห็นผลทายเมื่อ env CROP_GUESS_ENABLED=1 ด้วย"""
+    ok, msg = await crop_service.activate(version or None)
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    await log_audit(None, "admin", "crop_model_activate", "crop_model", None, None, {"version": version})
+    return {"active_version": version, "message_th": msg}
+
+
+@app.get("/admin/crop-model/report.md", dependencies=[Depends(verify_admin)])
+async def admin_crop_report(version: str):
+    m = await crop_store.get_model(version)
+    if not m:
+        raise HTTPException(status_code=404, detail="ไม่พบโมเดลนี้")
+    names = {c["id"]: c["name_th"] for c in crops_mod.all_crops()} | {"mixed": "สวนผสม", "other": "อื่น ๆ"} \
+        | {d["code"]: d["name_th"] for d in areas.districts()}
+    return Response(content=crop_evaluate.report_markdown(version, m["metrics"], m["dataset"], names),
+                    media_type="text/markdown; charset=utf-8")
+
+
+class ReferenceImportBody(BaseModel):
+    source:        str = Field(..., min_length=3, max_length=60, pattern=r"^[A-Za-z0-9_\-]+$")
+    consent_basis: str = Field(..., min_length=5, max_length=200)
+    csv:           str = Field(..., max_length=2_000_000)
+
+
+@app.post("/admin/crop-model/references", dependencies=[Depends(verify_admin)])
+async def admin_crop_references(body: ReferenceImportBody):
+    """นำเข้าแปลงอ้างอิง (เช่น ทะเบียนเกษตรกร) จาก CSV — ใช้เทรนเท่านั้น · ต้องระบุที่มาทางกฎหมายของข้อมูล"""
+    rows, errors = crop_references.parse_csv(body.csv, body.source, body.consent_basis.strip(), "admin")
+    n = await crop_store.upsert_reference_labels(rows)
+    await log_audit(None, "admin", "import_reference_labels", "reference_labels", None, None,
+                    {"source": body.source, "rows": n, "errors": len(errors)})
+    return {"imported": n, "errors": errors[:50], "error_count": len(errors)}
 
 
 # ── แดชบอร์ดจังหวัด + สถิติการใช้งาน (Phase 2e) ──
