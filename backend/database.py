@@ -1017,6 +1017,20 @@ async def log_event(user_id: str | None, name: str, plot_id: int | None = None, 
         logger.warning(f"log_event failed ({type(e).__name__})")
 
 
+# ── แดชบอร์ดจังหวัด / สถิติ (Phase 2e) ─────────────────────
+async def get_events_since(since_iso: str) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    return await _fetch_all("events", {"created_at": f"gte.{since_iso}", "select": "user_id,name,created_at",
+                                       "order": "created_at.asc"}) or []
+
+
+async def get_users_created() -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    return await _fetch_all("users", {"select": "user_id,created_at", "order": "created_at.asc"}) or []
+
+
 # ── ยืนยันภาคสนาม (Phase 2d — migrate_v19) ─────────────────
 async def insert_validation(row: dict) -> dict | None:
     if not SUPABASE_URL or not SUPABASE_KEY:

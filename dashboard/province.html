@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ภาพรวมจังหวัด — IAM ROOT</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    /* แดชบอร์ดจังหวัด (Phase 2e): ตัวเลขรวมรายอำเภอ + สถิติการใช้งานรายสัปดาห์ — ไม่มีชื่อ/พิกัดแปลงของเกษตรกร */
+    :root { --bg:#f4f7f4; --card:#fff; --ink:#1f2a24; --muted:#5f7066; --line:#dfe7e1; --green:#15803d;
+            --mark:#15803d; --mark-fill:rgba(21,128,61,.35); --amber:#92400e; --amber-bg:#fef3c7; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg:#101613; --card:#18211c; --ink:#e6efe9; --muted:#a2b3a8; --line:#2b3a31;
+        --green:#4ade80; --mark:#4ade80; --mark-fill:rgba(74,222,128,.35); --amber:#fcd34d; --amber-bg:#3a2f12; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Sarabun', sans-serif; background: var(--bg); color: var(--ink); font-size: 15px; }
+    header { background: #14532d; color: #fff; padding: 14px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 200px; }
+    header a { color: #bbf7d0; }
+    main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+    h2 { font-size: 16px; margin: 0 0 10px; color: var(--green); }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+    .tile .n { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .tile .l { color: var(--muted); font-size: 13px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .note { background: var(--amber-bg); color: var(--amber); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; line-height: 1.6; }
+    #map { height: 420px; border-radius: 10px; }
+    .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    button { font-family: inherit; font-size: 14.5px; padding: 8px 13px; border-radius: 9px; border: 1px solid var(--line);
+             background: var(--card); color: var(--ink); cursor: pointer; min-height: 40px; }
+    button.primary { background: var(--green); color: #fff; border-color: var(--green); font-weight: 700; }
+    #login { max-width: 420px; margin: 40px auto; background: var(--card); padding: 18px; border-radius: 12px; border: 1px solid var(--line); }
+    input { font-family: inherit; font-size: 14.5px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🗺️ ภาพรวมจังหวัดราชบุรี</h1>
+  <a href="/dashboard/">← กลับหน้าหลัก</a>
+</header>
+<main>
+  <div id="login" hidden>
+    <div class="bar"><input id="key-input" type="password" placeholder="รหัสผู้ดูแล (Admin key)" style="flex:1" autocomplete="off"></div>
+    <button class="primary" id="key-btn">เข้าสู่ระบบ</button>
+  </div>
+
+  <div id="app" hidden>
+    <div class="note">ตัวเลขรวมรายอำเภอ ไม่มีชื่อหรือพิกัดแปลงของเกษตรกร · ไฟล์ส่งหน่วยงานซ่อนตัวเลขอำเภอที่มีเกษตรกรน้อยกว่า 3 คน
+      · <span id="gen-at"></span></div>
+    <div class="bar">
+      <button class="primary" id="export-btn">⬇ ไฟล์ส่งหน่วยงาน (CSV เปิดใน Excel)</button>
+      <button id="val-btn">⬇ ผลยืนยันภาคสนาม (CSV)</button>
+    </div>
+    <div class="tiles" id="tiles"></div>
+
+    <section>
+      <h2>แปลงรายอำเภอ</h2>
+      <div id="map" role="img" aria-label="แผนที่จำนวนแปลงรายอำเภอ (วงกลมใหญ่ = แปลงมาก) — ตัวเลขเดียวกับตารางด้านล่าง"></div>
+      <div class="muted" id="area-note" style="margin-top:6px"></div>
+      <div class="muted" style="margin-top:6px">วงกลมวางที่จุดกลางอำเภอ ขนาดตามจำนวนแปลง (ไม่ใช่ตำแหน่งแปลงจริง) · แตะวงกลมดูตัวเลข · ขอบเขตอำเภอ: geoBoundaries</div>
+      <div class="table-wrap" style="margin-top:12px"><table>
+        <thead><tr><th>อำเภอ</th><th class="num">เกษตรกร</th><th class="num">แปลง</th><th class="num">พื้นที่ (ไร่)</th><th class="num">วาดขอบเขต</th><th>พืช</th><th>ประเภทสวน</th><th>ความชื้นเทียบปกติ</th></tr></thead>
+        <tbody id="districts"></tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>ชนิดพืช (ทั้งจังหวัด)</h2>
+      <div class="table-wrap"><table><thead><tr><th>พืช</th><th class="num">แปลง</th></tr></thead><tbody id="crops"></tbody></table></div>
+    </section>
+
+    <section>
+      <h2>การใช้งานรายสัปดาห์</h2>
+      <div class="muted" style="margin-bottom:8px">นับตั้งแต่ 25 ต.ค. 2569 · สัปดาห์เริ่มวันจันทร์ · ผู้ใช้ประจำ = ใช้งานอย่างน้อย 2 สัปดาห์ใน 4 สัปดาห์ล่าสุด</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>สัปดาห์ที่เริ่ม</th><th class="num">ผู้ใช้ใหม่</th><th class="num">ผู้ใช้งาน</th><th class="num">ผู้ใช้ประจำ</th><th class="num">เปิดแอป</th><th class="num">สร้างแปลง</th><th class="num">ตรวจแปลง</th><th class="num">ดูคำแนะนำ</th><th class="num">รายงาน</th><th class="num">รูป</th><th class="num">ยืนยันในแปลง</th></tr></thead>
+        <tbody id="usage"></tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>ผลยืนยันภาคสนาม</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>สิ่งที่ระบบบอก</th><th class="num">จริง</th><th class="num">ไม่จริง</th><th class="num">ไม่แน่ใจ</th><th>สรุป</th></tr></thead>
+        <tbody id="validations"></tbody>
+      </table></div>
+    </section>
+  </div>
+</main>
+
+<script>
+  const KEY_STORE = "geoai_admin_key";
+  let ADMIN_KEY = "", map = null;
+  try { ADMIN_KEY = localStorage.getItem(KEY_STORE) || ""; } catch {}
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const num = n => typeof n === "number" ? n.toLocaleString("th-TH") : esc(n);
+  const pairs = d => Object.entries(d || {}).map(([k, v]) => `${esc(k)} ${v}`).join(" · ") || "-";
+
+  async function api(path) {
+    const res = await fetch(path, { headers: { "X-Admin-Key": ADMIN_KEY } });
+    if (res.status === 403) { $("login").hidden = false; $("app").hidden = true; throw new Error("รหัสผู้ดูแลไม่ถูกต้อง"); }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res;
+  }
+  $("key-btn").onclick = () => { ADMIN_KEY = $("key-input").value.trim(); try { localStorage.setItem(KEY_STORE, ADMIN_KEY); } catch {} load(); };
+
+  async function download(path, name) {
+    try {
+      const blob = await (await api(path)).blob();
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e) { alert("ดาวน์โหลดไม่สำเร็จ: " + e.message); }
+  }
+  $("export-btn").onclick = () => download("/admin/province/export.csv", "iamroot-ratchaburi-districts.csv");
+  $("val-btn").onclick = () => download("/admin/validations/export.csv", "field-validations.csv");
+
+  function renderMap(rows) {
+    if (!map) {
+      map = L.map("map", { attributionControl: true }).setView([13.55, 99.7], 9);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                  { maxZoom: 13, attribution: "© OpenStreetMap" }).addTo(map);
+    }
+    const css = getComputedStyle(document.documentElement);
+    const stroke = css.getPropertyValue("--mark").trim(), fill = css.getPropertyValue("--mark-fill").trim();
+    const max = Math.max(1, ...rows.map(r => r.plots));
+    rows.filter(r => r.lat != null).forEach(r => {
+      // พื้นที่วงกลมแปรตามจำนวนแปลง (รัศมี ∝ √n) · อำเภอที่ไม่มีแปลงเป็นจุดเล็กเส้นประ ให้รู้ว่ามีอำเภอนั้นอยู่
+      const radius = r.plots ? 8 + 22 * Math.sqrt(r.plots / max) : 5;
+      L.circleMarker([r.lat, r.lng], { radius, color: stroke, weight: 2, fillColor: fill, fillOpacity: 1,
+                                       dashArray: r.plots ? null : "3 3" })
+        .bindTooltip(`<b>อ.${esc(r.name_th)}</b><br>แปลง ${r.plots} · เกษตรกร ${r.farmers} คน · ${num(r.area_rai)} ไร่`, { direction: "top" })
+        .addTo(map);
+      if (r.plots) L.marker([r.lat, r.lng], { icon: L.divIcon({ className: "", html: `<div style="font:700 12px Sarabun;color:#1f2a24;text-shadow:0 0 3px #fff,0 0 3px #fff;transform:translate(-50%,-50%);white-space:nowrap">${r.plots}</div>` }), interactive: false }).addTo(map);
+    });
+  }
+
+  async function load() {
+    try {
+      const p = await (await api("/admin/province")).json();
+      $("login").hidden = true; $("app").hidden = false;
+      $("gen-at").textContent = "ข้อมูล ณ " + new Date(p.generated_at).toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
+      const inProv = p.districts.filter(r => r.code);
+      const provPlots = inProv.reduce((s, r) => s + r.plots, 0), provArea = inProv.reduce((s, r) => s + r.area_rai, 0);
+      const outside = p.districts.find(r => !r.code);
+      $("tiles").innerHTML = [
+        [provPlots, "แปลงในราชบุรี"], [inProv.reduce((s, r) => s + r.farmers, 0), "เกษตรกรในราชบุรี (คน)"],
+        [Math.round(provArea).toLocaleString("th-TH"), "พื้นที่รวม (ไร่)"],
+        [inProv.filter(r => r.plots).length + " / " + inProv.length, "อำเภอที่มีแปลง"],
+        [outside ? outside.plots : 0, "แปลงนอกจังหวัด"],
+      ].map(([n, l]) => `<div class="tile"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`).join("");
+      $("districts").innerHTML = p.districts.map(r => `<tr>
+        <td>${esc(r.name_th)}</td><td class="num">${num(r.farmers)}</td><td class="num">${num(r.plots)}</td>
+        <td class="num">${num(r.area_rai)}</td><td class="num">${num(r.with_boundary)}</td>
+        <td>${pairs(r.crops)}</td><td>${pairs(r.plot_types)}</td><td>${pairs(r.status)}</td></tr>`).join("");
+      $("crops").innerHTML = Object.entries(p.totals.crops).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${v}</td></tr>`).join("")
+        || `<tr><td colspan="2" class="muted">ยังไม่มีข้อมูล</td></tr>`;
+      renderMap(inProv);
+      $("area-note").textContent = p.totals.plots_area_not_counted
+        ? `ไม่นับพื้นที่ ${p.totals.plots_area_not_counted} แปลงที่ขอบเขตใหญ่ผิดปกติ (เกิน 1,000 ไร่ — น่าจะวาดผิด)` : "";
+      const u = await (await api("/admin/usage?weeks=12")).json();
+      $("usage").innerHTML = u.weeks.slice().reverse().map(w => `<tr><td>${new Date(w.week_start).toLocaleDateString("th-TH", { dateStyle: "medium" })}</td>
+        ${["new_users", "active_users", "returning_users", "app_opens", "plots_created", "analyses", "recommendation_views", "reports", "photos", "validations"]
+          .map(k => `<td class="num">${w[k]}</td>`).join("")}</tr>`).join("");
+      const v = await (await api("/admin/validations")).json();
+      $("validations").innerHTML = v.by_problem.map(b => `<tr><td>${esc(b.problem_th)}</td><td class="num">${b.true}</td>
+        <td class="num">${b.false}</td><td class="num">${b.unsure}</td><td>${esc(b.text_th)}</td></tr>`).join("")
+        || `<tr><td colspan="5" class="muted">ยังไม่มีการยืนยันภาคสนาม</td></tr>`;
+    } catch (e) { if (!$("login").hidden) return; alert("โหลดไม่สำเร็จ: " + e.message); }
+  }
+  if (ADMIN_KEY) load(); else $("login").hidden = false;
+</script>
+</body>
+</html>

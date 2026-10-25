@@ -1,19 +1,19 @@
 {
-  "_note": "พื้นที่รับผิดชอบของเจ้าหน้าที่ (Phase 2a) — ระดับอำเภอ · code = รหัสอำเภอของกรมการปกครอง · geo_name = ชื่อใน geoBoundaries ADM2 (Earth Engine WM/geoLab/geoBoundaries/600, CC BY 4.0 — ต้องใส่ที่มา) ใช้จับคู่จุดแปลงกับอำเภอ · ระดับตำบลยังไม่มีชุดขอบเขตใน Earth Engine",
+  "_note": "พื้นที่รับผิดชอบของเจ้าหน้าที่ (Phase 2a) — ระดับอำเภอ · code = รหัสอำเภอของกรมการปกครอง · geo_name = ชื่อใน geoBoundaries ADM2 (Earth Engine WM/geoLab/geoBoundaries/600, CC BY 4.0 — ต้องใส่ที่มา) ใช้จับคู่จุดแปลงกับอำเภอ · ระดับตำบลยังไม่มีชุดขอบเขตใน Earth Engine · lat/lng = จุดกลางอำเภอ, area_km2 = พื้นที่อำเภอ (คำนวณจาก geoBoundaries ครั้งเดียว ใช้วางจุดบนแผนที่จังหวัด)",
   "source": "geoBoundaries (www.geoboundaries.org) via Google Earth Engine",
   "provinces": [
     {"code": "70", "name_th": "ราชบุรี", "geo_name": "Ratchaburi Province",
      "districts": [
-       {"code": "7001", "name_th": "เมืองราชบุรี", "geo_name": "Mueang Ratchaburi"},
-       {"code": "7002", "name_th": "จอมบึง", "geo_name": "Chom Bueng"},
-       {"code": "7003", "name_th": "สวนผึ้ง", "geo_name": "Suan Phueng"},
-       {"code": "7004", "name_th": "ดำเนินสะดวก", "geo_name": "Damnoen Saduak"},
-       {"code": "7005", "name_th": "บ้านโป่ง", "geo_name": "Ban Pong"},
-       {"code": "7006", "name_th": "บางแพ", "geo_name": "Bang Phae"},
-       {"code": "7007", "name_th": "โพธาราม", "geo_name": "Photharam"},
-       {"code": "7008", "name_th": "ปากท่อ", "geo_name": "Pak Tho"},
-       {"code": "7009", "name_th": "วัดเพลง", "geo_name": "Wat Phleng"},
-       {"code": "7010", "name_th": "บ้านคา", "geo_name": "Ban Kha"}
+       {"code": "7001", "name_th": "เมืองราชบุรี", "geo_name": "Mueang Ratchaburi", "lat": 13.5425, "lng": 99.7666, "area_km2": 483},
+       {"code": "7002", "name_th": "จอมบึง", "geo_name": "Chom Bueng", "lat": 13.6395, "lng": 99.5187, "area_km2": 786},
+       {"code": "7003", "name_th": "สวนผึ้ง", "geo_name": "Suan Phueng", "lat": 13.5506, "lng": 99.293, "area_km2": 1014},
+       {"code": "7004", "name_th": "ดำเนินสะดวก", "geo_name": "Damnoen Saduak", "lat": 13.5685, "lng": 99.9682, "area_km2": 213},
+       {"code": "7005", "name_th": "บ้านโป่ง", "geo_name": "Ban Pong", "lat": 13.8212, "lng": 99.8261, "area_km2": 355},
+       {"code": "7006", "name_th": "บางแพ", "geo_name": "Bang Phae", "lat": 13.6792, "lng": 99.9791, "area_km2": 184},
+       {"code": "7007", "name_th": "โพธาราม", "geo_name": "Photharam", "lat": 13.71, "lng": 99.7521, "area_km2": 493},
+       {"code": "7008", "name_th": "ปากท่อ", "geo_name": "Pak Tho", "lat": 13.3646, "lng": 99.6588, "area_km2": 809},
+       {"code": "7009", "name_th": "วัดเพลง", "geo_name": "Wat Phleng", "lat": 13.4509, "lng": 99.8646, "area_km2": 37},
+       {"code": "7010", "name_th": "บ้านคา", "geo_name": "Ban Kha", "lat": 13.321, "lng": 99.3867, "area_km2": 852}
      ]}
   ]
 }
