@@ -55,6 +55,7 @@ import risk_display
 import crops as crops_mod
 import boundary
 import recommendations
+import plot_summary
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -566,6 +567,7 @@ class GridRequest(BaseModel):
         description="พิกัดขอบเขตแปลง [[lng,lat], ...] อย่างน้อย 3 จุด"
     )
     spacing_m: int = Field(10, ge=10, le=50, description="ระยะห่างระหว่างจุดตาราง (เมตร)")
+    plot_type: Literal["flat", "raised_bed", "vegetable_bed"] | None = None   # 1e: ประโยคสรุปของสวนยกร่อง
 
 
 GRID_TIMEOUT_S = 70   # เผื่อเวลาให้แปลงใหญ่ (เพดานจุดขยับ 400→1600 ใน gee_analysis.py)
@@ -585,7 +587,16 @@ async def analyze_grid(req: GridRequest):
             run_in_threadpool(gee_analysis.get_moisture_grid, req.polygon, req.spacing_m),
             timeout=GRID_TIMEOUT_S,
         )
-        return {"status": "ok", "count": len(points), "spacing_m": actual_spacing_m, "points": points}
+        # 1e: ประโยคสรุป + คำอธิบายสี (เทมเพลตจากข้อมูลจริง) — พังได้โดยไม่กระทบตารางจุด
+        try:
+            summary = await run_in_threadpool(plot_summary.summarize, points, req.polygon,
+                                              req.plot_type, actual_spacing_m)
+        except Exception as e:
+            logger.warning(f"grid summary failed: {type(e).__name__}: {e}")
+            summary = {"summary_th": None, "lines": [], "color_note_th": plot_summary.COLOR_NOTE_TH}
+        return {"status": "ok", "count": len(points), "spacing_m": actual_spacing_m, "points": points,
+                "summary_th": summary["summary_th"], "summary_lines": summary["lines"],
+                "color_note_th": summary["color_note_th"]}
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="วิเคราะห์ตารางความชื้นใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง")
     except ValueError as e:

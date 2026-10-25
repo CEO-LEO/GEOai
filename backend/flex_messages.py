@@ -42,7 +42,7 @@ _COLORS: dict[RiskLevel, dict] = {
 def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                       swab_trend: str | None = None,
                       problem_points: list[dict] | None = None,
-                      plot_name: str = "") -> dict:
+                      plot_name: str = "", summary_th: str | None = None) -> dict:
     """
     สร้าง LINE Flex Message bubble พร้อมกราฟ meter และคำแนะนำ
     คืน dict สำหรับใส่ใน messages array ของ LINE API
@@ -268,6 +268,9 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                     {"type": "separator"},
 
                     # v3: Soil Water-Air Balance
+                    # 1e: ประโยคสรุปภาษาคน + คำอธิบายสี (plot_summary.py — เทมเพลตจากตารางจุดจริง)
+                    *(_build_summary_section(summary_th) if summary_th else []),
+
                     *(_build_interim_section(problem_points) if risk_display.interim()
                       else _build_swab_section(data.get("swab", {}), swab_trend, problem_points)),
 
@@ -619,6 +622,22 @@ _SWAB_LEVEL_EXPLANATION = {
 _RELATIVE_COLOR = {"wet": "#1565C0", "dry": "#E65100", "mid": "#78909C"}
 
 
+def _build_summary_section(summary_th: str) -> list[dict]:
+    """สรุปแปลงเป็นภาษาคน (บรรทัดแรก = ภาพรวม, ถัดไป = จุดชื้น/แห้ง/น้ำรวม พร้อมทิศ) + ว่าสีเทียบกับอะไร"""
+    import plot_summary
+    lines = [ln for ln in summary_th.split("\n") if ln.strip()][:5]
+    return [{
+        "type": "box", "layout": "vertical", "margin": "sm", "spacing": "xs",
+        "contents": [
+            {"type": "text", "text": "📝 สรุปแปลงนี้", "size": "sm", "weight": "bold", "color": "#333333"},
+            *[{"type": "text", "text": ln, "size": "xs", "wrap": True,
+               "color": "#333333" if i == 0 else "#555555"} for i, ln in enumerate(lines)],
+            {"type": "text", "text": plot_summary.COLOR_NOTE_TH, "size": "xxs", "wrap": True,
+             "color": "#78909C", "margin": "sm"},
+        ],
+    }]
+
+
 def _build_interim_section(problem_points: list[dict] | None) -> list[dict]:
     """
     แทนส่วนความชื้น (SWAB) ระหว่างโหมด "กำลังปรับปรุง" — สูตร SWAB เดิมอ่านทรงพุ่มเป็นน้ำ
@@ -864,10 +883,11 @@ def _build_topsoil_high_warning() -> list[dict]:
 
 
 def build_weekly_alert_flex(data: dict, lat: float, lng: float, plain_text: str,
-                            plot_name: str = "", problem_points: list[dict] | None = None) -> dict:
+                            plot_name: str = "", problem_points: list[dict] | None = None,
+                            summary_th: str | None = None) -> dict:
     """Flex สำหรับแจ้งเตือนรายวัน — มี header สีส้มบอกว่าเป็น alert"""
     base = build_result_flex(data, lat, lng, plain_text, plot_name=plot_name,
-                             problem_points=problem_points)
+                             problem_points=problem_points, summary_th=summary_th)
     # Prepend alert banner ใน body
     base["altText"] = f"⚠️ ความเสี่ยงเพิ่มขึ้น — {plot_name}" if plot_name else "⚠️ ความเสี่ยงเพิ่มขึ้น — IAM ROOT"
     base["contents"]["body"]["contents"].insert(0, {

@@ -275,16 +275,19 @@ async def daily_scan_job(hour: int | None = None):
 
                         alert_img_url = None
                         alert_problem_points: list[dict] = []
+                        alert_summary = None
                         if polygon and len(polygon) >= 3:
                             img_result = await build_plot_grid_image_url(
                                 polygon, plot.get("name") or "แปลงของคุณ", plot_id=plot_id,
                                 plot_type=plot.get("plot_type"))
                             alert_img_url = img_result["url"]
                             alert_problem_points = img_result["problem_points"]
+                            alert_summary = img_result.get("summary_th")
 
                         flex = build_weekly_alert_flex(data, lat, lng, message,
                                                        plot_name=plot.get("name") or "",
-                                                       problem_points=alert_problem_points)
+                                                       problem_points=alert_problem_points,
+                                                       summary_th=alert_summary)
                         await send_line_message(user_id, message, flex=flex, image_url=alert_img_url,
                                                 kind=kind,
                                                 priority="critical" if kind == "risk_alert" else "normal",
@@ -300,12 +303,14 @@ async def daily_scan_job(hour: int | None = None):
                     bubbles, images = [], []
                     for p in plot_summaries[:10]:   # carousel รับสูงสุด 10 การ์ด
                         problem_points = []
+                        summary_th = None
                         if (p["polygon"] and len(p["polygon"]) >= 3
                                 and len(images) < DIGEST_MAX_IMAGES):
                             img_result = await build_plot_grid_image_url(p["polygon"], p["name"],
                                                                          plot_id=p.get("plot_id"),
                                                                          plot_type=p.get("plot_type"))
                             problem_points = img_result["problem_points"]
+                            summary_th = img_result.get("summary_th")
                             if img_result["url"]:
                                 images.append(img_result["url"])
 
@@ -320,7 +325,7 @@ async def daily_scan_job(hour: int | None = None):
 
                         plot_flex = build_result_flex(p["data"], p["lat"], p["lng"], p["message"],
                                                       swab_trend=swab_trend, problem_points=problem_points,
-                                                      plot_name=p.get("name") or "")
+                                                      plot_name=p.get("name") or "", summary_th=summary_th)
                         bubbles.append(plot_flex["contents"])
 
                     intro = build_daily_digest_message(plot_summaries)

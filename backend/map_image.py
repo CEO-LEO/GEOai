@@ -62,6 +62,7 @@ STATUS_LABELS_TH: dict[str, str] = {
 _DEFAULT_COLOR = (153, 153, 153)
 
 MIN_RENDER_WIDTH_PX = 480
+COLOR_NOTE_IMAGE = "สีเทียบกันเองภายในแปลงนี้ ไม่ได้บอกว่าแห้งหรือแฉะเกินไปจริง · 1 ช่อง = ประมาณ 10x10 ม."
 # ห้ามมีอีโมจิ (ฟอนต์ Kanit ไม่มี glyph) — ข้อความเดียวกับ RAISED_BED_NOTE ใน liff/index.html แบบสั้น
 RAISED_BED_IMAGE_NOTE = "สวนยกร่อง: ไม่แสดงทางน้ำไหล/จุดน้ำรวม เพราะน้ำในร่องทำให้ดาวเทียมเห็นเป็นจุดชื้น"
 
@@ -276,6 +277,7 @@ def render_plot_grid_image(
     plot_name: str = "",
     problem_points: list[dict] | None = None,
     show_flow: bool = True,
+    headline: str | None = None,
 ) -> bytes:
     """
     วาดจุดความชื้น (สีตามกลุ่มสถานะ 5 กลุ่ม สอดคล้อง status_th ที่ backend
@@ -470,14 +472,18 @@ def render_plot_grid_image(
     has_grid_ref = bool(polygon and len(polygon) >= 3)
     has_problem_markers = bool(problem_points)
     ref_note_lines = (1 if has_grid_ref else 0) + (1 if has_problem_markers else 0)
-    bottom_h = 78 + (22 if show_flow_note else 0) + 22 * ref_note_lines
+    bottom_h = 78 + 22 + (22 if show_flow_note else 0) + 22 * ref_note_lines   # +22 = บรรทัดคำอธิบายสี (1e)
     canvas = Image.new("RGB", (w, top_h + h + bottom_h), (255, 255, 255))
     cdraw = ImageDraw.Draw(canvas)
 
     # แถบหัวเรื่อง — พื้นเข้ม ตัวอักษรขาว/สีตามสถานะ อ่านชัดตัดกับพื้นเสมอ
     # (ไม่พึ่งความสว่างของภาพดาวเทียมด้านล่างที่เปลี่ยนไปตามแต่ละแปลง)
     cdraw.rectangle([0, 0, w, top_h], fill=(30, 38, 51))
-    headline, headline_color = summarize_grid_status(grid_points, ignore_wet=not show_flow)
+    # headline (1e): ผู้เรียกส่งประโยคเทียบในแปลงมาแทนหัวจากสูตรเดิม (โหมดกำลังปรับปรุง)
+    if headline:
+        headline_color = (176, 190, 197)
+    else:
+        headline, headline_color = summarize_grid_status(grid_points, ignore_wet=not show_flow)
     pad = 16
     if plot_name:
         f_title = _font("Kanit-Bold.ttf", 22)
@@ -529,6 +535,9 @@ def render_plot_grid_image(
     # บรรทัดอธิบายลูกศร/จุดรวมน้ำ — ให้ครบตามที่เห็นในเว็บ (ผู้ใช้ขอ)
     f_note = _font("Kanit-Regular.ttf", 13)
     note_y = label_y + 24
+    # 1e: บอกทุกครั้งว่าสีเทียบกับอะไร (ห้ามอีโมจิ — ฟอนต์ไม่มี glyph)
+    cdraw.text((pad, note_y), COLOR_NOTE_IMAGE, font=f_note, fill=(84, 110, 122))
+    note_y += 22
     if not show_flow:
         cdraw.text((pad, note_y), RAISED_BED_IMAGE_NOTE, font=f_note, fill=(102, 102, 102))
         note_y += 22
