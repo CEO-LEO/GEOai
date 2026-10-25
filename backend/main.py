@@ -56,6 +56,7 @@ import crops as crops_mod
 import boundary
 import recommendations
 import plot_summary
+import report_service
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -152,6 +153,13 @@ async def lifespan(app: FastAPI):
     if dev_auth_user():
         logger.warning("IAMROOT_DEV_AUTH_USER is set — requests without a LINE token are "
                        "treated as that user. Local development only.")
+
+    # 1f: ภาษาไทยในรูป/PDF วางสระ-วรรณยุกต์ถูกต้องเมื่อ Pillow มี raqm — บันทึกไว้ตรวจได้จาก /admin/logs
+    try:
+        from PIL import features as _pil_features
+        logger.info(f"Pillow text layout: {'raqm' if _pil_features.check('raqm') else 'basic'}")
+    except Exception:
+        pass
 
     scheduler = create_scheduler()
     scheduler.start()
@@ -1048,6 +1056,33 @@ async def plot_recommendations(user_id: str, plot_id: int, me: str = Depends(_ap
     rules = await recommendations.get_rules()
     out = recommendations.for_plot(rules, crop_ids, plot.get("plot_type"), signals)
     out["status_label_th"] = risk_v2.anomaly_label_th((signals or {}).get("risk_v2"))
+    return out
+
+
+REPORT_TIMEOUT_S = 90   # ดึงตารางจุด + ภาพดาวเทียม (GEE) + วาด PDF
+
+
+@app.post("/report/plot/{user_id}/{plot_id}")
+async def plot_report(user_id: str, plot_id: int, me: str = Depends(_analyze_user)):
+    """
+    รายงานแปลงสำหรับแชร์ (1f): PDF (ลิงก์ใช้ได้ 7 วัน) + การ์ดสำหรับ liff.shareTargetPicker
+    จำกัดคำขอแบบเดียวกับ /analyze เพราะเรียก GEE หนัก
+    """
+    _require_self(user_id, me)
+    plot = await _require_own_plot(plot_id, me)
+    crop_ids, signals = await asyncio.gather(get_plot_crop_ids(plot_id), get_latest_plot_signals(plot_id))
+    recs = recommendations.for_plot(await recommendations.get_rules(), crop_ids, plot.get("plot_type"), signals)
+    recs["status_label_th"] = risk_v2.anomaly_label_th((signals or {}).get("risk_v2"))
+    crops_line = " · ".join(x for x in (", ".join(crops_mod.names_th(crop_ids)),
+                                        crops_mod.PLOT_TYPE_LABELS_TH.get(plot.get("plot_type") or "", "")) if x)
+    try:
+        out = await asyncio.wait_for(
+            report_service.build_plot_report(plot, crops_line, recs, f"https://liff.line.me/{liff_id()}"),
+            timeout=REPORT_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="สร้างรายงานใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง")
+    if not out["pdf_url"] and not out["image_url"]:
+        raise HTTPException(status_code=502, detail="สร้างรายงานไม่สำเร็จ กรุณาลองใหม่ภายหลัง")
     return out
 
 

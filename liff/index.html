@@ -512,6 +512,12 @@
     .grid-summary { font-size: 13px; line-height: 1.6; color: var(--ink); background: var(--card);
       border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
     .grid-summary b { display: block; margin-bottom: 2px; }
+    .plot-share-btn {
+      background: #e8f0fb; color: #1e3a8a; border: none;
+      padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
+      cursor: pointer; white-space: nowrap;
+    }
+    .sheet-btn { width: 100%; min-height: 50px; margin-top: 8px; font-size: 15px; }
     .plot-rec-btn {
       background: #fff8e1; color: #7a4f01; border: none;
       padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
@@ -1105,6 +1111,7 @@
             🔍 ตรวจ
           </button>
           ${plot.id ? `<button class="plot-rec-btn">💡 คำแนะนำ</button>` : ""}
+          ${plot.id ? `<button class="plot-share-btn">📤 แชร์ / PDF</button>` : ""}
           ${plot.id ? `<button class="plot-edit-btn">✏️ แก้ไข</button>` : ""}
           ${plot.id ? `<button class="plot-hist-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
@@ -1135,6 +1142,10 @@
           plot.polygon || null,
           plot.id ? { plot_id: plot.id } : {}
         );
+      });
+      card.querySelector(".plot-share-btn")?.addEventListener("click", e => {
+        e.stopPropagation();
+        shareReport(plot);
       });
       card.querySelector(".plot-rec-btn")?.addEventListener("click", e => {
         e.stopPropagation();
@@ -1776,6 +1787,45 @@
         ? "ดูคำแนะนำรายจุด: กด \"🔍 ตรวจ\" แล้วแตะจุดสีบนแผนที่"
         : "วาดขอบเขตแปลงเพื่อดูคำแนะนำรายจุดบนแผนที่"}</div>` +
       (recs.plot_type === "raised_bed" ? `<div class="raised-note show">${escHtml(RAISED_BED_NOTE)}</div>` : "");
+  }
+
+  // ─── 1f: แชร์รายงานใน LINE + PDF ──────────────────
+  // shareTargetPicker ต้องเปิดใช้ในหน้าตั้งค่า LIFF ของ LINE Developers ก่อน — ถ้ายังไม่เปิด ใช้ PDF แทน
+  function canShareInLine() {
+    try { return liffInitOk && liff.isApiAvailable && liff.isApiAvailable("shareTargetPicker"); } catch { return false; }
+  }
+  function openExternal(url) {
+    try { if (liffInitOk && liff.isInClient()) { liff.openWindow({ url, external: true }); return; } } catch {}
+    window.open(url, "_blank", "noopener");
+  }
+  async function shareReport(plot) {
+    showSpinner("⏳ กำลังทำรายงานแปลง (ประมาณ 20–40 วินาที)...");
+    let json;
+    try {
+      const res = await apiFetch(`${API_URL}/report/plot/${encodeURIComponent(userId)}/${plot.id}`, { method: "POST" });
+      if (!res.ok) throw new Error(friendlyErrorMessage(await res.text(), "ทำรายงานไม่สำเร็จ"));
+      json = await res.json();
+    } catch (e) {
+      hideSpinner();
+      return showToast("❌ " + e.message);
+    }
+    hideSpinner();
+    const share = canShareInLine();
+    showPointSheet(`<h3>📤 รายงาน — ${escHtml(plot.name || "แปลง")}</h3>
+      ${(json.summary_lines || []).length ? `<div class="rec-card">${json.summary_lines.map(l => `<div>${escHtml(l)}</div>`).join("")}</div>` : ""}
+      ${share ? `<button type="button" class="btn-primary sheet-btn" id="share-line-btn">💬 แชร์ให้เพื่อนใน LINE</button>` : ""}
+      ${json.pdf_url ? `<button type="button" class="btn-secondary sheet-btn" id="open-pdf-btn">📄 เปิดรายงาน PDF</button>` : ""}
+      <div class="form-hint">${share ? "" : "แชร์ผ่าน LINE ยังไม่เปิดใช้ — เปิด PDF แล้วแชร์จากเบราว์เซอร์ได้ · "}ลิงก์ PDF ใช้ได้ 7 วัน · รายงานไม่มีพิกัดแปลง</div>`);
+    document.getElementById("open-pdf-btn")?.addEventListener("click", () => openExternal(json.pdf_url));
+    document.getElementById("share-line-btn")?.addEventListener("click", async () => {
+      try {
+        const r = await liff.shareTargetPicker([json.share], { isMultiple: true });
+        if (r) showToast("✅ แชร์แล้ว");
+      } catch (e) {
+        showToast("❌ แชร์ไม่สำเร็จ — ลองเปิด PDF แทน");
+        sendTelemetry({ kind: "error", source: "shareTargetPicker", message: String(e && e.message || e).slice(0, 200) });
+      }
+    });
   }
 
   function showPointSheet(html) {
