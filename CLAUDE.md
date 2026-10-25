@@ -51,15 +51,15 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-pytest -q                                 # 218 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
-                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
+pytest -q                                 # 273 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
 IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
 ```
 
 - **Deploy:** push `master` → Render auto-deploy. Build command จริงตั้งใน Render Dashboard (ไม่ sync กับ `render.yaml`)
-- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v14 รัน 2026-10-25) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
+- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v15 รัน 2026-10-25) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
 - ไม่มี GEE key ในเครื่อง → `analyze_durian_plot()` ใช้ mock data (`_mock_analyze`)
 
 ## Env (ค่าอยู่ใน Render Dashboard และ `backend/.env` ห้าม commit)
