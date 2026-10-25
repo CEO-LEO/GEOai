@@ -5,6 +5,8 @@ import asyncio
 import logging
 import tempfile
 import io
+import base64
+import binascii
 import secrets
 from datetime import datetime, timedelta, timezone
 import traceback
@@ -60,6 +62,7 @@ import report_service
 import access
 import areas
 import privacy
+import photo_service
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -77,7 +80,9 @@ from database import (save_analysis, get_all_reports, save_plot,
                       set_user_role, create_invite, get_invite, record_invite_use, list_invites,
                       expire_invite, log_audit, list_audit_logs, log_event,
                       get_user_privacy, save_consent, set_deletion_request, export_user_data, purge_user,
-                      SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY)
+                      SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY,
+                      get_photo_by_client_id, insert_photo, list_photos, get_photo, delete_photo_row,
+                      photo_paths_for_user)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -1370,10 +1375,107 @@ async def admin_purge_user(user_id: str, body: PurgeBody):
     u = await get_user_privacy(user_id)
     if not u or not u.get("deletion_requested_at"):
         raise HTTPException(status_code=409, detail="ผู้ใช้นี้ไม่ได้ขอลบข้อมูล")
+    paths = await photo_paths_for_user(user_id)
     counts = await purge_user(user_id)
+    counts["photo_files"] = len(paths) if await photo_service.delete_objects(paths) else 0
     access.invalidate(user_id)
     await log_audit(None, "admin", "purge_user", "user", None, None, {"counts": counts})
     return {"status": "purged", "deleted_rows": counts}
+
+
+# ── รูปถ่ายภาคสนาม (Phase 2c) ──
+_photo_user = user_rate_limit("photo", 20)
+
+
+class PhotoBody(BaseModel):
+    client_id:    str = Field(..., min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    image_base64: str = Field(..., min_length=100, max_length=11_500_000)   # ≈ 8 MB หลังถอด base64
+    lat:          float | None = Field(None, ge=-90, le=90)
+    lng:          float | None = Field(None, ge=-180, le=180)
+    gps_source:   Literal["exif", "device", "map_point"] | None = None
+    taken_at:     datetime | None = None
+    tags:         list[str] = Field(default_factory=list, max_length=photo_service.MAX_TAGS)
+    note:         str = Field("", max_length=300)
+
+
+def _photo_out(row: dict, urls: dict[str, str], me: str, plot_owner: str | None) -> dict:
+    return {k: row.get(k) for k in ("id", "plot_id", "lat", "lng", "gps_source", "taken_at", "tags", "note",
+                                    "width", "height", "created_at")} | {
+        "url": urls.get(row["storage_path"]),
+        "tags_th": [photo_service.TAGS_TH.get(t, t) for t in row.get("tags") or []],
+        "uploader_role_th": access.ROLE_TH.get(row.get("uploader_role"), ""),
+        "can_delete": row.get("uploaded_by") == me or plot_owner == me,
+    }
+
+
+@app.get("/photo-tags")
+async def photo_tags():
+    return {"tags": [{"id": k, "name_th": v} for k, v in photo_service.TAGS_TH.items()]}
+
+
+@app.post("/plots/{user_id}/{plot_id}/photos")
+async def upload_photo(user_id: str, plot_id: int, body: PhotoBody, background: BackgroundTasks,
+                       me: str = Depends(_photo_user)):
+    """
+    แนบรูปกับแปลง (เจ้าของ / เจ้าหน้าที่ในพื้นที่ / ผู้ดูแล) — ส่งซ้ำด้วย client_id เดิมได้ (ไม่สร้างซ้ำ)
+    ใช้ตอนสัญญาณกลับมาแล้วแอปส่งคิวที่ค้างอยู่
+    """
+    _require_self(user_id, me)
+    await _require_consent(me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "photo_upload")
+    existing = await get_photo_by_client_id(body.client_id)
+    if existing:
+        if existing["plot_id"] != plot_id or existing["uploaded_by"] != me:
+            raise HTTPException(status_code=409, detail="รหัสรูปซ้ำ")
+        urls = await photo_service.signed_urls([existing["storage_path"]])
+        return _photo_out(existing, urls, me, plot.get("user_id")) | {"duplicate": True}
+    try:
+        tags = photo_service.validate_tags(body.tags)
+        raw = base64.b64decode(body.image_base64.split(",", 1)[-1], validate=True)
+        data, w, h = await run_in_threadpool(photo_service.clean_image, raw)
+    except (ValueError, binascii.Error) as e:
+        raise HTTPException(status_code=422, detail=str(e) if isinstance(e, ValueError) else "ข้อมูลรูปไม่ถูกต้อง")
+    path = f"{plot_id}/{body.client_id}.jpg"
+    if not await photo_service.upload(path, data):
+        raise HTTPException(status_code=502, detail="อัปโหลดรูปไม่สำเร็จ จะลองส่งใหม่อัตโนมัติ")
+    acc = await _access_for(me)
+    row = await insert_photo({
+        "client_id": body.client_id, "plot_id": plot_id, "uploaded_by": me, "uploader_role": acc["role"],
+        "lat": body.lat, "lng": body.lng, "gps_source": body.gps_source if body.lat is not None else None,
+        "taken_at": body.taken_at.isoformat() if body.taken_at else None, "tags": tags,
+        "note": body.note.strip(), "storage_path": path, "width": w, "height": h, "bytes": len(data)})
+    if not row:
+        raise HTTPException(status_code=502, detail="บันทึกรูปไม่สำเร็จ จะลองส่งใหม่อัตโนมัติ")
+    background.add_task(log_event, me, "photo_upload", plot_id, {"tags": len(tags), "gps": body.gps_source or "none"})
+    urls = await photo_service.signed_urls([path])
+    return _photo_out(row, urls, me, plot.get("user_id"))
+
+
+@app.get("/plots/{user_id}/{plot_id}/photos")
+async def plot_photos(user_id: str, plot_id: int, me: str = Depends(_api_user)):
+    _require_self(user_id, me)
+    plot = await _require_plot_access(plot_id, me, audit_action="view_photos")
+    rows = await list_photos(plot_id)
+    urls = await photo_service.signed_urls([r["storage_path"] for r in rows])
+    return {"plot_id": plot_id, "count": len(rows),
+            "photos": [_photo_out(r, urls, me, plot.get("user_id")) for r in rows]}
+
+
+@app.delete("/plots/{user_id}/{plot_id}/photos/{photo_id}")
+async def remove_photo(user_id: str, plot_id: int, photo_id: int, me: str = Depends(_api_user)):
+    """ลบรูป — คนที่อัปโหลด หรือเจ้าของแปลง (ผู้ใช้ลบข้อมูลของตัวเอง)"""
+    _require_self(user_id, me)
+    plot = await _require_plot_access(plot_id, me)
+    row = await get_photo(photo_id)
+    if not row or row["plot_id"] != plot_id:
+        raise HTTPException(status_code=404, detail="ไม่พบรูปนี้")
+    if me not in (row["uploaded_by"], plot.get("user_id")):
+        raise HTTPException(status_code=403, detail="ลบได้เฉพาะคนที่แนบรูป หรือเจ้าของแปลง")
+    await photo_service.delete_objects([row["storage_path"]])
+    if not await delete_photo_row(photo_id):
+        raise HTTPException(status_code=502, detail="ลบไม่สำเร็จ กรุณาลองใหม่")
+    await log_audit(me, (await _access_for(me))["role"], "delete_photo", "photo", photo_id, plot.get("user_id"), None)
+    return {"status": "deleted", "photo_id": photo_id}
 
 
 EVENT_NAMES = {"app_open", "view_map", "view_recommendation", "open_pdf", "share_line", "photo_upload",

@@ -172,8 +172,11 @@ class TestPurge:
     async def test_purge(self, client):
         with _priv({**CONSENTED, "deletion_requested_at": "2026-09-01T00:00:00Z"}), \
              patch("main.purge_user", new_callable=AsyncMock, return_value={"plots": 2}) as pu, \
+             patch("main.photo_paths_for_user", new_callable=AsyncMock, return_value=["5/a.jpg"]), \
+             patch("photo_service.delete_objects", new_callable=AsyncMock, return_value=True) as delobj, \
              patch("main.log_audit", new_callable=AsyncMock) as audit:
             resp = await client.post("/admin/users/U1/purge", headers=ADMIN_HEADERS, json={"confirm_user_id": "U1"})
-        assert resp.status_code == 200 and resp.json()["deleted_rows"] == {"plots": 2}
+        assert resp.status_code == 200 and resp.json()["deleted_rows"] == {"plots": 2, "photo_files": 1}
+        delobj.assert_awaited_once_with(["5/a.jpg"])
         pu.assert_awaited_once_with("U1")
         assert audit.await_args.args[5] is None        # audit ไม่เก็บ userId ที่ถูกลบ
