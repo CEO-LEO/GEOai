@@ -57,6 +57,8 @@ import boundary
 import recommendations
 import plot_summary
 import report_service
+import access
+import areas
 from plot_image_service import build_plot_grid_image_url
 from database import (save_analysis, get_all_reports, save_plot,
                       get_user_plots, get_plot_history, set_notify,
@@ -69,7 +71,10 @@ from database import (save_analysis, get_all_reports, save_plot,
                       update_plot, set_plot_crops, archive_plot_boundary,
                       merge_plot_history, get_active_plots, get_plot_crop_ids,
                       list_recommendation_rules, save_recommendation_rule,
-                      get_recommendation_rule_history, get_latest_plot_signals)
+                      get_recommendation_rule_history, get_latest_plot_signals,
+                      get_user_access, get_share_flags, get_plots_for_officer, list_users_admin,
+                      set_user_role, create_invite, get_invite, record_invite_use, list_invites,
+                      expire_invite, log_audit, list_audit_logs, log_event)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -117,6 +122,34 @@ async def _require_own_plot(plot_id: int, user_id: str) -> dict:
     plot = await get_plot_by_id(plot_id)
     if not plot or plot.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้")
+    return plot
+
+
+async def _access_for(user_id: str) -> dict:
+    hit = access.cached(user_id)
+    return hit if hit is not None else access.remember(user_id, await get_user_access(user_id))
+
+
+async def _require_plot_access(plot_id: int, user_id: str, action: str = access.VIEW,
+                               audit_action: str | None = None) -> dict:
+    """
+    Phase 2a: เจ้าของ / เจ้าหน้าที่ในพื้นที่ (เจ้าของยินยอมแบ่งปัน) / ผู้ดูแล — ดู access.plot_access_reason
+    ไม่มีสิทธิ์ตอบ 404 เหมือน "ไม่มีแปลงนี้" · ทุกการเข้าถึงแปลงของคนอื่นบันทึกใน audit_logs (PDPA)
+    """
+    plot = await get_plot_by_id(plot_id)
+    if not plot:
+        raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้")
+    if plot.get("user_id") == user_id:
+        return plot
+    acc = await _access_for(user_id)
+    owner_shares = False
+    if acc["role"] == "officer" and plot.get("created_by") != user_id:
+        owner_shares = (await get_share_flags([plot["user_id"]])).get(plot["user_id"], False)
+    reason = access.plot_access_reason(acc, user_id, plot, owner_shares, action)
+    if not reason:
+        raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้")
+    await log_audit(user_id, acc["role"], audit_action or f"{action}_plot", "plot", plot_id,
+                    plot.get("user_id"), {"reason": reason})
     return plot
 
 
@@ -212,6 +245,8 @@ class AnalysisRequest(BaseModel):
     plot_id:   int | None = Field(None, ge=1)
     plot_type: Literal["flat", "raised_bed", "vegetable_bed"] | None = None
     crop_ids:  list[str] | None = Field(None, max_length=crops_mod.MAX_CROPS_PER_PLOT)
+    # 2a: เจ้าหน้าที่วาดแปลงแทนเกษตรกร — ชื่อเกษตรกร (ข้อมูลส่วนบุคคล เก็บเฉพาะเมื่อผู้วาดเป็นเจ้าหน้าที่)
+    owner_label: str | None = Field(None, max_length=60)
 
 
 class BoundaryCheckRequest(BaseModel):
@@ -502,7 +537,7 @@ async def analyze(req: AnalysisRequest, background: BackgroundTasks,
     req.user_id = user_id
     crop_ids = _validated_crop_ids(req.crop_ids)
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
-    existing_plot = await _require_own_plot(req.plot_id, user_id) if req.plot_id else None
+    existing_plot = await _require_plot_access(req.plot_id, user_id, access.EDIT, "analyze_plot") if req.plot_id else None
     try:
         data     = await _run_gee_analysis(req.lat, req.lng, polygon=req.polygon)
         message  = format_message(data, req.lat, req.lng)
@@ -515,15 +550,21 @@ async def analyze(req: AnalysisRequest, background: BackgroundTasks,
             plot_id = existing_plot["id"]
             plot_type = existing_plot.get("plot_type")
         else:
+            acc = await _access_for(user_id)
+            label = (req.owner_label or "").strip() or None
             plot_id = await save_plot(req.user_id, req.lat, req.lng,
                                       req.plot_name, req.area_rai,
-                                      polygon=req.polygon, plot_type=req.plot_type)
+                                      polygon=req.polygon, plot_type=req.plot_type,
+                                      extra={"created_by": user_id,
+                                             **({"owner_label": label} if label and acc["role"] != "farmer" else {})})
             plot_type = req.plot_type
             if plot_id and crop_ids:
                 await set_plot_crops(plot_id, crop_ids)
             if plot_id:
                 background.add_task(_store_boundary_check, plot_id, req.lat, req.lng,
                                     req.polygon, crop_ids, plot_type)
+                background.add_task(_assign_area, plot_id, req.lat, req.lng)
+                background.add_task(log_event, user_id, "plot_create", plot_id, {"role": acc["role"]})
 
         # แปลงที่วาดขอบเขตไว้ (polygon) — สร้างรูปแผนที่ + รูปย่อของแปลง (รูปย่อใช้ในหน้า
         # "แปลงของฉัน") ล้มเหลวได้โดยไม่กระทบคำขอหลัก ส่ง image_url/problem_points
@@ -537,6 +578,8 @@ async def analyze(req: AnalysisRequest, background: BackgroundTasks,
             problem_points = img_result["problem_points"]
 
         await save_analysis(req.user_id, data, message, plot_id=plot_id)
+        background.add_task(log_event, user_id, "analyze", plot_id,
+                            {"has_polygon": bool(req.polygon and len(req.polygon) >= 3)})
         return {"status": "ok", "plot_id": plot_id, "plot_type": plot_type, "data": data,
                 "image_url": image_url, "problem_points": problem_points}
     except (asyncio.TimeoutError, ee.EEException, NoSatelliteDataError) as e:
@@ -915,7 +958,7 @@ async def plot_history(user_id: str, plot_id: int, limit: int = 20,
                        me: str = Depends(_api_user)):
     """ประวัติการวิเคราะห์ของแปลง (เรียงล่าสุดก่อน)"""
     _require_self(user_id, me)
-    await _require_own_plot(plot_id, me)
+    await _require_plot_access(plot_id, me)
     limit = min(max(limit, 1), 100)
     rows = await get_plot_history(plot_id, limit=limit)
     # เดิม LIFF คำนวณ risk badge เองจาก ndvi_change/displacement_level เท่านั้น
@@ -934,7 +977,7 @@ async def plot_persistent_wet(user_id: str, plot_id: int, days: int = 14,
     ต้องมี daily_scan_job เก็บ snapshot สะสมมาแล้วอย่างน้อยไม่กี่วันถึงจะมีผล
     """
     _require_self(user_id, me)
-    await _require_own_plot(plot_id, me)
+    await _require_plot_access(plot_id, me)
     days = min(max(days, 3), 90)
     points = await get_persistent_wet_points(plot_id, days=days)
     return {"plot_id": plot_id, "days": days, "count": len(points), "points": points}
@@ -946,10 +989,7 @@ async def ndvi_timeseries(user_id: str, plot_id: int, months: int = 24,
     """NDVI รายเดือนจาก GEE ย้อนหลัง n เดือน (max 36)"""
     _require_self(user_id, me)
     months = min(max(months, 1), 36)
-    plots = await get_user_plots(user_id)
-    plot = next((p for p in plots if p["id"] == plot_id), None)
-    if not plot:
-        raise HTTPException(status_code=404, detail="ไม่พบแปลงนี้")
+    plot = await _require_plot_access(plot_id, me)
     try:
         # sync GEE call — รันใน threadpool กันบล็อก event loop ทั้งเซิร์ฟเวอร์
         series = await run_in_threadpool(get_ndvi_timeseries, plot["lat"], plot["lng"], months=months)
@@ -989,7 +1029,7 @@ async def edit_plot(user_id: str, plot_id: int, req: PlotUpdateRequest,
     แก้ขอบเขต: เก็บขอบเขตเดิมไว้ใน plot_boundary_history แล้วตรวจคุณภาพขอบเขตใหม่เบื้องหลัง
     """
     _require_self(user_id, me)
-    plot = await _require_own_plot(plot_id, me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "edit_plot")
     fields: dict = {}
     if req.name is not None:
         fields["name"] = req.name.strip()
@@ -1025,6 +1065,7 @@ async def edit_plot(user_id: str, plot_id: int, req: PlotUpdateRequest,
         background.add_task(_store_boundary_check, plot_id, fields.get("lat", plot["lat"]),
                             fields.get("lng", plot["lng"]), new_polygon, final_crops, new_type)
     if req.polygon is not None:
+        background.add_task(_assign_area, plot_id, fields["lat"], fields["lng"])
         # รูปย่อในหน้า "แปลงของฉัน" ให้ตรงกับขอบเขตใหม่ (ทำเบื้องหลัง ใช้ GEE นาน)
         background.add_task(build_plot_grid_image_url, new_polygon, fields.get("name", plot.get("name", "")),
                             plot_id=plot_id, plot_type=new_type)
@@ -1053,14 +1094,16 @@ async def merge_plot(user_id: str, plot_id: int, req: PlotMergeRequest, me: str 
 # ─────────────────────────────────────────────────────────
 
 @app.get("/recommendations/plot/{user_id}/{plot_id}")
-async def plot_recommendations(user_id: str, plot_id: int, me: str = Depends(_api_user)):
+async def plot_recommendations(user_id: str, plot_id: int, background: BackgroundTasks,
+                               me: str = Depends(_api_user)):
     """คำแนะนำของแปลง: ปัญหาระดับแปลงที่พบตอนนี้ + คำแนะนำสำหรับแตะจุดบนแผนที่ (ทุกข้อบอกสถานะร่าง/ตรวจแล้ว)"""
     _require_self(user_id, me)
-    plot = await _require_own_plot(plot_id, me)
+    plot = await _require_plot_access(plot_id, me, audit_action="view_recommendations")
     crop_ids, signals = await asyncio.gather(get_plot_crop_ids(plot_id), get_latest_plot_signals(plot_id))
     rules = await recommendations.get_rules()
     out = recommendations.for_plot(rules, crop_ids, plot.get("plot_type"), signals)
     out["status_label_th"] = risk_v2.anomaly_label_th((signals or {}).get("risk_v2"))
+    background.add_task(log_event, me, "view_recommendation", plot_id, {"plot_problems": len(out["plot"])})
     return out
 
 
@@ -1068,13 +1111,14 @@ REPORT_TIMEOUT_S = 90   # ดึงตารางจุด + ภาพดาว
 
 
 @app.post("/report/plot/{user_id}/{plot_id}")
-async def plot_report(user_id: str, plot_id: int, me: str = Depends(_analyze_user)):
+async def plot_report(user_id: str, plot_id: int, background: BackgroundTasks,
+                      me: str = Depends(_analyze_user)):
     """
     รายงานแปลงสำหรับแชร์ (1f): PDF (ลิงก์ใช้ได้ 7 วัน) + การ์ดสำหรับ liff.shareTargetPicker
     จำกัดคำขอแบบเดียวกับ /analyze เพราะเรียก GEE หนัก
     """
     _require_self(user_id, me)
-    plot = await _require_own_plot(plot_id, me)
+    plot = await _require_plot_access(plot_id, me, audit_action="create_report")
     crop_ids, signals = await asyncio.gather(get_plot_crop_ids(plot_id), get_latest_plot_signals(plot_id))
     recs = recommendations.for_plot(await recommendations.get_rules(), crop_ids, plot.get("plot_type"), signals)
     recs["status_label_th"] = risk_v2.anomaly_label_th((signals or {}).get("risk_v2"))
@@ -1088,6 +1132,7 @@ async def plot_report(user_id: str, plot_id: int, me: str = Depends(_analyze_use
         raise HTTPException(status_code=504, detail="สร้างรายงานใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง")
     if not out["pdf_url"] and not out["image_url"]:
         raise HTTPException(status_code=502, detail="สร้างรายงานไม่สำเร็จ กรุณาลองใหม่ภายหลัง")
+    background.add_task(log_event, me, "create_report", plot_id, {"pdf": bool(out["pdf_url"])})
     return out
 
 
@@ -1186,6 +1231,213 @@ async def admin_rules_export():
                     r.get("reviewed_by") or "", r.get("source", ""), r.get("removed", ""), ""])
     return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="recommendations-for-review.csv"'})
+
+
+# ─────────────────────────────────────────────────────────
+# Phase 2a — บทบาท / พื้นที่ / รหัสเชิญ / audit / สถิติการใช้งาน
+# ─────────────────────────────────────────────────────────
+
+async def _assign_area(plot_id: int, lat: float, lng: float) -> dict | None:
+    """อำเภอของแปลง (งานเบื้องหลัง) — พังได้โดยไม่กระทบผู้ใช้"""
+    try:
+        found = await asyncio.wait_for(run_in_threadpool(areas.lookup_point, lat, lng), timeout=30)
+        if found.get("area_name"):
+            await update_plot(plot_id, found)
+        return found
+    except Exception as e:
+        logger.warning(f"assign area failed plot={plot_id}: {type(e).__name__}")
+        return None
+
+
+def _area_list(codes: list[str]) -> list[dict]:
+    return [{"code": c, "name_th": areas.name_th(c) or c} for c in codes]
+
+
+@app.get("/me")
+async def me_info(me: str = Depends(_api_user)):
+    """บทบาทและพื้นที่ของผู้ใช้ (ใช้แสดงแท็บเจ้าหน้าที่ในแอป)"""
+    acc = await _access_for(me)
+    return {"user_id": me, "role": acc["role"], "role_th": access.ROLE_TH.get(acc["role"], acc["role"]),
+            "areas": _area_list(acc["areas"]), "share_with_officers": acc.get("share_with_officers", False)}
+
+
+EVENT_NAMES = {"app_open", "view_map", "view_recommendation", "open_pdf", "share_line", "photo_upload",
+               "field_validation", "open_officer_tab"}
+
+
+class EventBody(BaseModel):
+    name:    str = Field(..., max_length=40)
+    plot_id: int | None = Field(None, ge=1)
+    props:   dict | None = None
+
+
+@app.post("/events", status_code=204)
+async def post_event(body: EventBody, background: BackgroundTasks, me: str = Depends(_api_user)):
+    """สถิติการใช้งานจากแอป (B2G) — รับเฉพาะชื่อในรายการ · props เก็บได้ไม่เกิน 10 ค่าแบบสั้น"""
+    if body.name not in EVENT_NAMES:
+        raise HTTPException(status_code=422, detail="ไม่รู้จักเหตุการณ์นี้")
+    props = {str(k)[:30]: (v if isinstance(v, (int, float, bool)) else str(v)[:60])
+             for k, v in list((body.props or {}).items())[:10]}
+    background.add_task(log_event, me, body.name, body.plot_id, props or None)
+    return Response(status_code=204)
+
+
+class RedeemBody(BaseModel):
+    code: str = Field(..., min_length=6, max_length=20)
+
+
+@app.post("/invites/redeem")
+async def redeem_invite(body: RedeemBody, request: Request, me: str = Depends(_api_user)):
+    """ใช้รหัสเชิญ → ได้บทบาท/พื้นที่ตามรหัส (เพิ่มสิทธิ์ได้อย่างเดียว ไม่ลดสิทธิ์)"""
+    # กันไล่เดารหัส: 10 ครั้ง/นาที/IP นอกเหนือจากเพดานต่อผู้ใช้
+    if ip_bucket_exceeded(request, "invite", 10):
+        raise HTTPException(status_code=429, detail="ลองบ่อยเกินไป กรุณารอสักครู่")
+    code = body.code.strip().upper()
+    inv = await get_invite(code)
+    now = datetime.now(timezone.utc)
+    if (not inv or datetime.fromisoformat(inv["expires_at"].replace("Z", "+00:00")) <= now
+            or inv["used_count"] >= inv["max_uses"]):
+        raise HTTPException(status_code=404, detail="รหัสเชิญไม่ถูกต้องหรือหมดอายุแล้ว")
+    acc = await _access_for(me)
+    new_areas = sorted(set(acc["areas"]) | set(inv.get("area_codes") or []))
+    role = inv["role"] if access.can_upgrade(acc["role"], inv["role"]) else acc["role"]
+    await upsert_user(me, "")
+    if not await record_invite_use(code, me, inv["used_count"]):
+        raise HTTPException(status_code=409, detail="ใช้รหัสนี้ไปแล้ว")
+    if not await set_user_role(me, role, new_areas):
+        raise HTTPException(status_code=502, detail="บันทึกสิทธิ์ไม่สำเร็จ กรุณาลองใหม่")
+    access.invalidate(me)
+    await log_audit(me, role, "redeem_invite", "invite", code, me, {"role": role, "areas": new_areas})
+    return {"role": role, "role_th": access.ROLE_TH[role], "areas": _area_list(new_areas)}
+
+
+@app.get("/officer/plots")
+async def officer_plots(me: str = Depends(_api_user)):
+    """
+    แปลงที่เจ้าหน้าที่เห็นได้: ที่ตัวเองวาด + ในอำเภอที่รับผิดชอบ เฉพาะเจ้าของที่ยินยอมแบ่งปัน
+    (ผู้ดูแลเห็นทุกแปลงที่ใช้งานอยู่) · ไม่ส่ง LINE userId ของเจ้าของออกไป
+    """
+    acc = await _access_for(me)
+    if acc["role"] == "farmer":
+        raise HTTPException(status_code=403, detail="สำหรับเจ้าหน้าที่เท่านั้น")
+    if acc["role"] == "admin":
+        rows = await get_active_plots()
+        visible = rows
+    else:
+        rows = await get_plots_for_officer(me, acc["areas"])
+        shares = await get_share_flags([p["user_id"] for p in rows if p.get("created_by") != me])
+        visible = [p for p in rows
+                   if access.plot_access_reason(acc, me, p, shares.get(p["user_id"], False)) is not None]
+    risk = await get_latest_risk_by_plots([p["id"] for p in visible])
+    out = []
+    for p in visible:
+        info = risk.get(p["id"]) or {}
+        out.append({k: p.get(k) for k in ("id", "name", "lat", "lng", "polygon", "plot_type", "crop_ids",
+                                          "area_code", "area_name", "owner_label", "thumbnail_url",
+                                          "boundary_check", "created_at")}
+                   | {"is_mine": p.get("user_id") == me, "created_by_me": p.get("created_by") == me,
+                      "latest_analyzed_at": info.get("analyzed_at")})
+    await log_audit(me, acc["role"], "list_area_plots", "area", ",".join(acc["areas"]) or "-", None,
+                    {"count": len(out)})
+    return {"role": acc["role"], "areas": _area_list(acc["areas"]), "count": len(out), "plots": out}
+
+
+# ── ผู้ดูแล (X-Admin-Key) ──
+class UserRoleBody(BaseModel):
+    role:  Literal["farmer", "officer", "admin"]
+    areas: list[str] = Field(default_factory=list, max_length=50)
+
+
+class InviteBody(BaseModel):
+    role:         Literal["officer", "admin"] = "officer"
+    area_codes:   list[str] = Field(default_factory=list, max_length=50)
+    expires_days: int = Field(14, ge=1, le=90)
+    max_uses:     int = Field(1, ge=1, le=100)
+    note:         str = Field("", max_length=200)
+
+
+_INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # ไม่มี 0/O/1/I กันอ่านผิด
+
+
+def _new_invite_code() -> str:
+    return "".join(secrets.choice(_INVITE_ALPHABET) for _ in range(8))
+
+
+@app.get("/admin/areas", dependencies=[Depends(verify_admin)])
+async def admin_areas():
+    return {"districts": areas.districts(), "source": areas.config().get("source")}
+
+
+@app.get("/admin/users", dependencies=[Depends(verify_admin)])
+async def admin_users():
+    users = await list_users_admin()
+    await log_audit(None, "admin", "list_users", "users", None, None, {"count": len(users)})
+    return {"users": users, "roles": access.ROLE_TH}
+
+
+@app.patch("/admin/users/{user_id}", dependencies=[Depends(verify_admin)])
+async def admin_set_user(user_id: str, body: UserRoleBody):
+    try:
+        codes = areas.validate_codes(body.areas)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if body.role != "officer":
+        codes = codes if body.role == "admin" else []
+    if not await set_user_role(user_id, body.role, codes):
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ (ยังไม่ได้รัน migrate_v16?)")
+    access.invalidate(user_id)
+    await log_audit(None, "admin", "set_role", "user", user_id, user_id, {"role": body.role, "areas": codes})
+    return {"user_id": user_id, "role": body.role, "areas": _area_list(codes)}
+
+
+@app.post("/admin/invites", dependencies=[Depends(verify_admin)])
+async def admin_create_invite(body: InviteBody):
+    try:
+        codes = areas.validate_codes(body.area_codes)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if body.role == "officer" and not codes:
+        raise HTTPException(status_code=422, detail="รหัสเชิญเจ้าหน้าที่ต้องระบุอำเภออย่างน้อย 1 อำเภอ")
+    code = _new_invite_code()
+    row = {"code": code, "role": body.role, "area_codes": codes, "note": body.note.strip(), "created_by": "admin",
+           "expires_at": (datetime.now(timezone.utc) + timedelta(days=body.expires_days)).isoformat(),
+           "max_uses": body.max_uses}
+    if not await create_invite(row):
+        raise HTTPException(status_code=502, detail="สร้างรหัสไม่สำเร็จ (ยังไม่ได้รัน migrate_v16?)")
+    await log_audit(None, "admin", "create_invite", "invite", code, None, {"role": body.role, "areas": codes})
+    return {**row, "link": f"https://liff.line.me/{liff_id()}?invite={code}", "areas": _area_list(codes)}
+
+
+@app.get("/admin/invites", dependencies=[Depends(verify_admin)])
+async def admin_list_invites():
+    return {"invites": await list_invites()}
+
+
+@app.post("/admin/invites/{code}/expire", dependencies=[Depends(verify_admin)])
+async def admin_expire_invite(code: str):
+    if not await expire_invite(code):
+        raise HTTPException(status_code=502, detail="ยกเลิกรหัสไม่สำเร็จ")
+    await log_audit(None, "admin", "expire_invite", "invite", code, None, None)
+    return {"code": code, "status": "expired"}
+
+
+@app.get("/admin/audit-logs", dependencies=[Depends(verify_admin)])
+async def admin_audit_logs(days: int = 7, target_owner: str | None = None):
+    since = (datetime.now(timezone.utc) - timedelta(days=min(max(days, 1), 365))).isoformat()
+    return {"logs": await list_audit_logs(since, target_owner)}
+
+
+@app.post("/admin/areas/backfill", dependencies=[Depends(verify_admin)])
+async def admin_areas_backfill(only_missing: bool = True):
+    """ใส่อำเภอให้แปลงที่มีอยู่แล้ว — คืนเฉพาะรหัสแปลง/รหัสอำเภอ"""
+    out = []
+    for p in await get_active_plots():
+        if only_missing and p.get("area_name"):
+            continue
+        found = await _assign_area(p["id"], p["lat"], p["lng"])
+        out.append({"plot_id": p["id"], "area_code": (found or {}).get("area_code"),
+                    "in_config": bool((found or {}).get("area_code"))})
+    return {"count": len(out), "plots": out}
 
 
 @app.post("/admin/boundary-check/backfill", dependencies=[Depends(verify_admin)])

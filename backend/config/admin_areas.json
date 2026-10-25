@@ -1,0 +1,19 @@
+{
+  "_note": "พื้นที่รับผิดชอบของเจ้าหน้าที่ (Phase 2a) — ระดับอำเภอ · code = รหัสอำเภอของกรมการปกครอง · geo_name = ชื่อใน geoBoundaries ADM2 (Earth Engine WM/geoLab/geoBoundaries/600, CC BY 4.0 — ต้องใส่ที่มา) ใช้จับคู่จุดแปลงกับอำเภอ · ระดับตำบลยังไม่มีชุดขอบเขตใน Earth Engine",
+  "source": "geoBoundaries (www.geoboundaries.org) via Google Earth Engine",
+  "provinces": [
+    {"code": "70", "name_th": "ราชบุรี", "geo_name": "Ratchaburi Province",
+     "districts": [
+       {"code": "7001", "name_th": "เมืองราชบุรี", "geo_name": "Mueang Ratchaburi"},
+       {"code": "7002", "name_th": "จอมบึง", "geo_name": "Chom Bueng"},
+       {"code": "7003", "name_th": "สวนผึ้ง", "geo_name": "Suan Phueng"},
+       {"code": "7004", "name_th": "ดำเนินสะดวก", "geo_name": "Damnoen Saduak"},
+       {"code": "7005", "name_th": "บ้านโป่ง", "geo_name": "Ban Pong"},
+       {"code": "7006", "name_th": "บางแพ", "geo_name": "Bang Phae"},
+       {"code": "7007", "name_th": "โพธาราม", "geo_name": "Photharam"},
+       {"code": "7008", "name_th": "ปากท่อ", "geo_name": "Pak Tho"},
+       {"code": "7009", "name_th": "วัดเพลง", "geo_name": "Wat Phleng"},
+       {"code": "7010", "name_th": "บ้านคา", "geo_name": "Ban Kha"}
+     ]}
+  ]
+}
