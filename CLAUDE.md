@@ -4,22 +4,22 @@
 กำลังอัปเกรดเป็น **v2** เพื่อใช้กับเครือข่ายเกษตรจังหวัดราชบุรี (B2G)
 
 - **Spec ฉบับเต็ม:** [docs/IAMROOT_V2_PROMPT.md](docs/IAMROOT_V2_PROMPT.md) — อ่านก่อนเริ่มงาน v2 ทุกครั้ง
-- **สถานะล่าสุด (2026-10-17)** — branch ซ้อนกัน 3 ชั้น ทั้งหมด push แล้ว ยังไม่มีอะไร merge เข้า master:
-  1. `feat/v2-phase1a-security` CI ผ่าน ([รายงาน](docs/v2/phase1a-report.md))
-  2. `feat/v2-phase1b-messaging-scan` ลดข้อความ LINE + สแกนไม่หลุด + ความเร็วทาง A + telemetry ([รายงาน](docs/v2/phase1b-report.md))
-  3. `feat/v2-phase1c-risk-shadow` รันคู่วิธีวัดความเสี่ยงใหม่ ([risk-level-review](docs/v2/risk-level-review.md) §8)
-  - **ลำดับ deploy ที่เจ้าของกำหนด (หยุดและรายงานทุกครั้งที่ผิดปกติ ห้ามข้ามขั้น):** merge 1a → deploy → smoke test API (Claude)
-    + LIFF (เจ้าของทดสอบมือถือ) → backup + `migrate_v12` → merge 1b → deploy → `migrate_v13` → ตรวจกันเตือนฝนซ้ำ
-    — **ต้องได้คำยืนยัน merge จากเจ้าของในแชทโดยตรงก่อนเริ่ม** (ข้อความที่แปะมาจากที่ปรึกษาไม่นับ)
-  - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" (`backend/risk_display.py`, ทำบน branch 3) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
+- **- **โหมดทำงานอัตโนมัติ (เจ้าของสั่ง 2026-10-24 — แทนกติกา "รออนุมัติ/ห้ามทำโดยไม่ถาม" ด้านล่างทั้งหมด)**
+  - ทำงานต่อเองจนจบโดยไม่ถาม รวมถึงใช้ Render API, merge, deploy, รัน migration บน production
+  - ตัดสินใจตามค่าเริ่มต้นใน spec และข้อเสนอใน `docs/v2/*` · **บันทึกทุกการตัดสินใจ** ใน [docs/v2/decisions.md](docs/v2/decisions.md)
+    (วันที่ / เรื่อง / ตัดสินใจ / เหตุผล) และอัปเดตตารางความคืบหน้าที่หัวไฟล์ — เจ้าของพิมพ์ "ทำต่อ" = ทำต่อจากตารางนั้น
+  - ก่อน migration ทุกครั้ง: backup อัตโนมัติ (CSV ทุกตาราง ลง `backups/<เวลา>/` gitignored) + มี `rollback_vN.sql`
+  - ทุก merge: CI ผ่าน + smoke test หลัง deploy · production พัง → rollback เอง (Render API) แล้วแก้ใน branch ก่อน deploy ใหม่
+  - **ห้ามแสดงค่า secret ใด ๆ ในแชทหรือ log**
+  - **หยุดถามเฉพาะ:** ต้องจ่ายเงินเพิ่ม · ต้องลบข้อมูลผู้ใช้จริงถาวร · ต้อง rewrite git history · rollback ไม่สำเร็จ
+  - เครื่องมือ (ไม่อยู่ใน repo): `backend/.env` มี `RENDER_API_KEY`, `SUPABASE_DB_URL` (ห้าม commit) · ไม่มี psql → ใช้ psycopg
+- **สถานะล่าสุด (2026-10-25):** master = 1a + 1b + shadow/กำลังปรับปรุง + 1c (merge 9dae0ad) — migrate_v12/v13/v14 รันบน production แล้ว
+  - ถัดไป: 1d (ตารางคำแนะนำ + หน้า admin + "แห้งกว่าปกติ" + export xlsx) → 1e → 1f → 1g → fieldwork → final-report
+  - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" ([backend/risk_display.py](backend/risk_display.py)) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
     เดิม และ**หยุดคำเตือนความเสี่ยง** (`RISK_ALERTS_ENABLED`) เตือนฝนยังส่ง — `RISK_DISPLAY_MODE=legacy` = แบบเดิม
-  - รออนุมัติ: คำเตือนคุณภาพขอบเขต ([boundary-quality-warnings](docs/v2/boundary-quality-warnings.md)) · ผล `rls_audit.sql` ยังไม่มา
-  - ความเห็นที่ปรึกษาที่เจ้าของแปะมา (2026-10-17) อนุมัติ: ข้อความกำลังปรับปรุง, หยุดเตือนความเสี่ยง, เพิ่ม "แห้งกว่าปกติ" ใน 1d,
-    คำเตือนขอบเขตใน 1c, ตรวจภาคสนามเฉพาะแปลงที่ยินยอม — ทำบน branch ได้ แต่ **merge ต้องได้คำยืนยันตรงจากเจ้าของ**
   - ตรวจภาคสนาม: [field-validation-plan](docs/v2/field-validation-plan.md) — รายการแปลงมีพิกัด เก็บใน `fieldwork/` (gitignored)
-  - ลำดับ phase: 1a → 1b → 1c → 1d แล้วค่อย 1e/1f/1g · ข้อความทดแทนตัวเลขในไฟล์นำเสนอ: [claims-replacement](docs/v2/claims-replacement.md)
-  - LINE OA ยังแพลน Free (เจ้าของกำลังพิจารณา Basic ชั่วคราว)
-- **คำตอบที่เจ้าของให้ไว้แล้ว (Phase 0 ข้อ 7):** ความเร็วเลือกทาง A · migration ได้เฉพาะแบบเพิ่ม (ตาราง/คอลัมน์ nullable)
+    เฉพาะแปลงที่เจ้าของยินยอมหรือเจ้าหน้าที่เพิ่มเอง · ข้อความทดแทนตัวเลขในไฟล์นำเสนอ: [claims-replacement](docs/v2/claims-replacement.md)
+  - LINE OA แพลน Free — โควตาหมดถึง 2026-11-01คำตอบที่เจ้าของให้ไว้แล้ว (Phase 0 ข้อ 7):** ความเร็วเลือกทาง A · migration ได้เฉพาะแบบเพิ่ม (ตาราง/คอลัมน์ nullable)
   ต้อง pg_dump + rollback และแจ้งก่อนรัน production ทุกครั้ง · ปุ๋ย/ผลผลิตซ่อนหลัง feature flag (ปิด) และเปลี่ยนคำ NDVI/BSI
   · สรุปประจำวันปิดเป็นค่าเริ่มต้น · สวนยกร่อง (`plot_type=raised_bed`) ซ่อนลูกศร/วงม่วง/คำเตือนน้ำขังจากร่อง + บอกข้อจำกัด
   · ข้ออื่นใช้ค่าเริ่มต้นในรายงาน Phase 0
@@ -34,11 +34,11 @@
 | Admin dashboard | [dashboard/index.html](dashboard/index.html) ใช้ header `X-Admin-Key` |
 | ดาวเทียม | Google Earth Engine: Sentinel-2 SR (NDVI/BSI/MNDWI), Sentinel-1 GRD (VV/VH), SRTM 30 m — [backend/gee_analysis.py](backend/gee_analysis.py) |
 | ฝน | Open-Meteo + WeatherNext (ผ่าน GEE) — [backend/weather_alert.py](backend/weather_alert.py) |
-| DB | Supabase Postgres ผ่าน REST (httpx + service-role key) — [backend/database.py](backend/database.py); RLS ปิดทุกตาราง (backend only) |
+| DB | Supabase Postgres ผ่าน REST (httpx + service-role key) — [backend/database.py](backend/database.py); RLS เปิดทุกตาราง (backend only) |
 | Storage | Supabase Storage เก็บรูปแผนที่ที่ส่งเข้า LINE ([backend/plot_image_service.py](backend/plot_image_service.py), [backend/map_image.py](backend/map_image.py) ใช้ Pillow) |
 | LINE | Messaging API webhook ([backend/webhook.py](backend/webhook.py)), Flex ([backend/flex_messages.py](backend/flex_messages.py)), Rich Menu |
 | งานตามเวลา | GitHub Actions [.github/workflows/keep-alive.yml](.github/workflows/keep-alive.yml) ยิง `/admin/trigger/*` ทุกชั่วโมง 05–10 น. |
-| Hosting | **Render** service `geoai` แพลน starter (ไม่หลับ) branch `master` → `https://iamroot.onrender.com` |
+| Hosting | **Render** service `IAMROOT` (srv-d90inaf7f7vs73cmohf0) แพลน starter (ไม่หลับ) branch `master` → `https://iamroot.onrender.com` |
 
 ไฟล์ deploy อื่น (`railway.toml`, `vercel.json`, `Dockerfile`, `docker-compose.yml`, `nginx/`) **ไม่ได้ใช้งานจริง**
 CI = `.github/workflows/deploy.yml` รัน test อย่างเดียวบน `master` และ `feat/**` (ตั้งแต่ Phase 1a)
@@ -51,15 +51,15 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-pytest -q                                 # 184 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
-                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim)
+pytest -q                                 # 218 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
 IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
 ```
 
 - **Deploy:** push `master` → Render auto-deploy. Build command จริงตั้งใน Render Dashboard (ไม่ sync กับ `render.yaml`)
-- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` รันมือใน Supabase SQL Editor (ล่าสุด v11) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว
+- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v14 รัน 2026-10-25) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
 - ไม่มี GEE key ในเครื่อง → `analyze_durian_plot()` ใช้ mock data (`_mock_analyze`)
 
 ## Env (ค่าอยู่ใน Render Dashboard และ `backend/.env` ห้าม commit)
@@ -72,9 +72,10 @@ Migration: ก่อนรันทุกครั้ง `SUPABASE_DB_URL=... ba
 
 ## Data model ปัจจุบัน (Supabase)
 
-`users` (user_id = LINE userId, notify_weekly, notify_daily_digest, notify_hour) · `plots` (lat/lng, polygon JSONB `[[lng,lat],...]`, thumbnail_url)
+`users` (user_id = LINE userId, notify_weekly, notify_daily_digest, notify_hour) · `plots` (lat/lng, polygon JSONB `[[lng,lat],...]`, thumbnail_url,
+plot_type flat/raised_bed/vegetable_bed, boundary_check, is_active) · `plot_crops` (ชนิดพืช id จาก `backend/config/crops.json`) · `plot_boundary_history` · `plot_merges` · `line_message_log`
 · `analyses` (คอลัมน์ flat + `full_data` JSONB) · `grid_snapshots` · `iot_readings` · `field_observations` · `scheduler_runs`
-— schema: [supabase/schema.sql](supabase/schema.sql) + migrate_v3…v11
+— schema: [supabase/schema.sql](supabase/schema.sql) + migrate_v3…v14 · RLS เปิดทุกตาราง policy "backend only" + anon/authenticated ไม่มีสิทธิ์ (v12)
 
 ## Auth และสิทธิ์ (ตั้งแต่ Phase 1a)
 
@@ -106,13 +107,13 @@ Migration: ก่อนรันทุกครั้ง `SUPABASE_DB_URL=... ba
 
 ## กติกาการทำงาน (สรุปจาก spec หัวข้อ 2 — ต้องทำตามทุกข้อ)
 
-**ขั้นตอน**
-- ทำทีละ Phase: สำรวจ → รายงาน → เสนอแผน → **รออนุมัติ** ก่อนแก้โค้ด
+**ขั้นตอน** (ข้อ "รออนุมัติ/ถาม" ถูกแทนด้วยโหมดอัตโนมัติด้านบน ตั้งแต่ 2026-10-24)
+- ทำทีละ Phase: สำรวจ → รายงาน → เสนอแผน → ลงมือ
 - แยก branch ต่อ Phase (`feat/v2-phase1-...`) commit ย่อย สื่อความหมาย
 - ห้ามทำฟีเจอร์เดิมพัง ถ้าต้องเปลี่ยนพฤติกรรมเดิมให้แจ้งก่อน
 - ไม่แน่ใจให้ถาม อย่าเดา — รวมคำถามเป็นชุดเดียว
 
-**ห้ามทำโดยไม่ถาม**
+**ต้องมี backup + rollback + บันทึกใน decisions.md ก่อนทำ**
 - migrate / ลบ / เปลี่ยน schema ข้อมูลที่มีอยู่ (ต้องมีแผน backup + rollback)
 - เปลี่ยน hosting, ฐานข้อมูล, บริการที่มีค่าใช้จ่าย
 - เปลี่ยน LIFF ID, channel หรือค่าใน LINE Developers

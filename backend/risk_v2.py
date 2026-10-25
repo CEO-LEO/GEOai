@@ -14,6 +14,7 @@ risk_v2.py — วิธีวัดความเสี่ยงแบบใ�
      ~2 เท่า ถ้าไม่ถ่วง ค่าปกติจะเอนไปทางปีล่าสุด
    - ต้องมีอย่างน้อย MIN_YEARS ปี ปีละ ≥ MIN_IMAGES_PER_YEAR ภาพ ไม่งั้น "ข้อมูลไม่พอ"
    - z ≥ 1 = ชื้นกว่าปกติ (medium), z ≥ 2 = ชื้นกว่าปกติมาก (high) — ค่าทางสถิติ รอปรับจากผลภาคสนาม
+   - 1d: z ≤ −1 = แห้งกว่าปกติ, z ≤ −2 = แห้งกว่าปกติมาก (dry_status) — แยกจาก status เพื่อไม่เปลี่ยนผลรันคู่เดิม
 2) ลักษณะประจำแปลง (ไม่ใช้เตือน แสดงเป็นข้อมูลได้) — แก้จุดบอด "แปลงที่น้ำขังทุกปีจะถือว่าปกติ"
    - HAND (ความสูงเหนือทางน้ำใกล้สุด, MERIT Hydro 90 ม.) → ที่ลุ่มต่ำ
    - ประเภทพื้นที่ในขอบเขต (Google Dynamic World 6 เดือนล่าสุด) → คุณภาพขอบเขต: มีบ้าน/ถนนปน,
@@ -98,7 +99,8 @@ def compute_wetness_anomaly(series: list[tuple[datetime, float, int | None]],
     cur = statistics.fmean(current)
     z = (cur - mean) / sd
     status = "high" if z >= Z_HIGH else ("medium" if z >= Z_MEDIUM else "ok")
-    return {**common, "status": status, "z": round(z, 2), "current_vv_db": round(cur, 2),
+    dry_status = "high" if z <= -Z_HIGH else ("medium" if z <= -Z_MEDIUM else "ok")
+    return {**common, "status": status, "dry_status": dry_status, "z": round(z, 2), "current_vv_db": round(cur, 2),
             "baseline_mean_db": round(mean, 2), "baseline_sd_db": round(sd, 2),
             "current_images": len(current)}
 
@@ -319,3 +321,21 @@ def shadow_markdown(summary: dict, days: int) -> str:
                      f"{nw.get('ok', 0)}/{nw.get('medium', 0)}/{nw.get('high', 0)}/{other(nw)} | "
                      f"{p['old_alert_events']}/{p['new_alert_events']} | {z} | {flags} |")
     return "\n".join(lines) + "\n"
+
+
+ANOMALY_LABELS_TH = {
+    ("wet", "high"): "ชื้นกว่าปกติมาก", ("wet", "medium"): "ชื้นกว่าปกติ",
+    ("dry", "high"): "แห้งกว่าปกติมาก", ("dry", "medium"): "แห้งกว่าปกติ",
+}
+
+
+def anomaly_label_th(r: dict | None) -> str | None:
+    """ป้ายสถานะเทียบกับปกติของแปลงเอง: ปกติ / ชื้นกว่าปกติ(มาก) / แห้งกว่าปกติ(มาก) — None = ข้อมูลไม่พอ"""
+    if not r or r.get("status") not in ("ok", "medium", "high"):
+        return None
+    if r["status"] != "ok":
+        return ANOMALY_LABELS_TH[("wet", r["status"])]
+    dry = r.get("dry_status")
+    if dry is None and r.get("z") is not None:    # แถวเก่าก่อนมี dry_status
+        dry = "high" if r["z"] <= -Z_HIGH else ("medium" if r["z"] <= -Z_MEDIUM else "ok")
+    return ANOMALY_LABELS_TH.get(("dry", dry), "ปกติ")

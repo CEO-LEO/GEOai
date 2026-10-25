@@ -502,6 +502,18 @@
       padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
       cursor: pointer; white-space: nowrap;
     }
+    .rec-card { background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 12px 13px; margin: 9px 0; }
+    .rec-card .rec-title { font-weight: 700; font-size: 15px; color: var(--ink); margin-bottom: 4px; }
+    .rec-card .rec-reason { font-size: 13.5px; color: var(--muted); line-height: 1.6; }
+    .rec-card ul { margin: 8px 0 4px; padding-left: 20px; font-size: 14px; line-height: 1.65; color: var(--ink); }
+    .rec-status { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 10px; margin-top: 4px; }
+    .rec-status.draft { background: #fff3e0; color: #8d4b00; }
+    .rec-status.reviewed { background: #e8f5e9; color: #1b5e20; }
+    .plot-rec-btn {
+      background: #fff8e1; color: #7a4f01; border: none;
+      padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
+      cursor: pointer; white-space: nowrap;
+    }
     #pf-merge-select {
       width: 100%; padding: 11px; border-radius: 11px; border: 1px solid var(--line);
       font-family: inherit; font-size: 14px; background: var(--card); color: var(--ink);
@@ -651,6 +663,14 @@
   </div>
 </div>
 
+<!-- 1d: แตะจุดบนแผนที่ → ปัญหา + เหตุผล + วิธีแก้ + สถานะ (ร่าง/ตรวจแล้ว) -->
+<div id="point-sheet" class="sheet-modal">
+  <div class="sheet-box">
+    <div id="point-sheet-body"></div>
+    <button class="close-modal-btn" id="point-sheet-close">✕ ปิด</button>
+  </div>
+</div>
+
 <!-- 1c: คำเตือนคุณภาพขอบเขต (docs/v2/boundary-quality-warnings.md) — ไม่บล็อก บันทึกตามนี้ได้เสมอ -->
 <div id="bwarn-modal" class="sheet-modal">
   <div class="sheet-box">
@@ -724,6 +744,7 @@
   let gridMarkers    = [];   // sphere.Dot[]/sphere.Polygon[]/sphere.Polyline[] — จุด/หยด/เส้นทางน้ำ
   let gridPointsData = [];   // ข้อมูลดิบของแต่ละจุด (lat/lng/status/...) ไว้จับคู่ตอนแตะแผนที่
   let gridNormalizer = null;   // สเกลสีของตารางจุดล่าสุด (เทียบกันเองในแปลง)
+  let gridRecs = null;      // คำแนะนำของแปลงที่โชว์ตารางจุดอยู่ (1d) — null = แปลงยังไม่บันทึก
   let gridRaised = false;   // ตารางจุดล่าสุดเป็นสวนยกร่อง (1c) — แตะจุดแล้วใช้คำเทียบในแปลง ไม่ใช่ "น้ำขัง"
   let gridSinkPoints = new Set();   // จุดที่มีน้ำจากรอบข้างไหลมารวม ≥2 ทิศทาง (ดู computeFlowGraph)
   let persistentMarkers   = [];  // sphere.Dot[] — จุดชื้นสะสม (ชื้นซ้ำๆ หลายวัน)
@@ -1078,6 +1099,7 @@
                   data-name="${escHtml(plot.name || "")}">
             🔍 ตรวจ
           </button>
+          ${plot.id ? `<button class="plot-rec-btn">💡 คำแนะนำ</button>` : ""}
           ${plot.id ? `<button class="plot-edit-btn">✏️ แก้ไข</button>` : ""}
           ${plot.id ? `<button class="plot-hist-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
@@ -1108,6 +1130,10 @@
           plot.polygon || null,
           plot.id ? { plot_id: plot.id } : {}
         );
+      });
+      card.querySelector(".plot-rec-btn")?.addEventListener("click", e => {
+        e.stopPropagation();
+        showPlotRecommendations(plot);
       });
       card.querySelector(".plot-edit-btn")?.addEventListener("click", e => {
         e.stopPropagation();
@@ -1699,9 +1725,75 @@
     return (nearest && minDist < 0.00035) ? nearest : null;
   }
 
+  // 1d: จุดบนแผนที่ → ประเภทปัญหา (ต้องตรงกับ recommendations.POINT_PROBLEMS ฝั่ง backend)
+  //     โหมดกำลังปรับปรุง/สวนยกร่อง ใช้สีเทียบในแปลง (ไม่เชื่อสถานะสูตรเดิม) จึงมีแค่ระดับ "ควรดู"
+  function pointProblem(p) {
+    if (gridSinkPoints.has(p)) return ["water_collect", "medium"];
+    if (RISK_INTERIM || gridRaised) {
+      const rel = gridNormalizer ? gridNormalizer(p.swab_index) : 0;
+      return rel >= 0.15 ? ["wet_spot", "medium"] : rel <= -0.15 ? ["dry_spot", "medium"] : null;
+    }
+    return { waterlogged: ["wet_spot", "high"], wet: ["wet_spot", "medium"],
+             drought: ["dry_spot", "high"], dry: ["dry_spot", "medium"] }[p.status] || null;
+  }
+
+  function recCardHtml(r) {
+    return `<div class="rec-card">
+      <div class="rec-title">${escHtml(r.title)}</div>
+      ${r.reason ? `<div class="rec-reason">${escHtml(r.reason)}</div>` : ""}
+      <ul>${r.actions.map(a => `<li>${escHtml(a)}</li>`).join("")}</ul>
+      <span class="rec-status ${r.status === "reviewed" ? "reviewed" : "draft"}">${r.status === "reviewed" ? "✅" : "📝"} ${escHtml(r.status_th)}</span>
+    </div>`;
+  }
+
+  async function fetchPlotRecommendations(plotId) {
+    try {
+      const res = await apiFetch(`${API_URL}/recommendations/plot/${encodeURIComponent(userId)}/${plotId}`);
+      return res.ok ? await res.json() : null;
+    } catch { return null; }
+  }
+
+  async function showPlotRecommendations(plot) {
+    document.getElementById("modal-title").textContent = `💡 คำแนะนำ — ${plot.name || "แปลง"}`;
+    document.getElementById("modal-body").innerHTML = "<p style=\"color:#888;font-size:13px\">กำลังโหลด...</p>";
+    document.getElementById("detail-modal").classList.add("show");
+    const recs = await fetchPlotRecommendations(plot.id);
+    if (!recs) {
+      document.getElementById("modal-body").innerHTML = "<p style=\"color:#e53935;font-size:13px\">โหลดคำแนะนำไม่สำเร็จ ลองใหม่อีกครั้ง</p>";
+      return;
+    }
+    const status = recs.status_label_th
+      ? `<div class="result-section" style="font-size:14px">ความชื้นตอนนี้เทียบกับช่วงเดียวกันของปีก่อน ๆ: <b>${escHtml(recs.status_label_th)}</b></div>` : "";
+    document.getElementById("modal-body").innerHTML = status +
+      (recs.plot.length ? recs.plot.map(recCardHtml).join("")
+        : `<div class="result-section" style="font-size:14px;line-height:1.6">ตอนนี้ยังไม่พบเรื่องที่ต้องทำเป็นพิเศษทั้งแปลง</div>`) +
+      `<div class="form-hint" style="margin-top:10px">${plot.polygon && plot.polygon.length >= 3
+        ? "ดูคำแนะนำรายจุด: กด \"🔍 ตรวจ\" แล้วแตะจุดสีบนแผนที่"
+        : "วาดขอบเขตแปลงเพื่อดูคำแนะนำรายจุดบนแผนที่"}</div>` +
+      (recs.plot_type === "raised_bed" ? `<div class="raised-note show">${escHtml(RAISED_BED_NOTE)}</div>` : "");
+  }
+
+  function showPointSheet(html) {
+    document.getElementById("point-sheet-body").innerHTML = html;
+    document.getElementById("point-sheet").classList.add("show");
+  }
+  document.getElementById("point-sheet-close").addEventListener("click", () =>
+    document.getElementById("point-sheet").classList.remove("show"));
+  document.getElementById("point-sheet").addEventListener("click", e => {
+    if (e.target === document.getElementById("point-sheet")) document.getElementById("point-sheet").classList.remove("show");
+  });
+
   function showGridPointDetail(lat, lng) {
     const p = findNearestGridPoint(lat, lng);
     if (!p) return false;
+    const prob = pointProblem(p);
+    const rec = prob && gridRecs?.points?.[prob[0]]?.[prob[1]];
+    if (rec) {
+      const head = { wet_spot: "🔵", dry_spot: "🔴", water_collect: "🟣" }[prob[0]] || "📍";
+      showPointSheet(`<h3>${head} ${escHtml(rec.problem_th)}</h3>${recCardHtml(rec)}
+        <div class="form-hint">📍 ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${gridRaised ? `<br>${escHtml(RAISED_BED_NOTE)}` : ""}</div>`);
+      return true;
+    }
     const sinkNote = gridSinkPoints.has(p) ? "  🎯 จุดรวมน้ำจากรอบข้าง — เหมาะขุดร่องระบายน้ำเริ่มจากตรงนี้" : "";
     if (RISK_INTERIM || gridRaised) {
       const rel = gridNormalizer ? gridNormalizer(p.swab_index) : 0;
@@ -1718,10 +1810,12 @@
   }
 
   // plotType = "raised_bed" (1c): ไม่วาดลูกศรทางน้ำ/วงม่วง ไม่นับจุดชื้นเป็นปัญหา (น้ำในร่อง) — ดู RAISED_BED_NOTE
-  async function showMoistureGrid(polyOverride, plotType) {
+  async function showMoistureGrid(polyOverride, plotType, plotId) {
     const poly = Array.isArray(polyOverride) ? polyOverride : polygonCoords;
     const raised = plotType === "raised_bed";
     gridRaised = raised;
+    gridRecs = null;
+    if (plotId) fetchPlotRecommendations(plotId).then(r => { gridRecs = r; });
     if (!poly || poly.length < 3) {
       return showToast("❌ กรุณาวาดขอบเขตแปลงก่อน");
     }
@@ -1833,7 +1927,7 @@
 
   // เดิมส่ง showMoistureGrid ตรงๆ → event ถูกส่งเข้าไปเป็น polygon (ตอนนี้กันไว้ในฟังก์ชันแล้วด้วย)
   document.getElementById("grid-btn").addEventListener("click", () =>
-    showMoistureGrid(null, redrawPlot ? redrawPlot.plot_type : null));
+    showMoistureGrid(null, redrawPlot ? redrawPlot.plot_type : null, redrawPlot ? redrawPlot.id : null));
 
   // ─── จุดชื้นสะสม (persistent wet points) ──────────
   // ต่างจาก showMoistureGrid: ไม่ได้ยิง GEE สดๆ ตอนนี้ แต่ดึงประวัติ grid ที่
@@ -2244,7 +2338,7 @@
         map.location({ lon: sumLng, lat: sumLat }, false);
         map.zoom(18, false);
         showToast(`${status.icon} "${plotName}" — ${status.text} · กำลังปักจุดน้ำขัง/ความชื้น...`);
-        await showMoistureGrid(polyCoords, json.plot_type);
+        await showMoistureGrid(polyCoords, json.plot_type, json.plot_id);
       } else {
         // ไม่มีขอบเขตแปลง (ปักหมุดจุดเดียว) — ไม่มีจุดตารางให้โชว์บนแผนที่
         // ใช้หน้าต่างผลวิเคราะห์แบบเต็มตามเดิม

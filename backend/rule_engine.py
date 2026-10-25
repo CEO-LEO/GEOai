@@ -199,13 +199,14 @@ def format_message(data: dict, lat: float, lng: float) -> str:
     if ndvi_change < NDVI_SEVERE_THRESHOLD:
         risks.append("🔴 วิกฤต: ต้นไม้โทรมมากผิดปกติ ค่าสุขภาพพืชลดลง {:.0f}% จากปีก่อน".format(abs(ndvi_change) * 100))
         advices.append("ตรวจโรครากเน่าและโรคราต่างๆ ทันที ควรปรึกษาเกษตรกรจังหวัดหรือผู้เชี่ยวชาญ")
-        advices.append("ฉีดสารป้องกันโรค เช่น เมทาแลกซิล และเพิ่มธาตุแคลเซียม (Ca) + โพแทสเซียม (K)")
+        # 1d: ตัดชื่อสารเคมี/ธาตุอาหารออก — คำแนะนำจริงมาจากตาราง recommendation_rules (ร่าง รอผู้เชี่ยวชาญ)
+        advices.append("ถ้าพบรากเน่าหรือต้นเหี่ยว ปรึกษาเจ้าหน้าที่เกษตรเรื่องการป้องกันโรค")
         status_icon = "🔴"
 
     # ─── กฎที่ 4: ต้นโทรมปานกลาง ───
     elif ndvi_change < NDVI_DECLINE_THRESHOLD:
         risks.append("🟠 เฝ้าระวัง: สุขภาพพืชลดลง {:.0f}% จากปีก่อน ควรตรวจสอบ".format(abs(ndvi_change) * 100))
-        advices.append("เพิ่มธาตุอาหาร ไนโตรเจน (N) และแมกนีเซียม (Mg) เพื่อฟื้นฟูใบ")
+        advices.append("ปรึกษาเจ้าหน้าที่เกษตรเรื่องการบำรุงต้น")
         advices.append("ตรวจดูแมลงศัตรูพืช และปริมาณน้ำว่าเพียงพอหรือไม่")
         if status_icon == "🟢":
             status_icon = "🟠"
@@ -251,7 +252,7 @@ def format_message(data: dict, lat: float, lng: float) -> str:
             f"🔴 น้ำขังในโซนราก: สัดส่วนน้ำในดิน {water_pct:.0f}% "
             f"อากาศในช่องดิน {air_pct:.0f}% — รากเล็กๆ ขาดอากาศหายใจ เสี่ยงรากเน่า!")
         advices.append("ด่วน! ขุดร่องระบายน้ำให้ลึก ≥ 50 ซม. รอบโคนต้น")
-        advices.append("หยุดให้น้ำทันที ฉีดยาป้องกันรากเน่า (เช่น Metalaxyl หรือ Phosphonate หาซื้อได้ที่ร้านขายยาเกษตร)")
+        advices.append("งดให้น้ำจนกว่าดินจะแห้งลง ถ้าพบรากเน่าปรึกษาเจ้าหน้าที่เกษตร")
         if ndwi >= NDWI_SURFACE_WATER:
             advices.append(f"พบน้ำบนผิวดิน (MNDWI={ndwi:+.2f}) สูบน้ำออกก่อนฝนรอบใหม่")
         if status_icon != "🔴":

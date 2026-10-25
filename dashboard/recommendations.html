@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ตารางคำแนะนำ — IAM ROOT</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* หน้าผู้ดูแล: แก้/อนุมัติ/ดูประวัติ ตารางคำแนะนำ (Phase 1d) — ใช้ X-Admin-Key ชุดเดียวกับ dashboard */
+    :root { --bg:#f4f7f4; --card:#fff; --ink:#1f2a24; --muted:#5f7066; --line:#dfe7e1;
+            --green:#15803d; --green-bg:#eaf7ee; --amber:#92400e; --amber-bg:#fef3c7; --gray-bg:#eceff1; --red:#b91c1c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Sarabun', sans-serif; background: var(--bg); color: var(--ink); font-size: 15px; }
+    header { background: #14532d; color: #fff; padding: 14px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 200px; }
+    header a { color: #bbf7d0; }
+    main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    select, input, textarea, button { font-family: inherit; font-size: 14.5px; }
+    select, input, textarea { padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); }
+    textarea { width: 100%; min-height: 92px; }
+    button { padding: 9px 14px; border-radius: 9px; border: 1px solid var(--line); background: #fff; cursor: pointer; min-height: 40px; }
+    button.primary { background: var(--green); color: #fff; border-color: var(--green); font-weight: 700; }
+    button.warn { color: var(--red); }
+    .note { background: var(--amber-bg); color: var(--amber); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; line-height: 1.6; }
+    .group-h { font-weight: 700; margin: 18px 0 8px; color: #14532d; }
+    .rule { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 9px; }
+    .rule-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .rule-title { font-weight: 700; flex: 1; min-width: 200px; }
+    .tag { font-size: 12.5px; border-radius: 999px; padding: 2px 9px; background: var(--gray-bg); white-space: nowrap; }
+    .tag.draft { background: var(--amber-bg); color: var(--amber); }
+    .tag.reviewed { background: var(--green-bg); color: var(--green); }
+    .tag.retired { background: #e5e7eb; color: #6b7280; text-decoration: line-through; }
+    .rule ul { margin: 6px 0 4px; padding-left: 20px; line-height: 1.6; }
+    .meta { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    dialog { border: none; border-radius: 14px; padding: 18px; width: min(680px, 96vw); max-height: 92vh; }
+    dialog::backdrop { background: rgba(15,30,20,.45); }
+    .f { margin-bottom: 10px; } .f label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 13.5px; }
+    .row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .hist { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13.5px; }
+    #login { max-width: 420px; margin: 40px auto; background: #fff; padding: 18px; border-radius: 12px; border: 1px solid var(--line); }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg:#101613; --card:#18211c; --ink:#e6efe9; --muted:#a2b3a8; --line:#2b3a31;
+        --green:#22c55e; --green-bg:#173322; --amber:#fcd34d; --amber-bg:#3a2f12; --gray-bg:#26302a; --red:#f87171; }
+      :root:not([data-theme="light"]) select, :root:not([data-theme="light"]) input,
+      :root:not([data-theme="light"]) textarea, :root:not([data-theme="light"]) button,
+      :root:not([data-theme="light"]) dialog, :root:not([data-theme="light"]) #login { background: var(--card); color: var(--ink); }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>📋 ตารางคำแนะนำ "แก้อย่างไร"</h1>
+  <a href="/dashboard/">← กลับหน้าหลัก</a>
+</header>
+<main>
+  <div id="login" hidden>
+    <div class="f"><label for="key-input">รหัสผู้ดูแล (Admin key)</label><input id="key-input" type="password" style="width:100%" autocomplete="off"></div>
+    <button class="primary" id="key-btn">เข้าสู่ระบบ</button>
+  </div>
+
+  <div id="app" hidden>
+    <div class="note">
+      ทุกข้อที่ยังเป็น <b>ร่าง</b> จะแสดงในแอปพร้อมป้าย "ร่าง — รอเจ้าหน้าที่เกษตรตรวจ" ·
+      แก้ข้อความแล้วสถานะจะกลับเป็นร่าง (ต้องอนุมัติใหม่) · ทุกการแก้ไข/อนุมัติถูกบันทึกในประวัติ
+      <span id="source-note"></span>
+    </div>
+    <div class="bar">
+      <label>ชื่อผู้แก้/ผู้ตรวจ <input id="editor" placeholder="เช่น นายสมชาย สนง.เกษตรจังหวัดราชบุรี" style="min-width:260px"></label>
+    </div>
+    <div class="bar">
+      <select id="f-status"><option value="">ทุกสถานะ</option><option value="draft">ร่าง</option><option value="reviewed">ตรวจแล้ว</option><option value="retired">เลิกใช้</option></select>
+      <select id="f-problem"><option value="">ทุกปัญหา</option></select>
+      <select id="f-crop"><option value="">ทุกพืช</option></select>
+      <span style="flex:1"></span>
+      <button id="new-btn">➕ เพิ่มกฎ</button>
+      <button id="export-btn">⬇ ส่งออกให้ผู้ตรวจ (CSV)</button>
+    </div>
+    <div id="list"></div>
+  </div>
+</main>
+
+<dialog id="edit-dlg">
+  <h3 id="edit-title" style="margin-top:0">แก้ไขกฎ</h3>
+  <div class="row2">
+    <div class="f"><label for="e-crop">พืช</label><select id="e-crop"></select></div>
+    <div class="f"><label for="e-problem">ปัญหา</label><select id="e-problem"></select></div>
+    <div class="f"><label for="e-severity">ความรุนแรง</label><select id="e-severity"></select></div>
+  </div>
+  <div class="f"><label for="e-title">หัวข้อ (เกษตรกรเห็น)</label><input id="e-title" maxlength="200" style="width:100%"></div>
+  <div class="f"><label for="e-reason">เหตุผล</label><textarea id="e-reason" maxlength="500" style="min-height:60px"></textarea></div>
+  <div class="f"><label for="e-actions">วิธีแก้ (บรรทัดละ 1 ข้อ, ไม่เกิน 10 ข้อ)</label><textarea id="e-actions"></textarea></div>
+  <div class="row2">
+    <div class="f"><label for="e-source">ที่มาของข้อความ</label><input id="e-source" maxlength="300" style="width:100%"></div>
+    <div class="f"><label for="e-removed">ตัดออกจากข้อความเดิม</label><input id="e-removed" maxlength="300" style="width:100%"></div>
+  </div>
+  <div class="actions" style="justify-content:flex-end">
+    <button id="e-cancel">ยกเลิก</button>
+    <button class="primary" id="e-save">💾 บันทึก (เป็นร่าง)</button>
+  </div>
+</dialog>
+
+<dialog id="hist-dlg">
+  <h3 style="margin-top:0">ประวัติการแก้ไข</h3>
+  <div id="hist-body"></div>
+  <div class="actions" style="justify-content:flex-end"><button id="hist-close">ปิด</button></div>
+</dialog>
+
+<script>
+  const KEY_STORE = "geoai_admin_key", EDITOR_STORE = "geoai_rule_editor";
+  let ADMIN_KEY = "", META = { problems: {}, severities: {}, crops: [] }, RULES = [], SOURCE = "db", editing = null;
+  try { ADMIN_KEY = localStorage.getItem(KEY_STORE) || ""; } catch {}
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const STATUS_TH = { draft: "ร่าง", reviewed: "ตรวจแล้ว", retired: "เลิกใช้" };
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Admin-Key": ADMIN_KEY, ...(opts.headers || {}) } });
+    if (res.status === 403) { showLogin(); throw new Error("รหัสผู้ดูแลไม่ถูกต้อง"); }
+    if (!res.ok) { let d = ""; try { d = (await res.json()).detail; } catch {} throw new Error(typeof d === "string" && d ? d : `HTTP ${res.status}`); }
+    return res;
+  }
+  function showLogin() { $("login").hidden = false; $("app").hidden = true; }
+  $("key-btn").onclick = () => {
+    ADMIN_KEY = $("key-input").value.trim();
+    try { localStorage.setItem(KEY_STORE, ADMIN_KEY); } catch {}
+    load();
+  };
+  try { $("editor").value = localStorage.getItem(EDITOR_STORE) || ""; } catch {}
+  $("editor").onchange = () => { try { localStorage.setItem(EDITOR_STORE, $("editor").value.trim()); } catch {} };
+  function editorName() {
+    const v = $("editor").value.trim();
+    if (v.length < 2) { alert("กรุณากรอกชื่อผู้แก้/ผู้ตรวจก่อน (บันทึกในประวัติ)"); $("editor").focus(); return null; }
+    return v;
+  }
+  function cropName(c) {
+    if (c === "*") return "ทุกพืช";
+    if (c.startsWith("group:")) return c === "group:vegetable" ? "กลุ่มผัก" : c === "group:fruit_tree" ? "กลุ่มไม้ผล" : c;
+    return META.crops.find(x => x.id === c)?.name_th || c;
+  }
+  function cropOptions() {
+    const groups = [...new Set(META.crops.map(c => c.group))].map(g => `group:${g}`);
+    return ["*", ...groups, ...META.crops.map(c => c.id)];
+  }
+
+  async function load() {
+    try {
+      const json = await (await api("/admin/recommendations")).json();
+      META = json; RULES = json.rules; SOURCE = json.source;
+      $("login").hidden = true; $("app").hidden = false;
+      $("source-note").textContent = SOURCE === "seed" ? " · ⚠️ ยังไม่มีตารางในฐานข้อมูล (แสดงร่างจากไฟล์ แก้ไขไม่ได้)" : "";
+      if ($("f-problem").options.length === 1) {
+        Object.entries(META.problems).forEach(([k, v]) => $("f-problem").add(new Option(v, k)));
+        cropOptions().forEach(c => $("f-crop").add(new Option(cropName(c), c)));
+      }
+      render();
+    } catch (e) { if (!$("login").hidden) return; alert("โหลดไม่สำเร็จ: " + e.message); }
+  }
+  ["f-status", "f-problem", "f-crop"].forEach(id => $(id).onchange = render);
+
+  function render() {
+    const fs = $("f-status").value, fp = $("f-problem").value, fc = $("f-crop").value;
+    const rows = RULES.filter(r => (!fs || r.status === fs) && (!fp || r.problem === fp) && (!fc || r.crop === fc));
+    const byProblem = {};
+    rows.forEach(r => (byProblem[r.problem] ||= []).push(r));
+    const sevOrder = { low: 0, medium: 1, high: 2 };
+    $("list").innerHTML = Object.keys(META.problems).filter(p => byProblem[p]).map(p => `
+      <div class="group-h">${esc(META.problems[p])}</div>
+      ${byProblem[p].sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity]).map(r => `
+        <div class="rule">
+          <div class="rule-top">
+            <span class="rule-title">${esc(r.title_th)}</span>
+            <span class="tag">${esc(cropName(r.crop))}</span>
+            <span class="tag">${esc(META.severities[r.severity] || r.severity)}</span>
+            <span class="tag ${esc(r.status)}">${esc(STATUS_TH[r.status] || r.status)}${r.reviewed_by ? " · " + esc(r.reviewed_by) : ""}</span>
+          </div>
+          ${r.reason_th ? `<div class="meta" style="margin-top:4px">${esc(r.reason_th)}</div>` : ""}
+          <ul>${(r.actions_th || []).map(a => `<li>${esc(a)}</li>`).join("")}</ul>
+          <div class="meta">ที่มา: ${esc(r.source || "—")}${r.removed ? ` · ตัดออก: ${esc(r.removed)}` : ""}${r.version ? ` · ฉบับที่ ${r.version}` : ""}</div>
+          ${SOURCE === "db" ? `<div class="actions">
+            <button data-act="edit" data-id="${r.id}">✏️ แก้ไข</button>
+            ${r.status !== "reviewed" && r.status !== "retired" ? `<button class="primary" data-act="approve" data-id="${r.id}">✅ อนุมัติ (ตรวจแล้ว)</button>` : ""}
+            ${r.status === "reviewed" ? `<button data-act="draft" data-id="${r.id}">↩️ กลับเป็นร่าง</button>` : ""}
+            ${r.status !== "retired" ? `<button class="warn" data-act="retire" data-id="${r.id}">🚫 เลิกใช้</button>`
+                                     : `<button data-act="draft" data-id="${r.id}">♻️ ใช้อีกครั้ง (เป็นร่าง)</button>`}
+            <button data-act="history" data-id="${r.id}">🕘 ประวัติ</button>
+          </div>` : ""}
+        </div>`).join("")}`).join("") || `<p class="meta">ไม่มีกฎตามตัวกรองนี้</p>`;
+  }
+
+  $("list").addEventListener("click", async e => {
+    const b = e.target.closest("button[data-act]");
+    if (!b) return;
+    const r = RULES.find(x => String(x.id) === b.dataset.id);
+    if (b.dataset.act === "edit") return openEdit(r);
+    if (b.dataset.act === "history") return showHistory(r);
+    const status = { approve: "reviewed", draft: "draft", retire: "retired" }[b.dataset.act];
+    const who = editorName(); if (!who) return;
+    if (status === "reviewed" && !confirm(`อนุมัติข้อนี้ในนาม "${who}"?\nแอปจะแสดง "ตรวจแล้วโดย ${who}"`)) return;
+    if (status === "retired" && !confirm("เลิกใช้ข้อนี้? (ไม่แสดงในแอป แต่ยังเก็บไว้ในประวัติ)")) return;
+    try {
+      await api(`/admin/recommendations/${r.id}/status`, { method: "POST", body: JSON.stringify({ status, editor: who }) });
+      await load();
+    } catch (err) { alert("ไม่สำเร็จ: " + err.message); }
+  });
+
+  function fillSelect(sel, items, value) {
+    sel.innerHTML = ""; items.forEach(([v, t]) => sel.add(new Option(t, v)));
+    sel.value = value;
+  }
+  function openEdit(r) {
+    editing = r || null;
+    $("edit-title").textContent = r ? "แก้ไขกฎ" : "เพิ่มกฎใหม่";
+    fillSelect($("e-crop"), cropOptions().map(c => [c, cropName(c)]), r ? r.crop : "*");
+    fillSelect($("e-problem"), Object.entries(META.problems), r ? r.problem : Object.keys(META.problems)[0]);
+    fillSelect($("e-severity"), Object.entries(META.severities), r ? r.severity : "medium");
+    $("e-title").value = r?.title_th || ""; $("e-reason").value = r?.reason_th || "";
+    $("e-actions").value = (r?.actions_th || []).join("\n");
+    $("e-source").value = r?.source || ""; $("e-removed").value = r?.removed || "";
+    $("edit-dlg").showModal();
+  }
+  $("new-btn").onclick = () => { if (SOURCE !== "db") return alert("ยังไม่มีตารางในฐานข้อมูล"); openEdit(null); };
+  $("e-cancel").onclick = () => $("edit-dlg").close();
+  $("e-save").onclick = async () => {
+    const who = editorName(); if (!who) return;
+    const body = {
+      crop: $("e-crop").value, problem: $("e-problem").value, severity: $("e-severity").value,
+      title_th: $("e-title").value.trim(), reason_th: $("e-reason").value.trim(),
+      actions_th: $("e-actions").value.split("\n").map(s => s.trim()).filter(Boolean),
+      source: $("e-source").value.trim(), removed: $("e-removed").value.trim(), editor: who,
+    };
+    try {
+      await api(editing ? `/admin/recommendations/${editing.id}` : "/admin/recommendations",
+                { method: editing ? "PUT" : "POST", body: JSON.stringify(body) });
+      $("edit-dlg").close();
+      await load();
+    } catch (err) { alert("บันทึกไม่สำเร็จ: " + err.message); }
+  };
+
+  async function showHistory(r) {
+    $("hist-body").innerHTML = "กำลังโหลด...";
+    $("hist-dlg").showModal();
+    try {
+      const json = await (await api(`/admin/recommendations/${r.id}/history`)).json();
+      const ACT = { seed: "ร่างตั้งต้น", create: "เพิ่ม", edit: "แก้ไข", approve: "อนุมัติ", retire: "เลิกใช้", restore: "กลับเป็นร่าง" };
+      $("hist-body").innerHTML = json.history.map(h => `
+        <div class="hist"><b>${esc(ACT[h.action] || h.action)}</b> · ฉบับที่ ${h.version ?? "-"} · ${esc(h.changed_by || "-")}
+          · ${new Date(h.changed_at).toLocaleString("th-TH")}
+          <div class="meta">${esc(h.snapshot?.title_th || "")} — ${esc(STATUS_TH[h.snapshot?.status] || "")}</div>
+          <ul class="meta">${(h.snapshot?.actions_th || []).map(a => `<li>${esc(a)}</li>`).join("")}</ul>
+        </div>`).join("") || "ยังไม่มีประวัติ";
+    } catch (err) { $("hist-body").textContent = "โหลดไม่สำเร็จ: " + err.message; }
+  }
+  $("hist-close").onclick = () => $("hist-dlg").close();
+
+  $("export-btn").onclick = async () => {
+    try {
+      const blob = await (await api("/admin/recommendations/export.csv")).blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = "recommendations-for-review.csv"; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (err) { alert("ส่งออกไม่สำเร็จ: " + err.message); }
+  };
+
+  if (ADMIN_KEY) load(); else showLogin();
+</script>
+</body>
+</html>

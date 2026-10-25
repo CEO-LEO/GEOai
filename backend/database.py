@@ -838,6 +838,116 @@ async def get_active_plots() -> list[dict]:
     return rows or []
 
 
+# ── คำแนะนำ (Phase 1d — migrate_v15) ─────────────────────
+_RULE_COLS = ("id,rule_key,crop,problem,severity,title_th,reason_th,actions_th,status,source,removed,"
+              "reviewed_by,reviewed_at,version,updated_by,updated_at")
+
+
+def _rule_row(r: dict) -> dict:
+    return {**r, "key": r.get("rule_key"), "actions_th": r.get("actions_th") or []}
+
+
+async def list_recommendation_rules() -> list[dict] | None:
+    """กฎทั้งหมด — None ถ้ายังไม่มีตาราง/อ่านไม่ได้ (ผู้เรียก fallback ไปใช้ร่างใน config)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    rows = await _fetch_all("recommendation_rules", {"select": _RULE_COLS, "order": "problem.asc,severity.asc,id.asc"})
+    return None if rows is None else [_rule_row(r) for r in rows]
+
+
+async def get_recommendation_rule(rule_id: int) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/recommendation_rules",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={"id": f"eq.{rule_id}", "select": _RULE_COLS, "limit": "1"},
+        )
+    if resp.status_code != 200 or not resp.json():
+        return None
+    return _rule_row(resp.json()[0])
+
+
+async def _log_rule_history(client: httpx.AsyncClient, rule: dict, action: str, changed_by: str) -> None:
+    resp = await client.post(
+        f"{SUPABASE_URL}/rest/v1/recommendation_rule_history",
+        headers={**_HEADERS(), "Prefer": "return=minimal"},
+        json={"rule_id": rule["id"], "version": rule.get("version"), "action": action,
+              "changed_by": changed_by, "snapshot": {k: v for k, v in rule.items() if k != "key"}},
+    )
+    if resp.status_code not in (200, 201, 204):
+        logger.error(f"Supabase rule history failed: {resp.status_code} — {resp.text}")
+
+
+async def save_recommendation_rule(rule_id: int | None, fields: dict, action: str, changed_by: str) -> dict | None:
+    """
+    สร้าง (rule_id=None) หรือแก้กฎ + บันทึกประวัติทุกครั้ง (recommendation_rule_history เก็บทั้งแถวหลังแก้)
+    action: create / edit / approve / retire / restore
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    hdr = {**_HEADERS(), "Prefer": "return=representation"}
+    async with httpx.AsyncClient(timeout=10) as client:
+        if rule_id is None:
+            resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/recommendation_rules", headers=hdr,
+                params={"select": _RULE_COLS},
+                json={**fields, "version": 1, "updated_by": changed_by, "updated_at": now},
+            )
+        else:
+            current = await get_recommendation_rule(rule_id)
+            if not current:
+                return None
+            resp = await client.patch(
+                f"{SUPABASE_URL}/rest/v1/recommendation_rules", headers=hdr,
+                params={"id": f"eq.{rule_id}", "select": _RULE_COLS},
+                json={**fields, "version": (current.get("version") or 1) + 1,
+                      "updated_by": changed_by, "updated_at": now},
+            )
+        if resp.status_code not in (200, 201) or not resp.json():
+            logger.error(f"Supabase save_recommendation_rule failed: {resp.status_code} — {resp.text}")
+            return None
+        row = _rule_row(resp.json()[0])
+        await _log_rule_history(client, row, action, changed_by)
+    return row
+
+
+async def get_recommendation_rule_history(rule_id: int) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/recommendation_rule_history",
+            headers={**_HEADERS(), "Prefer": ""},
+            params={"rule_id": f"eq.{rule_id}", "order": "changed_at.desc", "limit": "50",
+                    "select": "id,version,action,changed_by,changed_at,snapshot"},
+        )
+    return resp.json() if resp.status_code == 200 else []
+
+
+async def get_latest_plot_signals(plot_id: int) -> dict | None:
+    """
+    สัญญาณระดับแปลงล่าสุดสำหรับคำแนะนำ (1d): risk_v2 (มีเฉพาะแถวจากสแกนรายวัน) + ndvi_change + หน้าดิน
+    ใช้แถวล่าสุดที่มี risk_v2 ถ้าไม่มีเลยใช้แถวล่าสุด
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    sel = "created_at,ndvi_change,risk_v2:full_data->risk_v2,topsoil_risk_level:full_data->>topsoil_risk_level"
+    async with httpx.AsyncClient(timeout=10) as client:
+        for extra in ({"full_data->risk_v2": "not.is.null"}, {}):
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/analyses",
+                headers={**_HEADERS(), "Prefer": ""},
+                params={"plot_id": f"eq.{plot_id}", "order": "created_at.desc", "limit": "1",
+                        "select": sel, **extra},
+            )
+            if resp.status_code == 200 and resp.json():
+                return resp.json()[0]
+    return None
+
+
 async def get_notifiable_users() -> set[str]:
     """ดึง user_id ทั้งหมดที่เปิดรับการแจ้งเตือน (notify_weekly = true)"""
     if not SUPABASE_URL or not SUPABASE_KEY:
