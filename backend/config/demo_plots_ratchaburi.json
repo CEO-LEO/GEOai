@@ -1,0 +1,14 @@
+{
+  "_note": "แปลงตัวอย่างสมมติในจังหวัดราชบุรี (Phase 1g) — ไม่ใช่แปลงของเกษตรกรจริง ไม่มีข้อมูลส่วนบุคคล · ใช้ใน dev mode (ไม่มี Supabase) และ supabase/seed_demo_ratchaburi.sql สำหรับฐานข้อมูลทดสอบเท่านั้น ห้ามรันบน production · ขอบเขต = สี่เหลี่ยมราว 60×60 ม. รอบจุดกลาง",
+  "user_id": "demo-ratchaburi",
+  "plots": [
+    {"key": "RB-DEMO-1", "name": "ตัวอย่าง: มะพร้าวน้ำหอม ดำเนินสะดวก", "lat": 13.5180, "lng": 99.9550, "crops": ["coconut_aromatic"], "plot_type": "raised_bed"},
+    {"key": "RB-DEMO-2", "name": "ตัวอย่าง: องุ่น ดำเนินสะดวก", "lat": 13.5350, "lng": 99.9400, "crops": ["grape"], "plot_type": "raised_bed"},
+    {"key": "RB-DEMO-3", "name": "ตัวอย่าง: ฝรั่ง โพธาราม", "lat": 13.7000, "lng": 99.8500, "crops": ["guava"], "plot_type": "flat"},
+    {"key": "RB-DEMO-4", "name": "ตัวอย่าง: แปลงผัก บ้านโป่ง", "lat": 13.8100, "lng": 99.8800, "crops": ["vegetables"], "plot_type": "vegetable_bed"},
+    {"key": "RB-DEMO-5", "name": "ตัวอย่าง: มะม่วง เมืองราชบุรี", "lat": 13.5400, "lng": 99.7900, "crops": ["mango"], "plot_type": "flat"},
+    {"key": "RB-DEMO-6", "name": "ตัวอย่าง: ชมพู่ บางแพ", "lat": 13.6900, "lng": 99.9400, "crops": ["rose_apple"], "plot_type": "raised_bed"},
+    {"key": "RB-DEMO-7", "name": "ตัวอย่าง: สวนผสม ทุเรียน+กล้วย ปากท่อ", "lat": 13.3900, "lng": 99.8000, "crops": ["durian", "banana"], "plot_type": "flat"},
+    {"key": "RB-DEMO-8", "name": "ตัวอย่าง: ส้มโอ+ผัก วัดเพลง", "lat": 13.5750, "lng": 99.9050, "crops": ["pomelo", "vegetables"], "plot_type": "flat"}
+  ]
+}

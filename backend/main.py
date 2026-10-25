@@ -154,12 +154,9 @@ async def lifespan(app: FastAPI):
         logger.warning("IAMROOT_DEV_AUTH_USER is set — requests without a LINE token are "
                        "treated as that user. Local development only.")
 
-    # 1f: ภาษาไทยในรูป/PDF วางสระ-วรรณยุกต์ถูกต้องเมื่อ Pillow มี raqm — บันทึกไว้ตรวจได้จาก /admin/logs
-    try:
-        from PIL import features as _pil_features
-        logger.info(f"Pillow text layout: {'raqm' if _pil_features.check('raqm') else 'basic'}")
-    except Exception:
-        pass
+    # 1f: ภาษาไทยในรูป/PDF วางสระ-วรรณยุกต์ถูกต้องเมื่อ Pillow มี raqm — ดูได้ที่ /health (text_layout)
+    if _text_layout() == "basic":
+        logger.warning("Pillow text layout: basic (no raqm) — Thai tone marks in images/PDF may be misplaced")
 
     scheduler = create_scheduler()
     scheduler.start()
@@ -334,9 +331,17 @@ def _gee_failure_detail(exc: Exception) -> tuple[int, str]:
     return 500, "เกิดข้อผิดพลาดภายใน กรุณาลองใหม่อีกครั้ง"
 
 
+def _text_layout() -> str:
+    try:
+        from PIL import features
+        return "raqm" if features.check("raqm") else "basic"
+    except Exception:
+        return "unavailable"
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "IAM ROOT", "cache": cache_stats()}
+    return {"status": "ok", "service": "IAM ROOT", "cache": cache_stats(), "text_layout": _text_layout()}
 
 
 @app.get("/")

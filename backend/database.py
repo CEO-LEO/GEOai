@@ -46,21 +46,13 @@ def seed_demo_data():
     random.seed(42)
     _demo_reports.clear()
 
-    # สวนต้นไม้จันทบุรี/ตราด พิกัดจริง
-    plots = [
-        (12.6011, 102.1042, "U001"),
-        (12.5834, 102.0918, "U001"),
-        (12.6247, 102.1389, "U002"),
-        (12.5502, 102.0671, "U002"),
-        (12.6129, 102.0553, "U003"),
-        (12.5701, 102.1204, "U003"),
-        (12.6388, 102.0812, "U004"),
-        (12.5945, 102.1467, "U004"),
-        (12.5215, 102.0395, "U005"),
-        (12.6478, 102.1601, "U005"),
-        (12.5612, 102.0987, "U006"),
-        (12.6055, 102.0234, "U007"),
-    ]
+    # 1g: แปลงตัวอย่างสมมติในราชบุรี หลายพืช/หลายประเภทสวน (config/demo_plots_ratchaburi.json)
+    # เดิมเป็นพิกัดสวนทุเรียนจันทบุรี/ตราด — โครงการย้ายมาใช้กับเกษตรจังหวัดราชบุรี
+    import json
+    from pathlib import Path
+    demo = json.loads((Path(__file__).resolve().parent / "config" / "demo_plots_ratchaburi.json")
+                      .read_text(encoding="utf-8"))
+    plots = [(p["lat"], p["lng"], f"{demo['user_id']}-{i % 3 + 1}") for i, p in enumerate(demo["plots"])]
 
     base_time = datetime.now(timezone.utc)
 

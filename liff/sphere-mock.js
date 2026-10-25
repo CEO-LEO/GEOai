@@ -62,7 +62,7 @@
   /* ════════════════════ sphere.Map ════════════════════════ */
   function SphereMap(opts) {
     const el     = opts.placeholder;
-    const center = opts.location ? toLL(opts.location) : [12.6, 102.1];
+    const center = opts.location ? toLL(opts.location) : [13.54, 99.82];   // ราชบุรี
     const zoom   = opts.zoom || 10;
 
     _eventMixin(this);
