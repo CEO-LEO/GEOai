@@ -3,6 +3,8 @@
 *.json
 !package.json
 !vercel.json
+# config ของแอป (ไม่มี secret — ตรวจก่อน commit ทุกครั้ง)
+!backend/config/*.json
 gee-key.json
 service-account*.json
 

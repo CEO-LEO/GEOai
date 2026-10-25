@@ -251,6 +251,7 @@ async def daily_scan_job(hour: int | None = None):
                         "message": message,
                         "polygon": polygon,
                         "plot_id": plot_id,
+                        "plot_type": plot.get("plot_type"),
                     })
 
                     if not should_notify:
@@ -276,7 +277,8 @@ async def daily_scan_job(hour: int | None = None):
                         alert_problem_points: list[dict] = []
                         if polygon and len(polygon) >= 3:
                             img_result = await build_plot_grid_image_url(
-                                polygon, plot.get("name") or "แปลงของคุณ", plot_id=plot_id)
+                                polygon, plot.get("name") or "แปลงของคุณ", plot_id=plot_id,
+                                plot_type=plot.get("plot_type"))
                             alert_img_url = img_result["url"]
                             alert_problem_points = img_result["problem_points"]
 
@@ -301,7 +303,8 @@ async def daily_scan_job(hour: int | None = None):
                         if (p["polygon"] and len(p["polygon"]) >= 3
                                 and len(images) < DIGEST_MAX_IMAGES):
                             img_result = await build_plot_grid_image_url(p["polygon"], p["name"],
-                                                                         plot_id=p.get("plot_id"))
+                                                                         plot_id=p.get("plot_id"),
+                                                                         plot_type=p.get("plot_type"))
                             problem_points = img_result["problem_points"]
                             if img_result["url"]:
                                 images.append(img_result["url"])
@@ -480,7 +483,8 @@ async def _send_grouped_rain_alert(user_id: str, pending: list[dict]) -> None:
             break
         polygon = item.get("polygon")
         if polygon and len(polygon) >= 3:
-            img_result = await build_plot_grid_image_url(polygon, item["name"], plot_id=item["plot_id"])
+            img_result = await build_plot_grid_image_url(polygon, item["name"], plot_id=item["plot_id"],
+                                                         plot_type=item.get("plot_type"))
             if img_result["url"]:
                 images.append(img_result["url"])
 
@@ -550,7 +554,9 @@ async def rain_alert_job(hour: int | None = None):
                     if plot_id:
                         soil_data = await get_latest_plot_analysis(plot_id)
 
-                    if soil_data:
+                    # สวนยกร่อง (1c): ความชื้นดินจากดาวเทียมรวมน้ำในร่อง → ไม่ใช้ประเมินเสี่ยงน้ำขัง
+                    # เตือนเฉพาะฝนหนักจากพยากรณ์ (ทางเดียวกับแปลงที่ยังไม่มีข้อมูลดิน)
+                    if soil_data and plot.get("plot_type") != "raised_bed":
                         # ── Combined alert: อากาศ + ดิน ──
                         soil_risk = assess_soil_waterlog_risk(soil_data)
                         alert = evaluate_combined_risk(forecast, soil_risk)
@@ -573,7 +579,7 @@ async def rain_alert_job(hour: int | None = None):
                                 "msg": build_combined_alert_message(forecast, soil_risk, alert,
                                                                     lat, lng, plot_name=name),
                                 "plot_id": plot_id, "level": alert["alert_level"],
-                                "polygon": polygon, "name": name,
+                                "polygon": polygon, "name": name, "plot_type": plot.get("plot_type"),
                             })
                             counters["combined_alerts"] += 1
                             logger.info(
@@ -589,7 +595,7 @@ async def rain_alert_job(hour: int | None = None):
                                 "flex": build_rain_alert_flex(forecast, lat, lng, plot_name=name),
                                 "msg": build_rain_alert_message(forecast, lat, lng, plot_name=name),
                                 "plot_id": plot_id, "level": "warning",
-                                "polygon": polygon, "name": name,
+                                "polygon": polygon, "name": name, "plot_type": plot.get("plot_type"),
                             })
                             counters["alerted"] += 1
                             logger.info(

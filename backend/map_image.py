@@ -61,6 +61,10 @@ STATUS_LABELS_TH: dict[str, str] = {
 
 _DEFAULT_COLOR = (153, 153, 153)
 
+MIN_RENDER_WIDTH_PX = 480
+# ห้ามมีอีโมจิ (ฟอนต์ Kanit ไม่มี glyph) — ข้อความเดียวกับ RAISED_BED_NOTE ใน liff/index.html แบบสั้น
+RAISED_BED_IMAGE_NOTE = "สวนยกร่อง: ไม่แสดงทางน้ำไหล/จุดน้ำรวม เพราะน้ำในร่องทำให้ดาวเทียมเห็นเป็นจุดชื้น"
+
 
 def status_color(status: str | None) -> tuple[int, int, int]:
     return STATUS_COLORS.get(status or "", _DEFAULT_COLOR)
@@ -200,11 +204,15 @@ def _compute_flow_graph(points: list[dict], spacing_m: float) -> dict[int, int]:
     return in_degree
 
 
-def summarize_grid_status(grid_points: list[dict]) -> tuple[str, tuple[int, int, int]]:
+def summarize_grid_status(grid_points: list[dict],
+                          ignore_wet: bool = False) -> tuple[str, tuple[int, int, int]]:
     """
     สรุปภาพรวมทั้งแปลงเป็นประโยคเดียว + สี สำหรับแถบหัวเรื่อง — เลือกสถานะที่
     "รุนแรงที่สุด" ที่พบ (ไม่ใช่ค่าเฉลี่ย) เพราะจุดปัญหาเล็กๆ ในแปลงที่ส่วนใหญ่ปกติ
     ก็ยังสำคัญ ไม่อยากให้ค่าเฉลี่ยกลบจุดที่ต้องรีบดูแลไป
+
+    ignore_wet (สวนยกร่อง — 1c): น้ำในร่องทำให้ดาวเทียมเห็นเป็นจุดชื้น/น้ำขังเสมอ ไม่ใช่ปัญหาของต้นไม้
+    → ไม่สรุปเป็น "พบจุดน้ำขัง"
     """
     counts: dict[str, int] = {}
     for p in grid_points:
@@ -217,9 +225,13 @@ def summarize_grid_status(grid_points: list[dict]) -> tuple[str, tuple[int, int,
 
     # ลำดับความรุนแรง: น้ำขัง/แล้งวิกฤต > ชื้นเกิน/แห้งเกิน > สมดุลดี
     severity_order = ["waterlogged", "drought", "wet", "dry", "optimal"]
+    if ignore_wet:
+        severity_order = ["drought", "dry", "optimal"]
     worst = next((s for s in severity_order if counts.get(s)), "optimal")
 
     if worst == "optimal":
+        if ignore_wet:
+            return "สวนยกร่อง — ไม่ประเมินน้ำขังจากร่องน้ำ", _DEFAULT_COLOR
         return "ทั้งแปลงชื้นสมดุลดี", STATUS_COLORS["optimal"]
 
     n = counts[worst]
@@ -263,6 +275,7 @@ def render_plot_grid_image(
     spacing_m: float = 10,
     plot_name: str = "",
     problem_points: list[dict] | None = None,
+    show_flow: bool = True,
 ) -> bytes:
     """
     วาดจุดความชื้น (สีตามกลุ่มสถานะ 5 กลุ่ม สอดคล้อง status_th ที่ backend
@@ -281,6 +294,13 @@ def render_plot_grid_image(
     ตำแหน่งจริงบนรูปเลย ไม่ต้องนับ
     """
     sat_img = Image.open(io.BytesIO(satellite_png_bytes)).convert("RGBA")
+    # แปลงเล็ก/แคบมาก (เช่น ขอบเขตที่จิ้มจุดซ้อนกัน) ได้ภาพดาวเทียมกว้างไม่กี่พิกเซล → แถบ legend
+    # ติดลบ แล้ว Pillow โยน "x1 must be greater than or equal to x0" (แปลง 67/68, 2026-10-25)
+    # ขยายภาพให้กว้างอย่างน้อย MIN_RENDER_WIDTH_PX ก่อนวาด (สัดส่วนเดิม)
+    if sat_img.width < MIN_RENDER_WIDTH_PX:
+        scale = MIN_RENDER_WIDTH_PX / max(1, sat_img.width)
+        sat_img = sat_img.resize((MIN_RENDER_WIDTH_PX, max(1, round(sat_img.height * scale))),
+                                 Image.NEAREST)
     w, h = sat_img.size
     min_lng, min_lat, max_lng, max_lat = bounds
 
@@ -328,7 +348,8 @@ def render_plot_grid_image(
     tile_size_m = spacing_m * 1.12
     chevron_bucket_deg = (spacing_m * 2.5) / 111320.0
     used_buckets: set[tuple[int, int]] = set()
-    for p in grid_points:
+    # สวนยกร่อง (show_flow=False): ไม่วาดลูกศร/วงม่วง — ความละเอียด 10 ม. แยกร่องกับสันร่องไม่ได้
+    for p in (grid_points if show_flow else []):
         flow_to = p.get("flow_to")
         if not flow_to:
             continue
@@ -352,7 +373,7 @@ def render_plot_grid_image(
     # ผู้ใช้ทดสอบจริงแยกแยะไม่ออกในรูปที่ส่งเข้า LINE — เปลี่ยนเป็นม่วง (ไม่ซ้ำกับ
     # 5 สีสถานะเลยสักสี กัน confuse) ต้องเปลี่ยนพร้อมกันทั้งที่นี่และ
     # liff/index.html (sphere.Dot lineColor + legend text) ให้สีตรงกันข้ามแพลตฟอร์ม
-    in_degree = _compute_flow_graph(grid_points, spacing_m)
+    in_degree = _compute_flow_graph(grid_points, spacing_m) if show_flow else {}
     ring_radius_px = max(4.0, (tile_size_m * 1.4 / 2) * px_per_m)
     sink_color = (171, 71, 188)   # #AB47BC ม่วง — ต้องตรงกับ liff/index.html เป๊ะ
     sink_count = 0
@@ -445,7 +466,7 @@ def render_plot_grid_image(
     # เพิ่มความสูง legend ทีละบรรทัดเมื่อมีลูกศร/จุดรวมน้ำให้อธิบาย (ตรงกับเว็บ) และ/
     # หรือมีป้ายกริดอ้างอิงให้อธิบาย (มีทุกครั้งที่มี polygon — ผู้ใช้ขอ "บอกจุดที่
     # เกิดปัญหา" ในการ์ด ป้ายในรูปนี้คือกุญแจอ่านการ์ดนั้น ต้องมีคำอธิบายกำกับเสมอ)
-    show_flow_note = has_flow_arrows or sink_count > 0
+    show_flow_note = has_flow_arrows or sink_count > 0 or not show_flow
     has_grid_ref = bool(polygon and len(polygon) >= 3)
     has_problem_markers = bool(problem_points)
     ref_note_lines = (1 if has_grid_ref else 0) + (1 if has_problem_markers else 0)
@@ -456,7 +477,7 @@ def render_plot_grid_image(
     # แถบหัวเรื่อง — พื้นเข้ม ตัวอักษรขาว/สีตามสถานะ อ่านชัดตัดกับพื้นเสมอ
     # (ไม่พึ่งความสว่างของภาพดาวเทียมด้านล่างที่เปลี่ยนไปตามแต่ละแปลง)
     cdraw.rectangle([0, 0, w, top_h], fill=(30, 38, 51))
-    headline, headline_color = summarize_grid_status(grid_points)
+    headline, headline_color = summarize_grid_status(grid_points, ignore_wet=not show_flow)
     pad = 16
     if plot_name:
         f_title = _font("Kanit-Bold.ttf", 22)
@@ -508,7 +529,10 @@ def render_plot_grid_image(
     # บรรทัดอธิบายลูกศร/จุดรวมน้ำ — ให้ครบตามที่เห็นในเว็บ (ผู้ใช้ขอ)
     f_note = _font("Kanit-Regular.ttf", 13)
     note_y = label_y + 24
-    if show_flow_note:
+    if not show_flow:
+        cdraw.text((pad, note_y), RAISED_BED_IMAGE_NOTE, font=f_note, fill=(102, 102, 102))
+        note_y += 22
+    elif show_flow_note:
         x_cursor = pad
         if has_flow_arrows:
             text = "▲ ลูกศร = ทิศทางน้ำไหล"

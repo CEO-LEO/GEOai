@@ -1,0 +1,9 @@
+{
+  "_note": "เกณฑ์คำเตือนคุณภาพขอบเขตแปลง (docs/v2/boundary-quality-warnings.md, อนุมัติ 2026-10-24) — ค่าเริ่มต้นจากข้อมูล 23 แปลง ปรับได้หลังตรวจภาคสนาม · ไม่บล็อกการบันทึกแปลง",
+  "built_fraction_warn": 0.15,
+  "crops_fraction_major": 0.5,
+  "tree_fraction_min": 0.6,
+  "tree_fraction_min_raised_bed": 0.4,
+  "min_area_rai": 0.1,
+  "check_timeout_s": 6
+}

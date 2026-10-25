@@ -251,14 +251,16 @@ def build_result_flex(data: dict, lat: float, lng: float, plain_text: str,
                         "contents": [
                             _stat_box("🌍 สภาพพื้นดิน", f"{disp_str} ({stability_pct}%)", disp_color,
                                       caption="ดินทรุด/เคลื่อนตัวหรือไม่ % ยิ่งสูงยิ่งมั่นคง"),
-                            _stat_box("📊 ผลผลิตประเมิน",
-                                      f"{yield_est.get('estimated_kg_per_rai', '-')} กก./ไร่"
-                                      if yield_est else "—",
-                                      {"high": "#2E7D32", "medium": "#FB8C00",
-                                       "low": "#E65100", "very_low": "#C62828"
-                                       }.get(yield_est.get("quality", "medium"), "#555555")
-                                      if yield_est else "#555555",
-                                      caption="คาดคะเนจากภาพดาวเทียมล่าสุด"),
+                            # ผลผลิตเป็นสูตรของทุเรียนที่ยังไม่สอบเทียบ — ซ่อนเป็นค่าเริ่มต้น (1c)
+                            *([_stat_box("📊 ผลผลิตประเมิน",
+                                         f"{yield_est.get('estimated_kg_per_rai', '-')} กก./ไร่"
+                                         if yield_est else "—",
+                                         {"high": "#2E7D32", "medium": "#FB8C00",
+                                          "low": "#E65100", "very_low": "#C62828"
+                                          }.get(yield_est.get("quality", "medium"), "#555555")
+                                         if yield_est else "#555555",
+                                         caption="คาดคะเนจากภาพดาวเทียมล่าสุด")]
+                              if risk_display.agronomy_numbers() else []),
                         ]
                     },
 

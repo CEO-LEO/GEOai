@@ -157,7 +157,8 @@ async def delete_old_plot_images(older_than_days: int = 7) -> bool:
 
 
 async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str = "",
-                                    plot_id: int | None = None) -> str | None:
+                                    plot_id: int | None = None,
+                                    plot_type: str | None = None) -> dict:
     """
     สร้างภาพแผนที่ความชื้นสำหรับส่งเข้า LINE คู่กับผลวิเคราะห์ — คืน dict
     {"url": str|None, "problem_points": list[dict]} (url=None ถ้าล้มเหลว — แค่
@@ -174,10 +175,17 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
     เป็นรูปย่อสี่เหลี่ยมเล็กๆ อัปโหลดเก็บถาวรแยกต่างหาก แล้วบันทึกลง plots.thumbnail_url
     — ใช้แสดงในหน้า "แปลงของฉัน" (LIFF) ให้แยกแต่ละแปลงออกจากกันง่ายขึ้น (ผู้ใช้ขอ)
     ล้มเหลวได้โดยไม่กระทบรูปแผนที่หลักที่ส่งเข้า LINE (แยก try/except ต่างหาก)
+
+    plot_type = "raised_bed" (1c): ไม่วาดลูกศรทางน้ำ/วงม่วง และไม่ชี้จุดชื้น/น้ำขังเป็นปัญหา
+    เพราะน้ำในร่องทำให้ดาวเทียมเห็นเป็นจุดชื้นเสมอ (ความละเอียด 10 ม. แยกร่องกับสันร่องไม่ได้)
     """
     empty = {"url": None, "problem_points": []}
     if not _MAP_IMAGE_AVAILABLE:
         return empty
+    raised_bed = plot_type == "raised_bed"
+    png_bytes = None
+    url = None
+    problem_points = []
     try:
         # allow_widen=True: งานนี้เป็นการสร้างรูปแนบอัตโนมัติ (ผู้ใช้ไม่ได้กดขอ
         # แบบ interactive) ไม่มีรูปเลยแย่กว่ารูปหยาบกว่าเดิม — บั๊กที่เจอจริง:
@@ -193,25 +201,28 @@ async def build_plot_grid_image_url(polygon: list[list[float]], plot_name: str =
         # ต้องหา problem_points ก่อนวาดรูป (ไม่ใช่หลัง) เพราะผู้ใช้ขอให้วงกลมจุด
         # ปัญหาปรากฏ "บนรูป" ด้วยเลย ไม่ใช่แค่ในข้อความ — ล้มเหลวได้โดยไม่กระทบรูป
         # หลัก (แค่จะไม่มีวงกลม/ป้ายจุดปัญหาบนรูป ยังมีป้ายกริดอ้างอิงข้างขอบอยู่)
-        problem_points = []
         try:
             gee_analysis.assign_grid_reference(grid_points, polygon)
-            problem_points = gee_analysis.select_problem_points(grid_points)
+            problem_points = gee_analysis.select_problem_points(
+                grid_points, exclude_statuses=("wet", "waterlogged") if raised_bed else ())
         except Exception as e:
             logger.warning(f"Problem-point selection failed (non-fatal): {e}")
 
         composed = await run_in_threadpool(
             render_plot_grid_image, png_bytes, bounds, grid_points, polygon, actual_spacing_m,
-            plot_name, problem_points,
+            plot_name, problem_points, not raised_bed,
         )
         url = await upload_plot_image(composed)
         if url:
             logger.info(f"Plot grid image ready: {url}")
     except Exception as e:
         logger.warning(f"Plot grid image generation failed ({type(e).__name__}, non-fatal, skipping): {e}")
-        return empty
+        if png_bytes is None:
+            return empty
+        # วาดรูปแผนที่ไม่สำเร็จ แต่มีภาพดาวเทียมแล้ว — ยังทำรูปย่อให้หน้า "แปลงของฉัน" ได้ (ด้านล่าง)
+        problem_points = []
 
-    if plot_id is not None:
+    if plot_id is not None and png_bytes is not None:
         try:
             thumb_bytes = await run_in_threadpool(make_list_thumbnail, png_bytes)
             thumb_url = await _upload_plot_thumbnail(plot_id, thumb_bytes)

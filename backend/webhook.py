@@ -225,7 +225,7 @@ async def _handle_postback(event: dict):
                 try:
                     return await asyncio.wait_for(
                         build_plot_grid_image_url(p["polygon"], p.get("name") or "แปลงของคุณ",
-                                                  plot_id=p.get("id")),
+                                                  plot_id=p.get("id"), plot_type=p.get("plot_type")),
                         timeout=REPLY_IMAGE_DEADLINE_S)
                 except Exception as e:
                     logger.warning(f"map image failed/timed out for plot {p.get('id')}: {type(e).__name__}")

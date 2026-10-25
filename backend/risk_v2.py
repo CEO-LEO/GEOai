@@ -231,6 +231,30 @@ def get_plot_profile(lat: float, lng: float, polygon: list | None = None) -> dic
     return classify_profile(r.get("hand"), lc, wet_rank, area_rai=area_rai, is_point=is_point)
 
 
+def get_boundary_land_cover(lat: float, lng: float, polygon: list | None = None) -> dict:
+    """
+    ประเภทพื้นที่ในขอบเขต (Dynamic World) + พื้นที่ — GEE 1 ครั้ง ใช้ตรวจคุณภาพขอบเขตตอนบันทึก/แก้แปลง (1c)
+    เบากว่า get_plot_profile (ไม่คำนวณ HAND/เทียบเพื่อนบ้าน) เพราะผู้ใช้รออยู่ (เพดาน 6 วินาที)
+    """
+    is_point = not (polygon and len(polygon) >= 3)
+    if not gee_analysis._gee_ready:
+        return {"method": PROFILE_METHOD, "status": "unavailable", "is_point": is_point}
+    ee = gee_analysis.ee
+    geom = _geometry(lat, lng, polygon)
+    now = datetime.now(timezone.utc)
+    dw = (ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+          .filterDate((now - timedelta(days=DW_LOOKBACK_DAYS)).strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d"))
+          .filterBounds(geom).select("label").mode())
+    r = ee.Dictionary({
+        "lc": dw.reduceRegion(ee.Reducer.frequencyHistogram(), geom, 10, maxPixels=1e8).get("label"),
+        "area_m2": geom.area(1),
+    }).getInfo()
+    lc = _land_cover_fractions(r.get("lc"))
+    area_rai = None if is_point or r.get("area_m2") is None else round(r["area_m2"] / 1600, 2)
+    return {"method": PROFILE_METHOD, "status": "ok", "is_point": is_point, "area_rai": area_rai,
+            "land_cover": {k: round(v, 2) for k, v in lc.items() if v >= 0.03}}
+
+
 # ─────────────────────────────────────────────────────────
 # สรุปผลรันคู่ (ใช้โดย GET /admin/risk-shadow) — ฟังก์ชันล้วน ทดสอบได้
 # rows: [{"plot_id", "created_at", "old": "high|medium|ok", "risk_v2": {...}|None, "profile": {...}|None}]
