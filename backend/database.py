@@ -1017,6 +1017,31 @@ async def log_event(user_id: str | None, name: str, plot_id: int | None = None, 
         logger.warning(f"log_event failed ({type(e).__name__})")
 
 
+# ── ยืนยันภาคสนาม (Phase 2d — migrate_v19) ─────────────────
+async def insert_validation(row: dict) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(f"{SUPABASE_URL}/rest/v1/field_validations",
+                                 headers={**_HEADERS(), "Prefer": "return=representation"}, json=row)
+    if resp.status_code not in (200, 201) or not resp.json():
+        logger.error(f"insert_validation failed: {resp.status_code} — {resp.text[:200]}")
+        return None
+    return resp.json()[0]
+
+
+async def list_validations(plot_id: int | None = None, since_iso: str | None = None) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    params = {"select": "id,plot_id,user_id,role,scope,problem,severity,answer,lat,lng,note,photo_client_id,context,created_at",
+              "order": "created_at.desc"}
+    if plot_id is not None:
+        params["plot_id"] = f"eq.{plot_id}"
+    if since_iso:
+        params["created_at"] = f"gte.{since_iso}"
+    return await _fetch_all("field_validations", params) or []
+
+
 # ── รูปถ่ายภาคสนาม (Phase 2c — migrate_v18) ─────────────────
 _PHOTO_COLS = "id,client_id,plot_id,uploaded_by,uploader_role,lat,lng,gps_source,taken_at,tags,note,storage_path,width,height,bytes,created_at"
 
