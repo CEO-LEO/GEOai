@@ -1017,6 +1017,67 @@ async def log_event(user_id: str | None, name: str, plot_id: int | None = None, 
         logger.warning(f"log_event failed ({type(e).__name__})")
 
 
+# ── รูปถ่ายภาคสนาม (Phase 2c — migrate_v18) ─────────────────
+_PHOTO_COLS = "id,client_id,plot_id,uploaded_by,uploader_role,lat,lng,gps_source,taken_at,tags,note,storage_path,width,height,bytes,created_at"
+
+
+async def get_photo_by_client_id(client_id: str) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/photos", headers={**_HEADERS(), "Prefer": ""},
+                                params={"client_id": f"eq.{client_id}", "select": _PHOTO_COLS, "limit": "1"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def insert_photo(row: dict) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(f"{SUPABASE_URL}/rest/v1/photos", headers={**_HEADERS(), "Prefer": "return=representation"},
+                                 params={"select": _PHOTO_COLS}, json=row)
+    if resp.status_code not in (200, 201) or not resp.json():
+        logger.error(f"insert_photo failed: {resp.status_code} — {resp.text[:200]}")
+        return None
+    return resp.json()[0]
+
+
+async def list_photos(plot_id: int) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    rows = await _fetch_all("photos", {"plot_id": f"eq.{plot_id}", "select": _PHOTO_COLS, "order": "created_at.desc"})
+    return rows or []
+
+
+async def get_photo(photo_id: int) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/photos", headers={**_HEADERS(), "Prefer": ""},
+                                params={"id": f"eq.{photo_id}", "select": _PHOTO_COLS, "limit": "1"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def delete_photo_row(photo_id: int) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.delete(f"{SUPABASE_URL}/rest/v1/photos", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                   params={"id": f"eq.{photo_id}"})
+    return resp.status_code in (200, 204)
+
+
+async def photo_paths_for_user(user_id: str) -> list[str]:
+    """ไฟล์รูปทั้งหมดที่ต้องลบเมื่อลบผู้ใช้ถาวร: รูปในแปลงของผู้ใช้ + รูปที่ผู้ใช้อัปโหลด"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    plots = await _fetch_all("plots", {"user_id": f"eq.{user_id}", "select": "id"}) or []
+    ids = ",".join(str(p["id"]) for p in plots)
+    flt = f"(uploaded_by.eq.{user_id}" + (f",plot_id.in.({ids}))" if ids else ")")
+    rows = await _fetch_all("photos", {"or": flt, "select": "storage_path"}) or []
+    return sorted({r["storage_path"] for r in rows})
+
+
 # ── PDPA (Phase 2b — migrate_v17) ─────────────────────────
 _PRIVACY_COLS = "user_id,display_name,consent_version,consent_at,share_with_officers,consent_photos_research,deletion_requested_at"
 
@@ -1142,6 +1203,7 @@ async def purge_user(user_id: str) -> dict:
         await delete("line_message_log", {"user_id": eq})
         await delete("events", {"user_id": eq})
         await delete("consent_logs", {"user_id": eq})
+        await delete("photos", {"uploaded_by": eq})      # รูปในแปลงของผู้ใช้ถูกลบตาม plots (ON DELETE CASCADE)
         await delete("plots", {"user_id": eq})
         await delete("users", {"user_id": eq})
         await client.patch(f"{SUPABASE_URL}/rest/v1/audit_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},

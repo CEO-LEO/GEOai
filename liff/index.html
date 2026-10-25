@@ -512,6 +512,11 @@
     .grid-summary { font-size: 13px; line-height: 1.6; color: var(--ink); background: var(--card);
       border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
     .grid-summary b { display: block; margin-bottom: 2px; }
+    .plot-photo-btn {
+      background: #f3f4f6; color: #374151; border: none;
+      padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
+      cursor: pointer; white-space: nowrap;
+    }
     .plot-share-btn {
       background: #e8f0fb; color: #1e3a8a; border: none;
       padding: 8px 11px; border-radius: 11px; font-size: 12.5px; font-weight:600;
@@ -1119,6 +1124,7 @@
           </button>
           ${plot.id ? `<button class="plot-rec-btn">💡 คำแนะนำ</button>` : ""}
           ${plot.id ? `<button class="plot-share-btn">📤 แชร์ / PDF</button>` : ""}
+          ${plot.id ? `<button class="plot-photo-btn">📷 รูป</button>` : ""}
           ${plot.id ? `<button class="plot-edit-btn">✏️ แก้ไข</button>` : ""}
           ${plot.id ? `<button class="plot-hist-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
@@ -1149,6 +1155,10 @@
           plot.polygon || null,
           plot.id ? { plot_id: plot.id } : {}
         );
+      });
+      card.querySelector(".plot-photo-btn")?.addEventListener("click", e => {
+        e.stopPropagation();
+        window.openPhotoSheet?.(plot);
       });
       card.querySelector(".plot-share-btn")?.addEventListener("click", e => {
         e.stopPropagation();
@@ -2987,6 +2997,7 @@
   }
 </script>
 <script src="account.js"></script>
+<script src="photos.js"></script>
 <script src="officer.js"></script>
 </body>
 </html>

@@ -110,6 +110,7 @@ async function loadOfficerPlots() {
           <button class="plot-rec-btn" data-act="rec">💡 คำแนะนำ</button>
           <button class="plot-edit-btn" data-act="edit">✏️ แก้ไข</button>
           <button class="plot-share-btn" data-act="report">📤 รายงาน</button>
+          <button class="plot-photo-btn" data-act="photo">📷 รูป</button>
         </div>
       </div>`).join("")}`).join("");
 }
@@ -137,12 +138,15 @@ document.addEventListener("click", async e => {
     openPlotForm("edit", { ...plot, is_mine: plot.is_mine });
   } else if (act === "report") {
     shareReport(plot);
+  } else if (act === "photo") {
+    window.openPhotoSheet?.(plot);
   }
 });
 
 // เรียกจากสคริปต์หลักหลังยืนยันตัวตนและโหลดแปลงเสร็จ
 async function phase2Init() {
   logEvent("app_open");
+  window.photosInit?.();   // photos.js: ส่งรูปที่ค้างในคิวจากครั้งก่อน
   await redeemInviteFromUrl();
   const me = await loadMe();
   if (!me) return;
