@@ -42,18 +42,31 @@
 - สร้างระบบครบ แต่**ยังไม่แสดงการทายให้ผู้ใช้** (ปิดด้วย `CROP_GUESS_ENABLED`) — เปิดเมื่อเจ้าของตอบข้อ 5 และโมเดลผ่านเกณฑ์
 - คำนวณ feature ด้วย Earth Engine แบบ batch ไม่กี่สิบแปลง (อยู่ในโควตาเดียวกับที่ระบบใช้อยู่)
 
-## 4. ข้อเสนอเรื่อง MERIT Hydro
+## 4. MERIT Hydro — ผลเทียบกับทางเลือก (อัปเดต 28 ต.ค. 2569)
 
-ทางเลือกสำหรับป้าย "ที่ลุ่มต่ำ": (ก) คำนวณ HAND เองจาก Copernicus DEM GLO-30 (ใช้เชิงพาณิชย์ได้ ใส่ที่มา) ·
-(ข) ใช้ HydroSHEDS (อนุญาตเชิงพาณิชย์ตามเงื่อนไขของผู้ผลิต — ต้องตรวจฉบับล่าสุด) ·
-(ค) ใช้ต่อในช่วงทดลองที่ไม่ใช่เชิงพาณิชย์ แล้วเปลี่ยนก่อนเซ็นสัญญา — **Claude แนะนำ (ค) แล้วทำ (ก) ก่อนเซ็นสัญญา**
+**ข้อเท็จจริงสำคัญ:** ค่า HAND จาก MERIT ใช้เฉพาะ "ลักษณะประจำแปลง" ในโหมดรันคู่ (`plot_profile`) —
+**ไม่แสดงผู้ใช้ ไม่ใช้ตัดสินการแจ้งเตือน ไม่ส่งออกให้ใคร** ความเสี่ยงทางไลเซนส์จึงต่ำกว่าที่ประเมินไว้ตอนแรก
 
+เทียบทางเลือกที่ใช้เชิงพาณิชย์ได้ กับแปลงจริง 22 แปลง (ค่าเฉลี่ยในขอบเขต):
+
+| แหล่ง | ไลเซนส์ | ผล |
+|---|---|---|
+| MERIT Hydro (ใช้อยู่) | CC BY-NC 4.0 / ODbL | ค่ากลาง 2.0 ม. — แก้ความสูงทรงพุ่มออกจาก DEM แล้ว |
+| Global HAND 30 ม. (Donchyts et al. 2016, ใน Earth Engine) | CC BY 4.0 | ค่ากลาง 5.6 ม. · สัมพันธ์รวม r = 0.99 แต่ป้าย "ลุ่มต่ำ/ลุ่มต่ำมาก" ตรงกันแค่ **10 ใน 22** — ที่ลุ่มต่ำมาก 7 แปลงกลายเป็นแค่ลุ่มต่ำ |
+| ASF GLO-30 HAND (จาก Copernicus DEM) | CC0 | ไม่อยู่ใน Earth Engine — ต้องส่งพิกัดแปลงไปเซิร์ฟเวอร์ภายนอก (ผู้ประมวลผลรายใหม่) หรือดาวน์โหลดไฟล์มาเก็บเอง |
+
+**เหตุที่ต่างกัน (น่าจะเป็น):** SRTM และ Copernicus DEM วัดผิวบนสุด**รวมทรงพุ่ม** สวนผลไม้จึงดูสูงกว่าทางน้ำเกินจริง
+ส่วน MERIT ลบความสูงต้นไม้ออกแล้ว → สำหรับสวนในที่ราบภาคกลาง **MERIT แม่นกว่า**
+
+**ตัดสินใจ:** ใช้ MERIT ต่อ (ภายในเท่านั้น) · ไม่เปลี่ยนเป็นแหล่งที่ทำให้ผลแย่ลง ·
+ก่อนแสดงป้าย "ที่ลุ่มต่ำ" ให้ผู้ใช้ในงานเชิงพาณิชย์: ขออนุญาตผู้พัฒนา MERIT (ทีม Univ. of Tokyo) หรือประเมิน ASF GLO-30 HAND
+แบบดาวน์โหลดเฉพาะพื้นที่ราชบุรีมาเก็บเอง (ไม่ส่งพิกัดแปลงออกไป) แล้วเทียบกับผลภาคสนามก่อน
 ## 5. ต้องให้เจ้าของตอบ
 
 1. โครงการกับสำนักงานเกษตรจังหวัดราชบุรี **มีค่าตอบแทนหรือเป็นบริการประจำ** หรือเป็นโครงการวิจัยนำร่อง (เช่น ผ่านมหาวิทยาลัย)?
 2. Cloud project ของ Earth Engine ตอนนี้ลงทะเบียนเป็นประเภทไหน (ดูที่ console.cloud.google.com → Earth Engine → การกำหนดค่า)
 3. ถ้าเป็นเชิงพาณิชย์: สมัคร Google for Startups / แพลน Basic / ให้หน่วยงานเป็นเจ้าของ project — Claude จะไม่สมัครหรือจ่ายเงินเอง
-4. อนุมัติเปลี่ยน MERIT Hydro ตามข้อ 4 หรือไม่
+4. ~~อนุมัติเปลี่ยน MERIT Hydro~~ — ตรวจแล้วไม่ควรเปลี่ยนตอนนี้ (ข้อ 4) · ตัดสินใจเฉพาะเมื่อจะแสดงป้าย "ที่ลุ่มต่ำ" ให้ผู้ใช้เชิงพาณิชย์
 
 ที่มา: [Satellite Embedding V1](https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_SATELLITE_EMBEDDING_V1_ANNUAL) ·
 [Earth Engine for Noncommercial Use](https://earthengine.google.com/noncommercial) ·
@@ -61,4 +74,8 @@
 [Transition to commercial](https://developers.google.com/earth-engine/guides/transition_to_commercial) ·
 [Earth Engine pricing](https://cloud.google.com/earth-engine/pricing) ·
 [MERIT Hydro](https://developers.google.com/earth-engine/datasets/catalog/MERIT_Hydro_v1_0_1) ·
-[Sentinel-2 SR](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED)
+[Sentinel-2 SR](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED) ·
+[Global HAND (community catalog)](https://gee-community-catalog.org/projects/hand/) ·
+[ASF GLO-30 HAND](https://registry.opendata.aws/glo-30-hand/) ·
+[Copernicus DEM GLO-30](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_DEM_GLO30) ·
+[HydroSHEDS](https://developers.google.com/earth-engine/datasets/catalog/WWF_HydroSHEDS_15ACC)
