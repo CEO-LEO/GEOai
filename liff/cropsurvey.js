@@ -27,7 +27,7 @@ async function flushSurveyQueue() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item),
       });
     } catch { break; }                                  // ยังไม่มีสัญญาณ — เก็บไว้ส่งรอบหน้า
-    if (res.status >= 500) break;
+    if (res.status >= 500 || res.status === 401 || res.status === 428) break;   // ชั่วคราว (token/ยินยอม) — เก็บไว้ส่งใหม่
     setSurveyQueue(surveyQueue().filter(q => q.client_id !== item.client_id));
     if (res.ok) sent++;
     else showToast(`⚠️ จุดสำรวจไม่ถูกบันทึก: ${friendlyErrorMessage((await res.json().catch(() => ({}))).detail, "ข้อมูลไม่ถูกต้อง")}`);

@@ -115,6 +115,7 @@ async function loadOfficerPlots() {
           <button class="plot-photo-btn" data-act="photo">📷 รูป</button>
           <button class="plot-ts-btn" data-act="seasons">📅 เทียบฤดู</button>
           <button class="plot-ts-btn" data-act="crop">🌱 ยืนยันพืช</button>
+          <button class="plot-ts-btn" data-act="trees">🌳 ต้นไม้รายต้น</button>
         </div>
       </div>`).join("")}`).join("");
 }
@@ -148,6 +149,8 @@ document.addEventListener("click", async e => {
     window.showSeasons?.(plot);
   } else if (act === "crop") {
     window.showCropGuess?.(plot, { onSaved: loadOfficerPlots });   // เจ้าหน้าที่ยืนยัน = label น้ำหนักสูงสุด
+  } else if (act === "trees") {
+    window.showTrees?.(plot);
   }
 });
 
@@ -155,6 +158,7 @@ document.addEventListener("click", async e => {
 async function phase2Init() {
   logEvent("app_open");
   window.photosInit?.();   // photos.js: ส่งรูปที่ค้างในคิวจากครั้งก่อน
+  window.treesInit?.();    // trees.js: ส่งหมุด/บันทึกต้นไม้ที่ค้างในคิว
   await redeemInviteFromUrl();
   const me = await loadMe();
   if (!me) return;
