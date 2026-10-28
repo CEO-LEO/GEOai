@@ -1103,7 +1103,7 @@ async def list_validations(plot_id: int | None = None, since_iso: str | None = N
 
 
 # ── รูปถ่ายภาคสนาม (Phase 2c — migrate_v18) ─────────────────
-_PHOTO_COLS = "id,client_id,plot_id,uploaded_by,uploader_role,lat,lng,gps_source,taken_at,tags,note,storage_path,width,height,bytes,created_at"
+_PHOTO_COLS = "id,client_id,plot_id,tree_id,uploaded_by,uploader_role,lat,lng,gps_source,taken_at,tags,note,storage_path,width,height,bytes,created_at"
 
 
 async def get_photo_by_client_id(client_id: str) -> dict | None:
@@ -1161,6 +1161,95 @@ async def photo_paths_for_user(user_id: str) -> list[str]:
     flt = f"(uploaded_by.eq.{user_id}" + (f",plot_id.in.({ids}))" if ids else ")")
     rows = await _fetch_all("photos", {"or": flt, "select": "storage_path"}) or []
     return sorted({r["storage_path"] for r in rows})
+
+
+# ── ต้นไม้รายต้น (spec 6.3 — migrate_v22) ──────────────────
+_TREE_COLS = "id,client_id,plot_id,label,lat,lng,accuracy_m,crop_id,created_by,created_role,created_at,removed_at"
+_TREE_LOG_COLS = "id,client_id,tree_id,kind,happened_on,tags,product,note,by_user,role,created_at"
+
+
+async def _one(table: str, params: dict) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/{table}", headers={**_HEADERS(), "Prefer": ""},
+                                params={**params, "limit": "1"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def _insert(table: str, row: dict, cols: str) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(f"{SUPABASE_URL}/rest/v1/{table}", headers={**_HEADERS(), "Prefer": "return=representation"},
+                                 params={"select": cols}, json=row)
+    if resp.status_code not in (200, 201) or not resp.json():
+        logger.error(f"insert {table} failed: {resp.status_code} — {resp.text[:200]}")
+        return None
+    return resp.json()[0]
+
+
+async def _patch(table: str, params: dict, fields: dict) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(f"{SUPABASE_URL}/rest/v1/{table}", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                  params=params, json=fields)
+    if resp.status_code not in (200, 204):
+        logger.error(f"patch {table} failed: {resp.status_code} — {resp.text[:200]}")
+        return False
+    return True
+
+
+async def get_tree(tree_id: int) -> dict | None:
+    return await _one("tree_pins", {"id": f"eq.{tree_id}", "removed_at": "is.null", "select": _TREE_COLS})
+
+
+async def get_tree_by_client_id(client_id: str) -> dict | None:
+    return await _one("tree_pins", {"client_id": f"eq.{client_id}", "select": _TREE_COLS})
+
+
+async def list_trees(plot_id: int) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    return await _fetch_all("tree_pins", {"plot_id": f"eq.{plot_id}", "removed_at": "is.null", "select": _TREE_COLS,
+                                          "order": "id.asc"}) or []
+
+
+async def insert_tree(row: dict) -> dict | None:
+    return await _insert("tree_pins", row, _TREE_COLS)
+
+
+async def update_tree(tree_id: int, fields: dict) -> bool:
+    return await _patch("tree_pins", {"id": f"eq.{tree_id}"}, fields)
+
+
+async def get_tree_log_by_client_id(client_id: str) -> dict | None:
+    return await _one("tree_logs", {"client_id": f"eq.{client_id}", "select": _TREE_LOG_COLS})
+
+
+async def get_tree_log(log_id: int) -> dict | None:
+    return await _one("tree_logs", {"id": f"eq.{log_id}", "select": _TREE_LOG_COLS})
+
+
+async def list_tree_logs(tree_ids: list[int]) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY or not tree_ids:
+        return []
+    return await _fetch_all("tree_logs", {"tree_id": f"in.({','.join(map(str, tree_ids))})", "select": _TREE_LOG_COLS,
+                                          "order": "happened_on.desc,created_at.desc"}) or []
+
+
+async def insert_tree_log(row: dict) -> dict | None:
+    return await _insert("tree_logs", row, _TREE_LOG_COLS)
+
+
+async def delete_tree_log(log_id: int) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.delete(f"{SUPABASE_URL}/rest/v1/tree_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                                   params={"id": f"eq.{log_id}"})
+    return resp.status_code in (200, 204)
 
 
 # ── PDPA (Phase 2b — migrate_v17) ─────────────────────────
@@ -1258,9 +1347,16 @@ async def export_user_data(user_id: str) -> dict:
     crop_surveys = await _fetch_all("reference_labels", {"imported_by": eq, "source": "eq.officer_survey",
                                                          "order": "imported_at.desc",
                                                          "select": "crop_ids,lat,lng,area_code,imported_at"}) or []
+    trees = []
+    if plot_ids:
+        trees = await _fetch_all("tree_pins", {"plot_id": f"in.({','.join(map(str, plot_ids))})", "order": "id.asc",
+                                               "select": "plot_id,label,lat,lng,crop_id,created_at,removed_at"}) or []
+    tree_logs = await _fetch_all("tree_logs", {"by_user": eq, "order": "happened_on.desc",
+                                               "select": "tree_id,kind,happened_on,tags,product,note,created_at"}) or []
     for p in plots:
         p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
     return {"exported_at": datetime.now(timezone.utc).isoformat(), "profile": profile[0] if profile else None,
+            "trees": trees, "tree_logs_by_me": tree_logs,
             "plots": plots, "analyses": analyses, "consent_history": consents,
             "who_accessed_my_plots": accesses, "usage_events": events, "crop_answers": crop_answers,
             "crop_surveys": crop_surveys}
@@ -1297,12 +1393,16 @@ async def purge_user(user_id: str) -> dict:
         await delete("photos", {"uploaded_by": eq})      # รูปในแปลงของผู้ใช้ถูกลบตาม plots (ON DELETE CASCADE)
         await delete("crop_label_feedback", {"by_user": eq})   # คำตอบต่อแปลงของคนอื่น (ของแปลงตัวเองลบตาม plots)
         await delete("reference_labels", {"imported_by": eq, "source": "eq.officer_survey"})   # จุดสำรวจของเจ้าหน้าที่คนนี้
+        await delete("tree_logs", {"by_user": eq})          # บันทึกต้นไม้ในแปลงคนอื่น (ของแปลงตัวเองลบตาม plots)
         await delete("plots", {"user_id": eq})
         await delete("users", {"user_id": eq})
         await client.patch(f"{SUPABASE_URL}/rest/v1/audit_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},
                            params={"target_owner": eq}, json={"target_owner": gone})
         await client.patch(f"{SUPABASE_URL}/rest/v1/audit_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},
                            params={"actor_user_id": eq}, json={"actor_user_id": gone})
+        # หมุดต้นไม้ที่คนนี้ปักไว้ในแปลงของคนอื่น เป็นข้อมูลของแปลงนั้น — เก็บไว้ แต่ไม่ผูกกับผู้ปักแล้ว
+        await client.patch(f"{SUPABASE_URL}/rest/v1/tree_pins", headers={**_HEADERS(), "Prefer": "return=minimal"},
+                           params={"created_by": eq}, json={"created_by": gone})
     return out
 
 

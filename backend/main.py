@@ -9,7 +9,7 @@ import time
 import base64
 import binascii
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import traceback
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -67,6 +67,7 @@ import photo_service
 import validation
 import province
 import seasons
+import trees
 from crop_classifier import service as crop_service, store as crop_store, evaluate as crop_evaluate, \
     labels as crop_labels, references as crop_references
 from plot_image_service import build_plot_grid_image_url
@@ -89,7 +90,9 @@ from database import (save_analysis, get_all_reports, save_plot,
                       SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY,
                       get_photo_by_client_id, insert_photo, list_photos, get_photo, delete_photo_row,
                       photo_paths_for_user, insert_validation, list_validations,
-                      get_events_since, get_users_created, set_rain_alert_freq)
+                      get_events_since, get_users_created, set_rain_alert_freq,
+                      get_tree, get_tree_by_client_id, list_trees, insert_tree, update_tree,
+                      get_tree_log, get_tree_log_by_client_id, list_tree_logs, insert_tree_log, delete_tree_log)
 from webhook import router as webhook_router
 from scheduler import create_scheduler, daily_scan_job, rain_alert_job, run_job_with_catchup
 from middleware import RateLimitMiddleware, user_rate_limit, ip_bucket_exceeded
@@ -1423,10 +1426,11 @@ class PhotoBody(BaseModel):
     taken_at:     datetime | None = None
     tags:         list[str] = Field(default_factory=list, max_length=photo_service.MAX_TAGS)
     note:         str = Field("", max_length=300)
+    tree_id:      int | None = Field(None, ge=1)       # รูปของต้นไม้ต้นไหน (6.3)
 
 
 def _photo_out(row: dict, urls: dict[str, str], me: str, plot_owner: str | None) -> dict:
-    return {k: row.get(k) for k in ("id", "plot_id", "lat", "lng", "gps_source", "taken_at", "tags", "note",
+    return {k: row.get(k) for k in ("id", "plot_id", "tree_id", "lat", "lng", "gps_source", "taken_at", "tags", "note",
                                     "width", "height", "created_at")} | {
         "url": urls.get(row["storage_path"]),
         "tags_th": [photo_service.TAGS_TH.get(t, t) for t in row.get("tags") or []],
@@ -1462,6 +1466,10 @@ async def upload_photo(user_id: str, plot_id: int, body: PhotoBody, background: 
         data, w, h = await run_in_threadpool(photo_service.clean_image, raw)
     except (ValueError, binascii.Error) as e:
         raise HTTPException(status_code=422, detail=str(e) if isinstance(e, ValueError) else "ข้อมูลรูปไม่ถูกต้อง")
+    if body.tree_id is not None:
+        tree = await get_tree(body.tree_id)
+        if not tree or tree["plot_id"] != plot_id:
+            raise HTTPException(status_code=422, detail="ไม่พบต้นไม้นี้ในแปลง")
     path = f"{plot_id}/{body.client_id}.jpg"
     if not await photo_service.upload(path, data):
         raise HTTPException(status_code=502, detail="อัปโหลดรูปไม่สำเร็จ จะลองส่งใหม่อัตโนมัติ")
@@ -1470,7 +1478,8 @@ async def upload_photo(user_id: str, plot_id: int, body: PhotoBody, background: 
         "client_id": body.client_id, "plot_id": plot_id, "uploaded_by": me, "uploader_role": acc["role"],
         "lat": body.lat, "lng": body.lng, "gps_source": body.gps_source if body.lat is not None else None,
         "taken_at": body.taken_at.isoformat() if body.taken_at else None, "tags": tags,
-        "note": body.note.strip(), "storage_path": path, "width": w, "height": h, "bytes": len(data)})
+        "note": body.note.strip(), "storage_path": path, "width": w, "height": h, "bytes": len(data),
+        **({"tree_id": body.tree_id} if body.tree_id is not None else {})})
     if not row:
         raise HTTPException(status_code=502, detail="บันทึกรูปไม่สำเร็จ จะลองส่งใหม่อัตโนมัติ")
     background.add_task(log_event, me, "photo_upload", plot_id, {"tags": len(tags), "gps": body.gps_source or "none"})
@@ -1503,6 +1512,165 @@ async def remove_photo(user_id: str, plot_id: int, photo_id: int, me: str = Depe
         raise HTTPException(status_code=502, detail="ลบไม่สำเร็จ กรุณาลองใหม่")
     await log_audit(me, (await _access_for(me))["role"], "delete_photo", "photo", photo_id, plot.get("user_id"), None)
     return {"status": "deleted", "photo_id": photo_id}
+
+
+# ── ต้นไม้รายต้น (spec 6.3 ตัวเลือก — migrate_v22) ──
+class TreeBody(BaseModel):
+    client_id:  str = Field(..., min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    lat:        float = Field(..., ge=-90, le=90)
+    lng:        float = Field(..., ge=-180, le=180)
+    accuracy_m: float | None = Field(None, ge=0)
+    label:      str = Field("", max_length=40)
+    crop_id:    str | None = Field(None, max_length=40)
+
+
+class TreePatchBody(BaseModel):
+    label:   str | None = Field(None, min_length=1, max_length=40)
+    crop_id: str | None = Field(None, max_length=40)
+
+
+class TreeLogBody(BaseModel):
+    client_id:   str = Field(..., min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    kind:        Literal["symptom", "fertilize", "spray", "note"]
+    happened_on: date
+    tags:        list[str] = Field(default_factory=list, max_length=photo_service.MAX_TAGS)
+    product:     str = Field("", max_length=80)
+    note:        str = Field("", max_length=300)
+
+
+def _valid_crop(crop_id: str | None) -> str | None:
+    return _validated_crop_ids([crop_id])[0] if crop_id else None
+
+
+async def _tree_in_plot(tree_id: int, plot_id: int) -> dict:
+    tree = await get_tree(tree_id)
+    if not tree or tree["plot_id"] != plot_id:
+        raise HTTPException(status_code=404, detail="ไม่พบต้นไม้นี้")
+    return tree
+
+
+@app.get("/plots/{user_id}/{plot_id}/trees")
+async def plot_trees(user_id: str, plot_id: int, me: str = Depends(_api_user)):
+    """หมุดต้นไม้ของแปลง + บันทึกล่าสุด/จำนวนบันทึก/จำนวนรูป ต่อต้น"""
+    _require_self(user_id, me)
+    await _require_plot_access(plot_id, me, audit_action="view_trees")
+    pins = await list_trees(plot_id)
+    logs, photos = await asyncio.gather(list_tree_logs([p["id"] for p in pins]), list_photos(plot_id))
+    return {"plot_id": plot_id, "max_trees": trees.MAX_PINS_PER_PLOT,
+            "next_label": trees.next_label([p["label"] for p in pins]),
+            "trees": trees.tree_list(pins, logs, [p.get("tree_id") for p in photos])}
+
+
+@app.post("/plots/{user_id}/{plot_id}/trees")
+async def add_tree(user_id: str, plot_id: int, body: TreeBody, background: BackgroundTasks, me: str = Depends(_api_user)):
+    """ปักหมุดต้นไม้ (ยืนที่ต้นแล้วใช้ GPS) — ส่งซ้ำด้วย client_id เดิมได้"""
+    _require_self(user_id, me)
+    await _require_consent(me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "tree_pin")
+    existing = await get_tree_by_client_id(body.client_id)
+    if existing:
+        if existing["plot_id"] != plot_id or existing["created_by"] != me:
+            raise HTTPException(status_code=409, detail="รหัสต้นไม้ซ้ำ")
+        return {k: v for k, v in existing.items() if k != "created_by"} | {"duplicate": True}
+    if not trees.within_plot(plot, body.lat, body.lng):
+        raise HTTPException(status_code=422, detail="ตำแหน่งอยู่นอกแปลงนี้ — ไปยืนที่ต้นไม้ในแปลงแล้วลองใหม่")
+    pins = await list_trees(plot_id)
+    if len(pins) >= trees.MAX_PINS_PER_PLOT:
+        raise HTTPException(status_code=422, detail=f"ปักได้ไม่เกิน {trees.MAX_PINS_PER_PLOT} ต้นต่อแปลง")
+    acc = await _access_for(me)
+    row = await insert_tree({"client_id": body.client_id, "plot_id": plot_id,
+                             "label": body.label.strip() or trees.next_label([p["label"] for p in pins]),
+                             "lat": body.lat, "lng": body.lng, "accuracy_m": body.accuracy_m,
+                             "crop_id": _valid_crop(body.crop_id), "created_by": me, "created_role": acc["role"]})
+    if not row:
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
+    background.add_task(log_event, me, "tree_pin", plot_id, {"role": acc["role"]})
+    return {k: v for k, v in row.items() if k != "created_by"}
+
+
+@app.patch("/plots/{user_id}/{plot_id}/trees/{tree_id}")
+async def edit_tree(user_id: str, plot_id: int, tree_id: int, body: TreePatchBody, me: str = Depends(_api_user)):
+    _require_self(user_id, me)
+    await _require_consent(me)
+    await _require_plot_access(plot_id, me, access.EDIT, "tree_edit")
+    await _tree_in_plot(tree_id, plot_id)
+    fields = {k: v for k, v in (("label", body.label.strip() if body.label else None),
+                                ("crop_id", _valid_crop(body.crop_id))) if v is not None}
+    if fields and not await update_tree(tree_id, fields):
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
+    return {"id": tree_id, **fields}
+
+
+@app.delete("/plots/{user_id}/{plot_id}/trees/{tree_id}")
+async def remove_tree(user_id: str, plot_id: int, tree_id: int, me: str = Depends(_api_user)):
+    """เอาหมุดออก (ซ่อน — ประวัติบันทึกยังอยู่ในข้อมูล) · เจ้าของแปลง หรือคนที่ปัก"""
+    _require_self(user_id, me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "tree_remove")
+    tree = await _tree_in_plot(tree_id, plot_id)
+    if me not in (tree["created_by"], plot.get("user_id")):
+        raise HTTPException(status_code=403, detail="เอาออกได้เฉพาะเจ้าของแปลง หรือคนที่ปักหมุด")
+    if not await update_tree(tree_id, {"removed_at": datetime.now(timezone.utc).isoformat()}):
+        raise HTTPException(status_code=502, detail="ไม่สำเร็จ กรุณาลองใหม่")
+    return {"status": "removed", "id": tree_id}
+
+
+@app.get("/plots/{user_id}/{plot_id}/trees/{tree_id}")
+async def tree_detail(user_id: str, plot_id: int, tree_id: int, me: str = Depends(_api_user)):
+    """ประวัติของต้น: บันทึก + รูป (ล่าสุดก่อน)"""
+    _require_self(user_id, me)
+    plot = await _require_plot_access(plot_id, me, audit_action="view_tree")
+    tree = await _tree_in_plot(tree_id, plot_id)
+    logs, photos = await asyncio.gather(list_tree_logs([tree_id]), list_photos(plot_id))
+    photos = [p for p in photos if p.get("tree_id") == tree_id]
+    urls = await photo_service.signed_urls([p["storage_path"] for p in photos])
+    owner = plot.get("user_id")
+    public_tree = {k: v for k, v in tree.items() if k != "created_by"} | {"by_me": tree["created_by"] == me}
+    return {"tree": public_tree, "logs": [trees.log_out(r, me, owner) for r in logs],
+            "photos": [_photo_out(p, urls, me, owner) for p in photos],
+            "kinds": [{"id": k, "name_th": v} for k, v in trees.LOG_KINDS_TH.items()]}
+
+
+@app.post("/plots/{user_id}/{plot_id}/trees/{tree_id}/logs")
+async def add_tree_log(user_id: str, plot_id: int, tree_id: int, body: TreeLogBody, background: BackgroundTasks,
+                       me: str = Depends(_api_user)):
+    """บันทึกอาการ / ใส่ปุ๋ย / พ่นยา / บันทึกอื่น ของต้นนี้ — ส่งซ้ำด้วย client_id เดิมได้"""
+    _require_self(user_id, me)
+    await _require_consent(me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "tree_log")
+    await _tree_in_plot(tree_id, plot_id)
+    existing = await get_tree_log_by_client_id(body.client_id)
+    if existing:
+        if existing["tree_id"] != tree_id or existing["by_user"] != me:
+            raise HTTPException(status_code=409, detail="รหัสบันทึกซ้ำ")
+        return trees.log_out(existing, me, plot.get("user_id")) | {"duplicate": True}
+    try:
+        tags = trees.validate_log(body.kind, body.tags, body.happened_on, datetime.now(timezone.utc).date())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    acc = await _access_for(me)
+    row = await insert_tree_log({"client_id": body.client_id, "tree_id": tree_id, "kind": body.kind,
+                                 "happened_on": body.happened_on.isoformat(), "tags": tags,
+                                 "product": body.product.strip(), "note": body.note.strip(),
+                                 "by_user": me, "role": acc["role"]})
+    if not row:
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
+    background.add_task(log_event, me, "tree_log", plot_id, {"kind": body.kind})
+    return trees.log_out(row, me, plot.get("user_id"))
+
+
+@app.delete("/plots/{user_id}/{plot_id}/trees/{tree_id}/logs/{log_id}")
+async def remove_tree_log(user_id: str, plot_id: int, tree_id: int, log_id: int, me: str = Depends(_api_user)):
+    _require_self(user_id, me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "tree_log_delete")
+    await _tree_in_plot(tree_id, plot_id)
+    row = await get_tree_log(log_id)
+    if not row or row["tree_id"] != tree_id:
+        raise HTTPException(status_code=404, detail="ไม่พบบันทึกนี้")
+    if me not in (row["by_user"], plot.get("user_id")):
+        raise HTTPException(status_code=403, detail="ลบได้เฉพาะคนที่บันทึก หรือเจ้าของแปลง")
+    if not await delete_tree_log(log_id):
+        raise HTTPException(status_code=502, detail="ลบไม่สำเร็จ กรุณาลองใหม่")
+    return {"status": "deleted", "id": log_id}
 
 
 # ── ยืนยันภาคสนาม (Phase 2d) ──

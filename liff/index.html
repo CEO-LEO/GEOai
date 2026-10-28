@@ -1128,6 +1128,7 @@
           ${plot.id ? `<button class="plot-photo-btn">📷 รูป</button>` : ""}
           ${plot.id ? `<button class="plot-ts-btn plot-season-btn">📅 เทียบฤดู</button>` : ""}
           ${plot.id ? `<button class="plot-ts-btn plot-crop-btn">🌱 ชนิดพืช</button>` : ""}
+          ${plot.id ? `<button class="plot-ts-btn plot-tree-btn">🌳 ต้นไม้รายต้น</button>` : ""}
           ${plot.id ? `<button class="plot-edit-btn">✏️ แก้ไข</button>` : ""}
           ${plot.id ? `<button class="plot-hist-btn" data-plot-id="${plot.id}"
                         data-plot-name="${escHtml(plot.name || "แปลง")}">
@@ -1166,6 +1167,10 @@
       card.querySelector(".plot-crop-btn")?.addEventListener("click", e => {
         e.stopPropagation();
         window.showCropGuess?.(plot, { onSaved: () => { writePlotsCache(userId, userPlots); renderPlotList(); } });
+      });
+      card.querySelector(".plot-tree-btn")?.addEventListener("click", e => {
+        e.stopPropagation();
+        window.showTrees?.(plot);
       });
       card.querySelector(".plot-photo-btn")?.addEventListener("click", e => {
         e.stopPropagation();
@@ -3029,6 +3034,7 @@
 <script src="seasons.js"></script>
 <script src="cropguess.js"></script>
 <script src="cropsurvey.js"></script>
+<script src="trees.js"></script>
 <script src="officer.js"></script>
 </body>
 </html>

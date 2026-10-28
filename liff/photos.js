@@ -152,7 +152,8 @@ async function processPhotoQueue() {
         res = await apiFetch(`${API_URL}/plots/${encodeURIComponent(userId)}/${item.plot_id}/photos`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ client_id: item.client_id, image_base64: item.data_url, lat: item.lat, lng: item.lng,
-                                 gps_source: item.gps_source, taken_at: item.taken_at, tags: item.tags, note: item.note }),
+                                 gps_source: item.gps_source, taken_at: item.taken_at, tags: item.tags, note: item.note,
+                                 tree_id: item.tree_id || null }),
         });
       } catch { res = null; }   // ไม่มีสัญญาณ
       if (res && res.ok) {
@@ -203,11 +204,12 @@ function photoSheet(html) {
   return document.getElementById("photo-box");
 }
 
-// point (ถ้ามี) = {lat, lng} จุดบนแผนที่ที่แตะ (2d)
-async function openPhotoSheet(plot, point) {
+// point (ถ้ามี) = {lat, lng} จุดบนแผนที่ที่แตะ (2d) · tree (ถ้ามี) = {id, label} รูปของต้นไม้ต้นนั้น (6.3)
+async function openPhotoSheet(plot, point, tree) {
   const box = photoSheet(`
     <h3>📷 รูปของแปลง "${escHtml(plot.name || "แปลง")}"</h3>
-    ${point ? `<div class="form-hint" style="margin-top:0">แนบกับจุดที่แตะบนแผนที่</div>` : ""}
+    ${tree ? `<div class="form-hint" style="margin-top:0">🌳 แนบกับ ${escHtml(tree.label)}</div>`
+      : point ? `<div class="form-hint" style="margin-top:0">แนบกับจุดที่แตะบนแผนที่</div>` : ""}
     <label class="btn-primary sheet-btn" style="display:flex;align-items:center;justify-content:center;cursor:pointer">
       ➕ ถ่ายรูป / เลือกรูป<input type="file" accept="image/*" id="photo-input" hidden>
     </label>
@@ -217,7 +219,7 @@ async function openPhotoSheet(plot, point) {
     <div id="photo-grid"><p class="form-hint">กำลังโหลด...</p></div>
     <button class="close-modal-btn" id="photo-close">ปิด</button>`);
   box.querySelector("#photo-close").onclick = () => document.getElementById("photo-modal").classList.remove("show");
-  box.querySelector("#photo-input").onchange = e => { if (e.target.files[0]) preparePhoto(plot, e.target.files[0], point); };
+  box.querySelector("#photo-input").onchange = e => { if (e.target.files[0]) preparePhoto(plot, e.target.files[0], point, tree); };
   updatePendingBadge();
   loadPhotoGrid(plot);
   const refresh = id => { if (id === plot.id && document.getElementById("photo-grid")) loadPhotoGrid(plot); };
@@ -225,7 +227,7 @@ async function openPhotoSheet(plot, point) {
   photoListeners.add(refresh);
 }
 
-async function preparePhoto(plot, file, point) {
+async function preparePhoto(plot, file, point, tree) {
   const form = document.getElementById("photo-form");
   form.innerHTML = `<p class="form-hint">⏳ กำลังเตรียมรูป...</p>`;
   let dataUrl, exif = {};
@@ -265,7 +267,7 @@ async function preparePhoto(plot, file, point) {
     form.querySelector("#photo-save").onclick = async () => {
       const item = {
         client_id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9_-]/g, ""),
-        owner: userId, plot_id: plot.id, data_url: dataUrl,
+        owner: userId, plot_id: plot.id, tree_id: tree ? tree.id : null, data_url: dataUrl,
         lat: loc ? loc.lat : null, lng: loc ? loc.lng : null, gps_source: loc ? src : null,
         taken_at: exif.taken_at || null, tags: [...selected], note: form.querySelector("#photo-note").value.trim(),
         tries: 0, added: Date.now(),
