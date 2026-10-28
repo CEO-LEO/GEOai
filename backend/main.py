@@ -1668,6 +1668,74 @@ async def plot_crop_feedback(user_id: str, plot_id: int, body: CropFeedbackBody,
             "message_th": "ขอบคุณครับ — คำตอบนี้ช่วยสอนระบบให้ทายชนิดพืชได้แม่นขึ้น"}
 
 
+class CropSurveyBody(BaseModel):
+    client_id:        str = Field(..., min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    lat:              float = Field(..., ge=5.5, le=20.6)        # ประเทศไทย
+    lng:              float = Field(..., ge=97.3, le=105.7)
+    accuracy_m:       float | None = Field(None, ge=0)
+    crop_ids:         list[str] = Field(..., min_length=1, max_length=crops_mod.MAX_CROPS_PER_PLOT)
+    owner_permission: bool
+
+
+SURVEY_MAX_ACCURACY_M = 30
+SURVEY_CONSENT_BASIS = "เจ้าหน้าที่สำรวจในแปลง — เจ้าของแปลงอนุญาต (เจ้าหน้าที่ยืนยันในแอป)"
+
+
+async def _require_officer(me: str) -> dict:
+    acc = await _access_for(me)
+    if acc["role"] not in ("officer", "admin"):
+        raise HTTPException(status_code=403, detail="ใช้ได้เฉพาะเจ้าหน้าที่")
+    return acc
+
+
+@app.post("/officer/crop-survey")
+async def officer_crop_survey(body: CropSurveyBody, background: BackgroundTasks, me: str = Depends(_api_user)):
+    """
+    เจ้าหน้าที่ยืนในแปลง บันทึกจุด GPS + พืชที่เห็น → แปลงอ้างอิงสำหรับเทรน (ไม่แสดงในแอป ไม่ผูกกับบัญชีเกษตรกร)
+    ส่งซ้ำด้วย client_id เดิมได้ (คิวออฟไลน์) · ต้องยืนยันว่าเจ้าของแปลงอนุญาต
+    """
+    await _require_consent(me)
+    await _require_officer(me)
+    if not body.owner_permission:
+        raise HTTPException(status_code=422, detail="ต้องได้รับอนุญาตจากเจ้าของแปลงก่อนบันทึก")
+    if body.accuracy_m is not None and body.accuracy_m > SURVEY_MAX_ACCURACY_M:
+        raise HTTPException(status_code=422, detail=f"ตำแหน่ง GPS ยังไม่แม่น (±{round(body.accuracy_m)} ม.) "
+                                                    f"รอสักครู่แล้วลองใหม่ ต้องไม่เกิน ±{SURVEY_MAX_ACCURACY_M} ม.")
+    ids = _validated_crop_ids(body.crop_ids)
+    try:
+        area = await asyncio.wait_for(run_in_threadpool(areas.lookup_point, body.lat, body.lng), timeout=10)
+    except asyncio.TimeoutError:
+        area = {"area_code": None, "area_name": None}
+    row = await crop_store.upsert_survey({
+        "source": crop_labels.SURVEY_SOURCE, "source_ref": body.client_id, "crop_ids": ids, "lat": body.lat,
+        "lng": body.lng, "polygon": None, "area_code": area.get("area_code"),
+        "consent_basis": SURVEY_CONSENT_BASIS, "imported_by": me})
+    if not row:
+        raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
+    background.add_task(log_event, me, "crop_survey", None, {"crops": len(ids), "district": area.get("area_code")})
+    return {"id": row["id"], "client_id": body.client_id, "names_th": crops_mod.names_th(ids),
+            "area_name": area.get("area_name") or areas.name_th(area.get("area_code")),
+            "message_th": "บันทึกแล้ว — ขอบคุณครับ จุดนี้ใช้สอนระบบทายชนิดพืช"}
+
+
+@app.get("/officer/crop-survey")
+async def officer_crop_survey_list(me: str = Depends(_api_user)):
+    """จุดสำรวจของตัวเอง (ล่าสุด 50 จุด + จำนวนทั้งหมด)"""
+    await _require_officer(me)
+    rows, total = await asyncio.gather(crop_store.list_surveys(me), crop_store.count_surveys(me))
+    return {"total": total, "items": [{"id": r["id"], "names_th": crops_mod.names_th(r["crop_ids"]),
+                                       "area_name": areas.name_th(r.get("area_code")),
+                                       "lat": r["lat"], "lng": r["lng"], "at": r["imported_at"]} for r in rows]}
+
+
+@app.delete("/officer/crop-survey/{survey_id}")
+async def officer_crop_survey_delete(survey_id: int, me: str = Depends(_api_user)):
+    await _require_officer(me)
+    if not await crop_store.delete_survey(survey_id, me):
+        raise HTTPException(status_code=404, detail="ไม่พบจุดสำรวจนี้")
+    return {"deleted": survey_id}
+
+
 @app.get("/admin/crop-model", dependencies=[Depends(verify_admin)])
 async def admin_crop_model():
     """สถานะระบบจำแนกพืช: เปิดทายหรือยัง, โมเดลแต่ละเวอร์ชัน, จำนวน label (ไม่มีพิกัด/ผู้ใช้)"""

@@ -58,10 +58,31 @@ async function showCropGuess(plot, opts = {}) {
       <button type="button" class="btn-primary" id="cg-save">💾 บันทึกพืชที่เลือก</button>
       <button type="button" class="btn-secondary" id="cg-unsure">ไม่แน่ใจ</button>
     </div>
+    ${g.is_owner && g.owner_helps_training === false ? `
+    <div class="result-section" id="cg-optin" style="font-size:13px;line-height:1.6;margin-top:12px">
+      คำตอบของคุณจะใช้สอนระบบได้ เมื่อคุณยินยอมข้อ <b>"ใช้รูปถ่ายและการยืนยันในแปลงเพื่อปรับปรุงระบบ"</b>
+      (ไม่เผยแพร่รูปหรือพิกัดของคุณต่อสาธารณะ · ถอนได้ทุกเมื่อใน ⚙️ ข้อมูลของฉัน) — ไม่ยินยอมก็ใช้แอปได้ตามปกติ
+      <button type="button" class="btn-secondary" id="cg-optin-btn" style="width:100%;margin-top:8px">🤝 ยินยอมให้ใช้สอนระบบ</button>
+    </div>` : ""}
     <div class="form-hint">คำตอบนี้ช่วยสอนระบบให้ทายชนิดพืชจากภาพดาวเทียมได้แม่นขึ้น
-      ${g.is_owner && g.owner_helps_training === false
-        ? ` · ถ้าต้องการให้ใช้สอนระบบ เปิดข้อ "ใช้รูปถ่ายและการยืนยันในแปลงเพื่อปรับปรุงระบบ" ใน ⚙️ ข้อมูลของฉัน` : ""}
       ${g.attribution_th ? ` · ${escHtml(g.attribution_th)}` : ""}</div></div>`;
+  // ยินยอมเฉพาะข้อนี้ — คงค่าข้ออื่นตามเดิม (อ่านค่าปัจจุบันก่อนบันทึก)
+  body.querySelector("#cg-optin-btn")?.addEventListener("click", async () => {
+    try {
+      const cur = await (await apiFetch(`${API_URL}/me/privacy`)).json();
+      // ปุ่มนี้ห้ามกลายเป็นการยอมรับนโยบายทั้งฉบับแทนผู้ใช้
+      if (cur.needs_consent) throw new Error("กรุณาอ่านและยอมรับนโยบายความเป็นส่วนตัวก่อน (เปิดแอปใหม่)");
+      const res = await apiFetch(`${API_URL}/me/consent`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: cur.version, share_with_officers: !!cur.choices?.share_with_officers,
+                               photos_research: true }),
+      });
+      if (!res.ok) throw new Error(friendlyErrorMessage((await res.json().catch(() => ({}))).detail, "บันทึกไม่สำเร็จ"));
+      body.querySelector("#cg-optin").innerHTML = "✅ ขอบคุณครับ — คำตอบของคุณจะช่วยสอนระบบ (ถอนได้ใน ⚙️ ข้อมูลของฉัน)";
+    } catch (e) {
+      showToast(`⚠️ ${e.message || "บันทึกไม่สำเร็จ"}`);
+    }
+  });
   body.querySelectorAll("#cg-crops .chip").forEach(b => b.addEventListener("click", () => b.classList.toggle("on")));
   const send = async (answer, ids, close = true) => {
     try {

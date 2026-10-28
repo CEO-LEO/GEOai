@@ -1255,11 +1255,15 @@ async def export_user_data(user_id: str) -> dict:
     events = await _fetch_all("events", {"user_id": eq, "select": "name,created_at", "order": "created_at.desc"}) or []
     crop_answers = await _fetch_all("crop_label_feedback", {"by_user": eq, "order": "created_at.desc",
                                                             "select": "plot_id,answer,crop_ids,created_at"}) or []
+    crop_surveys = await _fetch_all("reference_labels", {"imported_by": eq, "source": "eq.officer_survey",
+                                                         "order": "imported_at.desc",
+                                                         "select": "crop_ids,lat,lng,area_code,imported_at"}) or []
     for p in plots:
         p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
     return {"exported_at": datetime.now(timezone.utc).isoformat(), "profile": profile[0] if profile else None,
             "plots": plots, "analyses": analyses, "consent_history": consents,
-            "who_accessed_my_plots": accesses, "usage_events": events, "crop_answers": crop_answers}
+            "who_accessed_my_plots": accesses, "usage_events": events, "crop_answers": crop_answers,
+            "crop_surveys": crop_surveys}
 
 
 async def purge_user(user_id: str) -> dict:
@@ -1292,6 +1296,7 @@ async def purge_user(user_id: str) -> dict:
         await delete("consent_logs", {"user_id": eq})
         await delete("photos", {"uploaded_by": eq})      # รูปในแปลงของผู้ใช้ถูกลบตาม plots (ON DELETE CASCADE)
         await delete("crop_label_feedback", {"by_user": eq})   # คำตอบต่อแปลงของคนอื่น (ของแปลงตัวเองลบตาม plots)
+        await delete("reference_labels", {"imported_by": eq, "source": "eq.officer_survey"})   # จุดสำรวจของเจ้าหน้าที่คนนี้
         await delete("plots", {"user_id": eq})
         await delete("users", {"user_id": eq})
         await client.patch(f"{SUPABASE_URL}/rest/v1/audit_logs", headers={**_HEADERS(), "Prefer": "return=minimal"},

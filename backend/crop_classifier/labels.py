@@ -5,13 +5,15 @@ labels.py — ประกอบชุดฝึก (spec 7.7) — ฟังก�
   เจ้าหน้าที่ยืนยัน (ใช่/เลือกพืชอื่น)        3.0
   เจ้าของยืนยัน หรือเลือกพืชตอนสร้างแปลง     1.0  (+0.5 ถ้ามีรูปที่มีพิกัดในแปลง)
   ทะเบียนเกษตรกร (reference_labels)          1.0
+  เจ้าหน้าที่สำรวจจุดในแปลง (officer_survey)  2.0  (เห็นพืชเอง แต่เป็นจุดเดียว ไม่มีขอบเขต)
 คำตอบล่าสุดของแต่ละบทบาทชนะ · เจ้าหน้าที่ตอบ "ไม่ใช่"/"ไม่แน่ใจ" ล่าสุด → ไม่ใช้แปลงนั้น (ขัดกัน)
 ใช้เฉพาะแปลงของเจ้าของที่ยินยอมข้อ "ใช้ปรับปรุงระบบ" (users.consent_photos_research)
 """
 
 from collections import Counter, defaultdict
 
-W_OFFICER, W_OWNER, W_PHOTO_BONUS, W_REFERENCE = 3.0, 1.0, 0.5, 1.0
+W_OFFICER, W_OWNER, W_PHOTO_BONUS, W_REFERENCE, W_SURVEY = 3.0, 1.0, 0.5, 1.0, 2.0
+SURVEY_SOURCE = "officer_survey"
 MIXED, OTHER = "mixed", "other"
 MIN_PLOTS_PER_CLASS = 10
 MIN_DISTRICTS_PER_CLASS = 2
