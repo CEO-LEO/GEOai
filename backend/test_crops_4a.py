@@ -283,3 +283,65 @@ class TestCropApi:
                                   json={"source": "farmer_registry_test", "consent_basis": "DPA ทดสอบ",
                                         "csv": "ref,crop,lat,lng\nA1,ส้มโอ,13.5,99.9\nA2,xx,13.5,99.9\n"})
         assert r.status_code == 200 and r.json()["imported"] == 1 and r.json()["error_count"] == 1
+
+
+OFFICER = {"role": "officer", "areas": ["7004"]}
+SURVEY = {"client_id": "abc12345-x", "lat": 13.52, "lng": 99.95, "accuracy_m": 8, "crop_ids": ["pomelo"],
+          "owner_permission": True}
+
+
+@pytest.mark.asyncio
+class TestCropSurvey:
+    async def test_farmer_forbidden(self, client):
+        with patch("main.get_user_access", new_callable=AsyncMock, return_value={"role": "farmer", "areas": []}):
+            r = await client.post("/officer/crop-survey", headers=auth_as("USV1"), json=SURVEY)
+        assert r.status_code == 403
+
+    async def test_needs_permission_and_accuracy(self, client):
+        with patch("main.get_user_access", new_callable=AsyncMock, return_value=OFFICER):
+            r1 = await client.post("/officer/crop-survey", headers=auth_as("USV2"), json={**SURVEY, "owner_permission": False})
+            r2 = await client.post("/officer/crop-survey", headers=auth_as("USV2"), json={**SURVEY, "accuracy_m": 80})
+            r3 = await client.post("/officer/crop-survey", headers=auth_as("USV2"), json={**SURVEY, "lat": 40.0})
+        assert r1.status_code == 422 and "อนุญาต" in r1.json()["detail"]
+        assert r2.status_code == 422 and "GPS" in r2.json()["detail"]
+        assert r3.status_code == 422
+
+    async def test_saves_reference_label(self, client):
+        with patch("main.get_user_access", new_callable=AsyncMock, return_value=OFFICER), \
+             patch("main.areas.lookup_point", return_value={"area_code": "7004", "area_name": "อ.ดำเนินสะดวก จ.ราชบุรี"}), \
+             patch("main.crop_store.upsert_survey", new_callable=AsyncMock, return_value={"id": 11}) as up, \
+             patch("main.log_event", new_callable=AsyncMock):
+            r = await client.post("/officer/crop-survey", headers=auth_as("USV3"), json=SURVEY)
+        assert r.status_code == 200 and r.json()["names_th"] == ["ส้มโอ"]
+        row = up.await_args.args[0]
+        assert row["source"] == labels.SURVEY_SOURCE and row["source_ref"] == SURVEY["client_id"]
+        assert row["area_code"] == "7004" and row["imported_by"] == "USV3" and row["consent_basis"]
+
+    async def test_list_and_delete_own_only(self, client):
+        with patch("main.get_user_access", new_callable=AsyncMock, return_value=OFFICER), \
+             patch("main.crop_store.list_surveys", new_callable=AsyncMock,
+                   return_value=[{"id": 1, "crop_ids": ["guava"], "area_code": "7004", "lat": 13.5, "lng": 99.9,
+                                  "imported_at": "2026-10-28T03:00:00Z"}]), \
+             patch("main.crop_store.count_surveys", new_callable=AsyncMock, return_value=1), \
+             patch("main.crop_store.delete_survey", new_callable=AsyncMock, return_value=False) as de:
+            j = (await client.get("/officer/crop-survey", headers=auth_as("USV4"))).json()
+            r = await client.delete("/officer/crop-survey/99", headers=auth_as("USV4"))
+        assert j["total"] == 1 and j["items"][0]["names_th"] == ["ฝรั่ง"]
+        assert r.status_code == 404 and de.await_args.args == (99, "USV4")
+
+    async def test_survey_weight_in_dataset(self):
+        from crop_classifier import service, store
+        inp = {"plots": [], "feedback": [], "geo_photo_plots": set(), "consented_users": set(),
+               "references": [{"id": 1, "source": "officer_survey", "crop_ids": ["pomelo"], "lat": 13.5, "lng": 99.8,
+                               "area_code": "7004"},
+                              {"id": 2, "source": "farmer_registry_x", "crop_ids": ["guava"], "lat": 13.6, "lng": 99.8,
+                               "area_code": None}]}
+        feats = [{"plot_id": None, "ref_id": i, "geom_hash": "h", "vals": [0.1] * NF, "meta": {}} for i in (1, 2)]
+        with patch("gee_analysis._gee_ready", True), \
+             patch("crop_classifier.features.latest_embedding_year", return_value=2025), \
+             patch.object(store, "training_inputs", new_callable=AsyncMock, return_value=inp), \
+             patch.object(store, "list_features", new_callable=AsyncMock, return_value=feats):
+            rows, ds = await service.build_dataset()
+        w = {r["orig_cls"]: (r["weight"], r["basis"]) for r in rows}
+        assert w["pomelo"] == (labels.W_SURVEY, "officer_survey") and w["guava"] == (labels.W_REFERENCE, "reference")
+        assert ds["by_basis"] == {"officer_survey": 1, "reference": 1}

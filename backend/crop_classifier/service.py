@@ -56,7 +56,8 @@ async def ensure_features(plot_id: int | None, lat: float, lng: float, polygon: 
         hit = await store.get_plot_features(plot_id, fs, year)
         if hit and hit["geom_hash"] == gh:
             return hit
-    out = await asyncio.wait_for(run_in_threadpool(features.extract, lat, lng, polygon, year, fs),
+    buf = features.REF_POINT_BUFFER_M if ref_id is not None else None
+    out = await asyncio.wait_for(run_in_threadpool(features.extract, lat, lng, polygon, year, fs, buf),
                                  timeout=FEATURE_TIMEOUT_S)
     row = {"plot_id": plot_id, "ref_id": ref_id, "feature_set": fs, "year": year,
            "geom_hash": out["geom_hash"], "vals": out["vals"], "meta": out["meta"]}
@@ -148,8 +149,11 @@ async def build_dataset() -> tuple[list[dict], dict]:
         if not cls or not f:
             no_features += bool(cls)
             continue
-        rows.append({"key": f"r{r['id']}", "vals": f["vals"], "cls": cls, "weight": labels.W_REFERENCE,
-                     "basis": "reference", "group": labels.spatial_group(r.get("area_code"), r["lat"], r["lng"])})
+        survey = r.get("source") == labels.SURVEY_SOURCE
+        rows.append({"key": f"r{r['id']}", "vals": f["vals"], "cls": cls,
+                     "weight": labels.W_SURVEY if survey else labels.W_REFERENCE,
+                     "basis": "officer_survey" if survey else "reference",
+                     "group": labels.spatial_group(r.get("area_code"), r["lat"], r["lng"])})
     rows, per_class = labels.fold_rare(rows)
     digest = hashlib.sha256(json.dumps(sorted((r["key"], r["cls"], r["weight"], r["vals"]) for r in rows),
                                        default=str).encode()).hexdigest()

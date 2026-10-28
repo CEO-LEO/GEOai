@@ -149,6 +149,36 @@ async def upsert_reference_labels(rows: list[dict]) -> int:
     return len(out or [])
 
 
+_SURVEY_COLS = "id,source_ref,crop_ids,lat,lng,area_code,imported_by,imported_at"
+
+
+async def upsert_survey(row: dict) -> dict | None:
+    """จุดสำรวจของเจ้าหน้าที่ — ส่งซ้ำ (สัญญาณหลุดแล้วส่งใหม่) ด้วย source_ref เดิมไม่เกิดแถวซ้ำ"""
+    rows = await _write("POST", "reference_labels", {"on_conflict": "source,source_ref", "select": _SURVEY_COLS}, [row],
+                        prefer="return=representation,resolution=merge-duplicates")
+    return rows[0] if rows else None
+
+
+async def list_surveys(by_user: str, limit: int = 50) -> list[dict]:
+    return await _get("reference_labels", {"source": "eq.officer_survey", "imported_by": f"eq.{by_user}",
+                                           "select": _SURVEY_COLS, "order": "imported_at.desc", "limit": str(limit)})
+
+
+async def count_surveys(by_user: str) -> int:
+    if not _ready():
+        return 0
+    rows = await db._fetch_all("reference_labels", {"source": "eq.officer_survey", "imported_by": f"eq.{by_user}",
+                                                    "select": "id"}) or []
+    return len(rows)
+
+
+async def delete_survey(survey_id: int, by_user: str) -> bool:
+    """ลบได้เฉพาะจุดที่ตัวเองสำรวจ (feature ที่คำนวณไว้ลบตาม ON DELETE CASCADE)"""
+    rows = await _write("DELETE", "reference_labels", {"id": f"eq.{survey_id}", "source": "eq.officer_survey",
+                                                       "imported_by": f"eq.{by_user}"}, None)
+    return bool(rows)
+
+
 async def label_counts() -> dict:
     """สรุปจำนวนต่อชนิดพืช/อำเภอสำหรับหน้า dashboard (ไม่มีพิกัด/ผู้ใช้)"""
     if not _ready():

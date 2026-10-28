@@ -21,7 +21,7 @@
   - จำแนกพืช: แพ็กเกจ [backend/crop_classifier/](backend/crop_classifier/) (interface = `service.py`) · **การทายปิดอยู่**
     (`CROP_GUESS_ENABLED` ไม่ได้ตั้ง + ไม่มีโมเดลที่ผ่านเกณฑ์) — ห้ามเปิดก่อนเจ้าของตอบเรื่องไลเซนส์ Earth Engine
     · ชุดฝึกใช้เฉพาะแปลงของผู้ยินยอม `consent_photos_research` · โมเดลเก็บเป็น JSON ห้ามใช้ pickle · ห้ามสร้าง label เอง
-    · หน้า admin `/dashboard/crop-model.html`
+    · หน้า admin `/dashboard/crop-model.html` · เจ้าหน้าที่สำรวจพืชภาคสนาม `POST /officer/crop-survey` → `reference_labels` (officer_survey)
   - เตือนฝน: [backend/rain_alerts.py](backend/rain_alerts.py) (ฝน ≥ 35 มม. ใน 3 วัน + จุดเสี่ยงจากตารางจุดล่าสุด) · ห้ามเพิ่ม push ชนิดใหม่
     โดยไม่ประเมินโควตา ([docs/v2/line-quota-estimate.md](docs/v2/line-quota-estimate.md)) · แหล่งพยากรณ์รอเจ้าของเลือก ([weather-source-options](docs/v2/weather-source-options.md))
   - สิทธิ์: ใช้ `_require_plot_access(plot_id, me, action)` (เจ้าของ / เจ้าหน้าที่ในอำเภอที่เจ้าของยินยอมแบ่งปัน / ผู้ดูแล + audit log)
@@ -30,7 +30,7 @@
     ([backend/privacy.py](backend/privacy.py)) + [liff/privacy.html](liff/privacy.html) · **ห้ามลบข้อมูลผู้ใช้ถาวรเอง** (ผู้ดูแลกดที่ users.html)
   - คำแนะนำมาจากตาราง `recommendation_rules` ([backend/recommendations.py](backend/recommendations.py)) ห้ามเขียนข้อความแนะนำในโค้ดเอง
   - สวนยกร่อง (`plot_type=raised_bed`) ต้องไม่ได้ลูกศร/วงม่วง/เตือนน้ำขังจากร่อง ทุกที่ที่เพิ่มใหม่
-  - LIFF แยกไฟล์ (ไม่มี build step): `account.js` (ยินยอม/ข้อมูลของฉัน/การแจ้งเตือน) `photos.js` `validation.js` `seasons.js` `cropguess.js` `officer.js` — ใช้ตัวแปรระดับบนของ index.html ได้
+  - LIFF แยกไฟล์ (ไม่มี build step): `account.js` (ยินยอม/ข้อมูลของฉัน/การแจ้งเตือน) `photos.js` `validation.js` `seasons.js` `cropguess.js` `cropsurvey.js` (เจ้าหน้าที่สำรวจพืช) `officer.js` — ใช้ตัวแปรระดับบนของ index.html ได้
   - หน้า admin: `/dashboard/recommendations.html` `/dashboard/users.html` `/dashboard/province.html` `/dashboard/crop-model.html` (X-Admin-Key)
   - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" ([backend/risk_display.py](backend/risk_display.py)) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
     เดิม และ**หยุดคำเตือนความเสี่ยง** (`RISK_ALERTS_ENABLED`) เตือนฝนยังส่ง — `RISK_DISPLAY_MODE=legacy` = แบบเดิม
@@ -68,7 +68,7 @@ cd backend
 pip install -r requirements.txt           # root requirements.txt ต้องตรงกับ backend/requirements.txt เสมอ
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
-pytest -q                                 # 406 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
+pytest -q                                 # 411 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
                                           # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g, test_roles_2a, test_privacy_2b, test_photos_2c, test_validation_2d, test_province_2e, test_rain_alerts_3a, test_seasons_3c, test_crops_4a) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)

@@ -70,9 +70,11 @@ function ensureOfficerTab(me) {
         <b>${escHtml(me.role_th)}</b>${areaNames ? ` · ${escHtml(areaNames)}` : ""}<br>
         เห็นแปลงที่คุณวาดเอง และแปลงในพื้นที่ของเกษตรกรที่ยินยอมแบ่งปันกับเจ้าหน้าที่ — การเปิดดูแปลงของผู้อื่นถูกบันทึกไว้
       </div>
+      <div id="officer-survey"></div>
       <div id="officer-list"></div>
     </div>`;
   document.getElementById("panel-my-plots").after(panel);
+  window.surveyInit?.();   // cropsurvey.js: สำรวจพืชภาคสนาม + ส่งคิวที่ค้าง
 }
 
 async function loadOfficerPlots() {

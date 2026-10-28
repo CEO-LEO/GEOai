@@ -21,10 +21,14 @@ def geom_hash(lat: float, lng: float, polygon: list | None) -> str:
     return hashlib.sha1(json.dumps(g).encode()).hexdigest()[:16]
 
 
-def geometry(ee, lat: float, lng: float, polygon: list | None):
+# แปลงอ้างอิงแบบจุด (สำรวจภาคสนาม/ทะเบียน) ใช้วงเล็กกว่าแปลงผู้ใช้ที่ปักจุด (100 ม.) — กันปนแปลงข้างเคียง
+REF_POINT_BUFFER_M = 20
+
+
+def geometry(ee, lat: float, lng: float, polygon: list | None, point_buffer_m: float | None = None):
     if polygon and len(polygon) >= 3:
         return ee.Geometry.Polygon([polygon])
-    return ee.Geometry.Point([lng, lat]).buffer(gee_analysis.PLOT_BUFFER_M)
+    return ee.Geometry.Point([lng, lat]).buffer(point_buffer_m or gee_analysis.PLOT_BUFFER_M)
 
 
 def latest_embedding_year() -> int:
@@ -49,11 +53,11 @@ def to_vector(raw_by_source: dict[str, dict], feature_set: str = sources.DEFAULT
 
 
 def extract(lat: float, lng: float, polygon: list | None, year: int | None = None,
-            feature_set: str = sources.DEFAULT_FEATURE_SET) -> dict:
+            feature_set: str = sources.DEFAULT_FEATURE_SET, point_buffer_m: float | None = None) -> dict:
     """{"year", "geom_hash", "vals", "meta"} — vals มี None ได้ (เดือน/แหล่งที่ไม่มีภาพ)"""
     ee = gee_analysis.ee
     year = year or latest_embedding_year()
-    geom = geometry(ee, lat, lng, polygon)
+    geom = geometry(ee, lat, lng, polygon, point_buffer_m)
     d = ee.Dictionary({s.name: s.image(ee, geom, year).reduceRegion(ee.Reducer.mean(), geom, s.scale, maxPixels=1e9)
                        for s in sources.FEATURE_SETS[feature_set]})
     raw = gee_analysis._retry_gee(d.getInfo)
