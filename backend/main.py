@@ -2302,7 +2302,7 @@ class FieldObservation(BaseModel):
 
 
 @app.post("/admin/trigger/daily-scan", dependencies=[Depends(verify_admin)])
-async def trigger_daily_scan(background_tasks: BackgroundTasks, hour: int | None = None):
+async def trigger_daily_scan(background_tasks: BackgroundTasks, hour: int | None = None, wait: bool = False):
     """
     เรียกงานสแกนความเสี่ยงรายวัน (daily_scan_job) ด้วยตนเอง — สำหรับผูกกับ cron
     ภายนอก (GitHub Actions — ดู .github/workflows/keep-alive.yml) ให้ยิงมาทุกชั่วโมง
@@ -2321,18 +2321,27 @@ async def trigger_daily_scan(background_tasks: BackgroundTasks, hour: int | None
     "ตามงาน" ชั่วโมงที่พลาดไปให้ครบด้วย ไม่ใช่แค่ hour เดียวที่ trigger ส่งมา —
     ดู scheduler.py::run_job_with_catchup
 
-    รันเป็น background task แล้วตอบกลับทันที (ไม่รอผลลัพธ์) เพราะสแกนทุกแปลงของ
-    ทุกคนอาจใช้เวลาหลายนาที ยิงยาวเกิน timeout ปกติของ cron ภายนอกได้
+    ค่าเริ่มต้นรันเป็น background task แล้วตอบกลับทันที (สแกนทุกแปลงอาจใช้หลายนาที)
+    wait=true: รอจนงานจบแล้วค่อยตอบ — จำเป็นบน Google Cloud Run (คิดเงินตามคำขอ)
+    ที่ลด CPU เกือบเป็นศูนย์หลังส่งคำตอบแล้ว งาน background จะค้าง/ไม่จบ · ผู้เรียกต้องรอได้นาน
+    (keep-alive.yml ตั้ง --max-time 900 คู่กับ timeout ของ Cloud Run 900 วินาที)
     """
-    background_tasks.add_task(run_job_with_catchup, daily_scan_job, "daily_scan", hour)
-    return {"status": "started", "job": "daily_scan", "hour": hour}
+    return await _run_trigger(background_tasks, daily_scan_job, "daily_scan", hour, wait)
 
 
 @app.post("/admin/trigger/rain-alert", dependencies=[Depends(verify_admin)])
-async def trigger_rain_alert(background_tasks: BackgroundTasks, hour: int | None = None):
+async def trigger_rain_alert(background_tasks: BackgroundTasks, hour: int | None = None, wait: bool = False):
     """เหมือน trigger_daily_scan แต่สำหรับงานแจ้งเตือนฝน (rain_alert_job)"""
-    background_tasks.add_task(run_job_with_catchup, rain_alert_job, "rain_alert", hour)
-    return {"status": "started", "job": "rain_alert", "hour": hour}
+    return await _run_trigger(background_tasks, rain_alert_job, "rain_alert", hour, wait)
+
+
+async def _run_trigger(background_tasks: BackgroundTasks, job_fn, job_name: str, hour: int | None, wait: bool) -> dict:
+    if not wait:
+        background_tasks.add_task(run_job_with_catchup, job_fn, job_name, hour)
+        return {"status": "started", "job": job_name, "hour": hour}
+    started = time.monotonic()
+    await run_job_with_catchup(job_fn, job_name, hour)
+    return {"status": "done", "job": job_name, "hour": hour, "seconds": round(time.monotonic() - started, 1)}
 
 
 @app.post("/admin/feedback", dependencies=[Depends(verify_admin)])

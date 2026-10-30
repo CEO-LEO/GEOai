@@ -1,0 +1,3 @@
+# ไฟล์ที่ไม่ส่งขึ้น Cloud Build ตอน `gcloud run deploy --source` (ใช้กติกาเดียวกับ .dockerignore)
+#!include:.dockerignore
+.gcloudignore

@@ -64,11 +64,11 @@ def login_channel_id() -> str:
 def dev_auth_user() -> str | None:
     """
     ผู้ใช้จำลองสำหรับรันในเครื่อง (ไม่มี LIFF จริงให้ขอ token) — เปิดด้วย
-    IAMROOT_DEV_AUTH_USER=<id> เท่านั้น และถูกปิดเสมอบน Render (Render ตั้ง env
-    RENDER=true ให้ทุก service) กันเผลอตั้งค้างไว้บน production
+    IAMROOT_DEV_AUTH_USER=<id> เท่านั้น และถูกปิดเสมอบน production กันเผลอตั้งค้างไว้:
+    Render ตั้ง env RENDER=true · Google Cloud Run ตั้ง K_SERVICE ให้ทุก service
     """
     uid = os.environ.get("IAMROOT_DEV_AUTH_USER", "").strip()
-    if not uid or os.environ.get("RENDER"):
+    if not uid or os.environ.get("RENDER") or os.environ.get("K_SERVICE"):
         return None
     return uid
 

@@ -5,12 +5,18 @@ name: CI — tests
 # จาก master เอง ไฟล์นี้จึงเหลือแค่รัน test (ดู docs/v2/phase0-report.md หัวข้อ 5)
 #
 # env ปลอมทั้งหมดอยู่ใน backend/conftest.py — ไม่ต้องตั้ง secret ใดๆ ที่นี่
+#
+# 2026-10-30: เพิ่ม job deploy ไป Google Cloud Run (ย้ายจาก Render — docs/v2/cloud-run-migration.md)
+# ทำงานเมื่อ push master + test ผ่าน + ตั้ง repo variable CLOUD_RUN_ENABLED=true แล้วเท่านั้น
+# ต้องมี secret GCP_SA_KEY (JSON ของ service account สำหรับ deploy) และ variable GCP_PROJECT_ID
+# env ของแอป (secret ต่าง ๆ) ตั้งที่ service บน Cloud Run ครั้งเดียว — deploy ใหม่คงค่าเดิมไว้
 
 on:
   push:
     branches: [master, "feat/**"]
   pull_request:
     branches: [master]
+  workflow_dispatch: {}
 
 jobs:
   test:
@@ -36,3 +42,42 @@ jobs:
 
       - name: Run tests
         run: pytest -v --tb=short
+
+  deploy:
+    name: Deploy to Cloud Run
+    needs: test
+    if: >-
+      vars.CLOUD_RUN_ENABLED == 'true' &&
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency: cloud-run-deploy
+    env:
+      REGION: ${{ vars.CLOUD_RUN_REGION || 'asia-northeast1' }}
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'iamroot' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # 1 GiB: earthengine + numpy + scikit-learn + Pillow · timeout 900 วินาที: งานตามเวลาแบบรอจบ (?wait=true)
+      # min-instances 0 = ไม่เสียเงินตอนไม่มีคนใช้ (แลกกับ cold start) · cpu-boost ช่วยให้ตื่นเร็วขึ้น
+      - name: Build and deploy
+        run: |
+          gcloud run deploy "$SERVICE" --source . --project "${{ vars.GCP_PROJECT_ID }}" --region "$REGION" \
+            --memory 1Gi --cpu 1 --timeout 900 --concurrency 40 --min-instances 0 --max-instances 3 \
+            --cpu-boost --allow-unauthenticated --quiet
+
+      - name: Health check
+        run: |
+          url=$(gcloud run services describe "$SERVICE" --project "${{ vars.GCP_PROJECT_ID }}" --region "$REGION" --format 'value(status.url)')
+          echo "URL: $url"
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$url/health") && [ "$code" = "200" ] && { echo "health 200"; exit 0; }
+            echo "health $code — retry"; sleep 10
+          done
+          echo "::error::health check failed"; exit 1

@@ -36,6 +36,9 @@ name: Trigger daily scan and rain alert jobs
 # จากนาที 00 มาที่นาที 07 แทน หลีกเลี่ยงช่วงคับคั่งสุด (ยังมีการ "ตามงานย้อนหลัง"
 # กันไว้อีกชั้นที่ฝั่ง backend ด้วย — ดู scheduler.py::run_job_with_catchup — เผื่อ
 # GitHub ยังทิ้งรอบอยู่ดีแม้เลื่อนนาทีแล้ว)
+# v8 (2026-10-30 ย้ายไป Google Cloud Run): ที่อยู่เซิร์ฟเวอร์มาจาก repo variable APP_BASE_URL (ไม่ตั้ง = Render เดิม)
+# และสั่ง ?wait=true รอให้งานจบในคำขอเดียว — Cloud Run แบบคิดตามคำขอลด CPU หลังตอบแล้ว งาน background จะไม่จบ
+# timeout 900 วินาทีต่อคำขอ (ตรงกับ --timeout ของ Cloud Run)
 on:
   workflow_dispatch: {}
   schedule:
@@ -49,6 +52,8 @@ on:
 jobs:
   trigger:
     runs-on: ubuntu-latest
+    env:
+      BASE: ${{ vars.APP_BASE_URL || 'https://iamroot.onrender.com' }}
     steps:
       - name: Compute current Bangkok hour
         id: hour
@@ -56,18 +61,18 @@ jobs:
 
       - name: Trigger rain-alert job for this hour
         run: |
-          curl -sf -X POST --max-time 60 \
+          curl -sf -X POST --max-time 900 \
             -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
-            "https://iamroot.onrender.com/admin/trigger/rain-alert?hour=${{ steps.hour.outputs.h }}" \
-            && echo "OK — rain-alert job started (hour=${{ steps.hour.outputs.h }})" \
+            "$BASE/admin/trigger/rain-alert?hour=${{ steps.hour.outputs.h }}&wait=true" \
+            && echo "OK — rain-alert job finished (hour=${{ steps.hour.outputs.h }})" \
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
 
       - name: Trigger daily-scan job for this hour (includes weekly digest on Mondays)
         run: |
-          curl -sf -X POST --max-time 60 \
+          curl -sf -X POST --max-time 900 \
             -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
-            "https://iamroot.onrender.com/admin/trigger/daily-scan?hour=${{ steps.hour.outputs.h }}" \
-            && echo "OK — daily-scan job started (hour=${{ steps.hour.outputs.h }})" \
+            "$BASE/admin/trigger/daily-scan?hour=${{ steps.hour.outputs.h }}&wait=true" \
+            && echo "OK — daily-scan job finished (hour=${{ steps.hour.outputs.h }})" \
             || echo "trigger failed (server may still be waking up — check /admin/logs)"
 
       # v6 (Phase 1b): ตรวจสุขภาพการส่งข้อความ LINE ทุกรอบ — 2026-10 โควตา LINE OA หมดแล้ว
@@ -80,7 +85,7 @@ jobs:
         run: |
           body=$(curl -s --max-time 60 -w '\n%{http_code}' \
             -H "X-Admin-Key: ${{ secrets.ADMIN_API_KEY }}" \
-            "https://iamroot.onrender.com/admin/messaging/status?track=true")
+            "$BASE/admin/messaging/status?track=true")
           code=$(echo "$body" | tail -n1); json=$(echo "$body" | sed '$d')
           echo "HTTP $code"; echo "$json" | jq '{health, previous_health, changed, reasons, remaining, quota, quota_resets_on}' || echo "$json"
           if [ "$code" != "200" ]; then echo "::error::messaging status endpoint returned HTTP $code"; exit 1; fi
