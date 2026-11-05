@@ -56,6 +56,7 @@
       <button id="export-btn">⬇ ส่งออก CSV (มีพิกัด — ผู้ดูแลเท่านั้น)</button>
     </div>
     <div class="tiles" id="tiles"></div>
+    <section><h2>วิธีสุ่มจุดที่ระบบไม่ได้เตือน (ใช้คำนวณ recall)</h2><div id="sampling"></div></section>
     <section><h2>น้ำขังจริงไหม — เทียบกับที่ระบบชี้</h2><div class="table-wrap" id="water"></div></section>
     <section><h2>ต้นไม้มีอาการไหม — เทียบจุดที่ระบบชี้ว่าชื้น กับจุดที่ไม่ชี้</h2><div class="table-wrap" id="symptom"></div></section>
     <section><h2>ทุกคำตอบ แยกตามประเภทปัญหา</h2><div class="table-wrap" id="problems"></div></section>
@@ -96,6 +97,12 @@
         [rateText(a.water_precision), "ระบบชี้จุดชื้น/น้ำรวม แล้วในแปลงจริงใช่ (precision)"],
         [rateText(a.water_recall), "จุดที่มีน้ำขังจริง ระบบชี้ได้ (recall — ใช้ได้เมื่อสุ่มจุดที่ไม่ชี้มาตรวจ)"],
       ].map(([n, l]) => `<div class="tile"><div class="n">${typeof n === "number" ? n.toLocaleString("th-TH") : n}</div><div class="l">${l}</div></div>`).join("");
+      const sm = s.sampling;
+      $("sampling").innerHTML = `<p style="margin:0 0 8px;line-height:1.65">${esc(sm.method_th)}</p>
+        <table><tr><th>วิธี (รหัส)</th><th class="num">ครั้งที่สุ่ม</th><th class="num">แปลง</th><th class="num">จุดที่สุ่มได้</th><th class="num">จุดสุ่มที่ตอบแล้ว</th><th class="num">คำตอบจุดที่อาสาเลือกเอง (ไม่ใช้คิด recall)</th><th>seed บันทึกครบ</th></tr>
+        <tr><td>${esc(sm.method)}</td><td class="num">${sm.samples}</td><td class="num">${sm.plots}</td><td class="num">${sm.points_drawn}</td>
+        <td class="num">${sm.points_answered}</td><td class="num">${a.user_chosen_unflagged_excluded}</td><td>${sm.seeds_recorded ? "ใช่" : "ไม่"}</td></tr></table>
+        <div class="l" style="margin-top:6px">ส่งออก CSV มีคอลัมน์ selection (random / user) และ sample_id · รายการจุดตั้งต้นและ seed ของแต่ละครั้งเก็บในตาราง validation_samples เพื่อตรวจย้อน</div>`;
       $("water").innerHTML = `<table><tr><th></th><th class="num">จริงมีน้ำขัง</th><th class="num">จริงไม่มี</th></tr>
         <tr><td>ระบบชี้จุดชื้น/น้ำรวม</td><td class="num">${c.tp}</td><td class="num">${c.fp}</td></tr>
         <tr><td>ระบบไม่ได้ชี้</td><td class="num">${c.fn}</td><td class="num">${c.tn}</td></tr></table>`;

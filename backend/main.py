@@ -65,6 +65,8 @@ import areas
 import privacy
 import photo_service
 import validation
+import validation_sampling
+import ee_meter
 import province
 import seasons
 import trees
@@ -90,6 +92,8 @@ from database import (save_analysis, get_all_reports, save_plot,
                       SUPABASE_URL as _SUPABASE_URL, SUPABASE_KEY as _SUPABASE_KEY,
                       get_photo_by_client_id, insert_photo, list_photos, get_photo, delete_photo_row,
                       photo_paths_for_user, insert_validation, list_validations,
+                      insert_validation_sample, get_validation_sample, latest_validation_sample, list_validation_samples,
+                      list_ee_usage,
                       get_events_since, get_users_created, set_rain_alert_freq,
                       get_tree, get_tree_by_client_id, list_trees, insert_tree, update_tree,
                       get_tree_log, get_tree_log_by_client_id, list_tree_logs, insert_tree_log, delete_tree_log)
@@ -188,7 +192,16 @@ async def lifespan(app: FastAPI):
             tmp_path = tmp.name
 
         credentials = ee.ServiceAccountCredentials(service_account, tmp_path)
-        ee.Initialize(credentials)
+        # GEE_PROJECT (ไม่บังคับ): เรียกผ่านโปรเจกต์ Cloud ที่ลงทะเบียนไว้ แทนโปรเจกต์กลาง earthengine-legacy
+        # ต้องให้สิทธิ์ Service Usage Consumer แก่บัญชีบริการบนโปรเจกต์นั้นก่อน — ไม่ผ่านจะตกกลับพฤติกรรมเดิมเอง
+        gee_project = os.environ.get("GEE_PROJECT", "").strip()
+        try:
+            ee.Initialize(credentials, project=gee_project) if gee_project else ee.Initialize(credentials)
+        except Exception as e:
+            if not gee_project:
+                raise
+            logger.warning(f"GEE_PROJECT={gee_project} ใช้ไม่ได้ ({type(e).__name__}) — ใช้โปรเจกต์เริ่มต้นแทน")
+            ee.Initialize(credentials)
         os.unlink(tmp_path)   # ลบ temp file ทันทีหลัง init
         gee_analysis._gee_ready = True
         logger.info("Google Earth Engine initialized successfully")
@@ -1689,6 +1702,7 @@ class ValidationBody(BaseModel):
     note:            str = Field("", max_length=300)
     photo_client_id: str | None = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     context:         dict | None = None
+    sample_id:       int | None = Field(None, ge=1)      # จุดนี้มาจากการสุ่ม (server ตรวจว่าเป็นจุดที่สุ่มให้จริงก่อนติดป้าย random)
 
 
 def _clean_context(ctx: dict | None) -> dict | None:
@@ -1713,16 +1727,91 @@ async def add_validation(user_id: str, plot_id: int, body: ValidationBody, backg
     acc = await _access_for(me)
     if body.problem in (validation.SYMPTOM, validation.UNFLAGGED_WATER) and acc["role"] == "farmer"             and not (await get_user_privacy(me) or {}).get("consent_volunteer_test"):
         raise HTTPException(status_code=403, detail="คำถามชุดนี้สำหรับเกษตรกรอาสา — เปิดที่ ⚙️ ข้อมูลของฉัน → เข้าร่วมทดสอบ")
+    selection, sample_id = "user", None
+    if body.sample_id is not None:
+        # ป้าย "random" ตั้งโดย server เท่านั้น: ต้องเป็นการสุ่มของผู้ใช้คนนี้ในแปลงนี้ และพิกัดตรงกับจุดที่สุ่มให้จริง
+        sample = await get_validation_sample(body.sample_id)
+        pt = None
+        if sample and body.lat is not None and body.lng is not None:
+            pt = next((q for q in sample.get("points") or []
+                       if validation_sampling.same_point(body.lat, body.lng, q)), None)
+        if not sample or sample["plot_id"] != plot_id or sample["user_id"] != me or pt is None \
+                or body.problem not in (validation.SYMPTOM, validation.UNFLAGGED_WATER):
+            raise HTTPException(status_code=422, detail="จุดนี้ไม่ได้มาจากการสุ่มของคุณ")
+        selection, sample_id = "random", sample["id"]
     row = await insert_validation({
         "plot_id": plot_id, "user_id": me, "role": acc["role"], "scope": body.scope, "problem": body.problem,
         "severity": body.severity, "answer": body.answer, "lat": body.lat, "lng": body.lng,
-        "note": body.note.strip(), "photo_client_id": body.photo_client_id, "context": _clean_context(body.context)})
+        "note": body.note.strip(), "photo_client_id": body.photo_client_id, "context": _clean_context(body.context),
+        "selection": selection, "sample_id": sample_id})
     if not row:
         raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
     background.add_task(log_event, me, "field_validation", plot_id,
                         {"problem": body.problem, "answer": body.answer, "role": acc["role"]})
     return {"id": row["id"], "answer_th": validation.ANSWER_TH[body.answer],
             "message_th": "ขอบคุณครับ — คำตอบนี้ช่วยให้ระบบแม่นขึ้น", "plot_owner_is_me": plot.get("user_id") == me}
+
+
+class SamplePoint(BaseModel):
+    lat:  float = Field(..., ge=-90, le=90)
+    lng:  float = Field(..., ge=-180, le=180)
+    flag: Literal["none", "dry_spot"] = "none"
+
+
+class ValidationSampleBody(BaseModel):
+    points: list[SamplePoint] = Field(..., max_length=validation_sampling.MAX_CANDIDATES)
+    n:      int = Field(validation_sampling.DEFAULT_N, ge=1, le=validation_sampling.MAX_N)
+
+
+SAMPLE_REUSE_DAYS = 14
+
+
+@app.post("/plots/{user_id}/{plot_id}/validation-sample")
+async def validation_sample(user_id: str, plot_id: int, body: ValidationSampleBody, me: str = Depends(_api_user)):
+    """
+    สุ่มจุดที่ระบบ "ไม่ได้ชี้ว่าชื้น/น้ำรวม" ให้อาสาไปตรวจ (วัด recall) — วิธีและเหตุผลที่ validation_sampling.py
+    client ส่งจุดตั้งต้นมา (จุดที่ระบบไม่ชี้ ตามสีเทียบในแปลงที่เห็นอยู่) · server ตรวจว่าอยู่ในแปลง แล้วสุ่มด้วย seed ที่สร้างเอง
+    ภายใน 14 วันคืนชุดเดิม (ไม่สุ่มใหม่จนกว่าจะหมดอายุ — กันสุ่มซ้ำเพื่อได้จุดที่ชอบ)
+    """
+    _require_self(user_id, me)
+    await _require_consent(me)
+    plot = await _require_plot_access(plot_id, me, access.EDIT, "validation_sample")
+    acc = await _access_for(me)
+    if acc["role"] == "farmer" and not (await get_user_privacy(me) or {}).get("consent_volunteer_test"):
+        raise HTTPException(status_code=403, detail="ฟังก์ชันนี้สำหรับเกษตรกรอาสา — เปิดที่ ⚙️ ข้อมูลของฉัน → เข้าร่วมทดสอบ")
+    if plot.get("plot_type") == "raised_bed":
+        raise HTTPException(status_code=422, detail="สวนยกร่องไม่ใช้วัดน้ำขัง (ระบบไม่ชี้น้ำขังในสวนยกร่อง)")
+    ring = plot.get("polygon") or []
+    if len(ring) < 3:
+        raise HTTPException(status_code=422, detail="ต้องวาดขอบเขตแปลงก่อน")
+    lngs, lats = [q[0] for q in ring], [q[1] for q in ring]
+    m = 0.0005
+    inside = [p for p in body.points if min(lats) - m <= p.lat <= max(lats) + m and min(lngs) - m <= p.lng <= max(lngs) + m]
+    if len(inside) != len(body.points):
+        raise HTTPException(status_code=422, detail="มีจุดนอกขอบเขตแปลง")
+    cands = validation_sampling.normalize_candidates([p.model_dump() for p in body.points])
+    if len(cands) < validation_sampling.MIN_CANDIDATES:
+        raise HTTPException(status_code=422, detail="แปลงนี้เล็กเกินไปสำหรับสุ่มจุดตรวจ")
+
+    since = (datetime.now(timezone.utc) - timedelta(days=SAMPLE_REUSE_DAYS)).isoformat()
+    sample = await latest_validation_sample(plot_id, me, since)
+    reused = sample is not None
+    if sample is None:
+        seed = secrets.randbits(62)
+        points = validation_sampling.draw(cands, seed, body.n)
+        sample = await insert_validation_sample({
+            "plot_id": plot_id, "user_id": me, "seed": seed, "method": validation_sampling.METHOD,
+            "params": {"n": len(points), "candidate_rule": "not_flagged_wet_or_sink"},
+            "candidates_n": len(cands), "candidates_hash": validation_sampling.candidates_hash(cands),
+            "candidates": cands, "points": points})
+        if not sample:
+            raise HTTPException(status_code=502, detail="สุ่มจุดไม่สำเร็จ กรุณาลองใหม่")
+    done = {(round(r["lat"], 6), round(r["lng"], 6)) for r in await list_validations(plot_id)
+            if r.get("sample_id") == sample["id"] and r.get("user_id") == me and r["problem"] == validation.UNFLAGGED_WATER
+            and r.get("lat") is not None}
+    return {"sample_id": sample["id"], "reused": reused, "method": sample["method"], "seed": sample["seed"],
+            "points": [{"lat": q["lat"], "lng": q["lng"], "stratum": q["stratum"], "flag": q.get("flag", "none"),
+                        "answered": (round(q["lat"], 6), round(q["lng"], 6)) in done} for q in sample["points"]]}
 
 
 @app.get("/plots/{user_id}/{plot_id}/validations")
@@ -1739,7 +1828,18 @@ async def plot_validations(user_id: str, plot_id: int, me: str = Depends(_api_us
 @app.get("/admin/validations", dependencies=[Depends(verify_admin)])
 async def admin_validations(days: int = 365):
     since = (datetime.now(timezone.utc) - timedelta(days=min(max(days, 1), 3650))).isoformat()
-    return validation.summarize(await list_validations(since_iso=since))
+    rows = await list_validations(since_iso=since)
+    out = validation.summarize(rows)
+    out["sampling"] = validation.sampling_summary(await list_validation_samples(since_iso=since), rows)
+    return out
+
+
+@app.get("/admin/ee-usage", dependencies=[Depends(verify_admin)])
+async def admin_ee_usage(days: int = 7):
+    """สถิติการใช้ Earth Engine จริง (EECU-วินาที) จากตัววัด EE_USAGE_METER — ใช้แทนค่าประมาณใน earth-engine-cost.md"""
+    since = (datetime.now(timezone.utc) - timedelta(days=min(max(days, 1), 60))).isoformat()
+    rows = await list_ee_usage(since)
+    return {"meter_enabled": ee_meter.enabled(), "days": days, "rows": len(rows), **ee_meter.summarize(rows)}
 
 
 @app.get("/admin/validations/export.csv", dependencies=[Depends(verify_admin)])
@@ -1751,12 +1851,12 @@ async def admin_validations_export(days: int = 3650):
     buf.write("﻿")
     w = csv.writer(buf)
     w.writerow(["id", "plot_id", "role", "scope", "problem", "severity", "answer", "lat", "lng", "note",
-                "has_photo", "context", "created_at"])
+                "has_photo", "context", "selection", "sample_id", "created_at"])
     for r in rows:
         w.writerow([r["id"], r["plot_id"], r["role"], r["scope"], r["problem"], r.get("severity") or "",
                     r["answer"], r.get("lat") or "", r.get("lng") or "", r.get("note") or "",
                     "yes" if r.get("photo_client_id") else "", json.dumps(r.get("context") or {}, ensure_ascii=False),
-                    r["created_at"]])
+                    r.get("selection") or "user", r.get("sample_id") or "", r["created_at"]])
     await log_audit(None, "admin", "export_validations", "validations", None, None, {"rows": len(rows)})
     return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="field-validations.csv"'})

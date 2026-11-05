@@ -28,6 +28,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
+import ee_meter
 import gee_analysis
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,7 @@ def _geometry(lat: float, lng: float, polygon: list | None):
     return ee.Geometry.Point([lng, lat]).buffer(gee_analysis.PLOT_BUFFER_M)
 
 
+@ee_meter.metered("wetness_anomaly")
 def get_wetness_anomaly(lat: float, lng: float, polygon: list | None = None,
                         today: datetime | None = None) -> dict:
     """เรียก GEE 1 ครั้ง (อนุกรมเวลา VV ≈ 3 ปี) แล้วคำนวณสถานะ — sync ต้องห่อด้วย threadpool"""
@@ -122,6 +124,7 @@ def get_wetness_anomaly(lat: float, lng: float, polygon: list | None = None,
     return compute_wetness_anomaly(s1_series(lat, lng, polygon, start, today), today)
 
 
+@ee_meter.metered("season_series")
 def s1_series(lat: float, lng: float, polygon: list | None, start: datetime, end: datetime) -> list:
     """อนุกรมเวลา VV (dB) เฉลี่ยในแปลง [(เวลา, vv, วงโคจร)] — GEE 1 ครั้ง (sync)"""
     ee = gee_analysis.ee
@@ -203,6 +206,7 @@ def _land_cover_fractions(histogram: dict | None) -> dict:
     return out
 
 
+@ee_meter.metered("risk_profile")
 def get_plot_profile(lat: float, lng: float, polygon: list | None = None) -> dict:
     """ลักษณะประจำแปลง (GEE 2 ครั้ง) — ค่าไม่ค่อยเปลี่ยน คำนวณสัปดาห์ละครั้งพอ"""
     if not gee_analysis._gee_ready:
@@ -238,6 +242,7 @@ def get_plot_profile(lat: float, lng: float, polygon: list | None = None) -> dic
     return classify_profile(r.get("hand"), lc, wet_rank, area_rai=area_rai, is_point=is_point)
 
 
+@ee_meter.metered("boundary_check")
 def get_boundary_land_cover(lat: float, lng: float, polygon: list | None = None) -> dict:
     """
     ประเภทพื้นที่ในขอบเขต (Dynamic World) + พื้นที่ — GEE 1 ครั้ง ใช้ตรวจคุณภาพขอบเขตตอนบันทึก/แก้แปลง (1c)

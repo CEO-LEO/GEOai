@@ -4,6 +4,7 @@ GEE 1 ครั้งต่อแปลง (ทุกแหล่งของช
 """
 
 import hashlib
+import ee_meter
 import json
 import math
 from datetime import datetime, timezone
@@ -52,6 +53,7 @@ def to_vector(raw_by_source: dict[str, dict], feature_set: str = sources.DEFAULT
     return out
 
 
+@ee_meter.metered("crop_features")
 def extract(lat: float, lng: float, polygon: list | None, year: int | None = None,
             feature_set: str = sources.DEFAULT_FEATURE_SET, point_buffer_m: float | None = None) -> dict:
     """{"year", "geom_hash", "vals", "meta"} — vals มี None ได้ (เดือน/แหล่งที่ไม่มีภาพ)"""

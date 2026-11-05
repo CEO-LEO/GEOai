@@ -11,6 +11,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+import ee_meter
 import gee_analysis
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ def from_geo_name(geo_name: str | None) -> dict:
     return {"area_code": None, "area_name": geo_name}
 
 
+@ee_meter.metered("area_lookup")
 def lookup_point(lat: float, lng: float) -> dict:
     """GEE 1 ครั้ง (sync — เรียกผ่าน threadpool) · พังคืนค่าว่าง ไม่ทำให้งานหลักพัง"""
     if not gee_analysis._gee_ready:

@@ -74,7 +74,7 @@ pip install -r requirements.txt           # root requirements.txt ต้อง�
 uvicorn main:app --reload --port 8000     # LIFF: /liff/  dashboard: /dashboard/  health: /health
 
 pytest -q                                 # 425 tests — conftest.py ตั้ง env ปลอมเอง ไม่แตะ backend/.env
-                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g, test_roles_2a, test_privacy_2b, test_photos_2c, test_validation_2d, test_province_2e, test_rain_alerts_3a, test_seasons_3c, test_crops_4a, test_trees_6_3) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
+                                          # pytest.ini กำหนดไฟล์ test (test_system, test_auth, test_messaging, test_speed, test_risk_v2, test_interim, test_plots_1c, test_recommendations, test_summary_1e, test_report_1f, test_foundation_1g, test_roles_2a, test_privacy_2b, test_photos_2c, test_validation_2d, test_province_2e, test_rain_alerts_3a, test_seasons_3c, test_crops_4a, test_trees_6_3, test_ee_meter) — ไฟล์ test ใหม่ต้องเพิ่มที่นี่
 
 # รัน LIFF ในเครื่อง (ไม่มี LINE token) — ห้ามตั้งค่านี้บน production (ถูกปิดเองถ้ามี env RENDER)
 IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000

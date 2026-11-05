@@ -7,6 +7,7 @@ v2: เพิ่ม Land Displacement Detection, Fertilizer Recommendation, Yiel
 """
 
 import time
+import ee_meter
 import math
 import logging
 from datetime import datetime, timedelta, timezone
@@ -318,6 +319,7 @@ def _safe_getInfo(computation, default=None):
         return default
 
 
+@ee_meter.metered("analyze")
 def analyze_durian_plot(lat: float, lng: float,
                         polygon: list[list[float]] | None = None) -> dict:
     """
@@ -733,6 +735,7 @@ def _offset_latlng(lat: float, lng: float, bearing_deg: float, distance_m: float
     return math.degrees(lat2), math.degrees(lng2)
 
 
+@ee_meter.metered("moisture_grid")
 def get_moisture_grid(polygon: list[list[float]], spacing_m: int = 10,
                       allow_widen: bool = False) -> tuple[list[dict], int]:
     """
@@ -1097,6 +1100,7 @@ THUMBNAIL_BUFFER_M    = 25    # ขอบเผื่อรอบแปลงใ
 THUMBNAIL_DIMENSIONS  = 640   # ความกว้าง/สูงภาพ (พิกเซล) — LINE preview ไม่ต้องใหญ่มาก
 
 
+@ee_meter.metered("thumbnail")
 def get_plot_satellite_thumbnail(
     polygon: list[list[float]],
     buffer_m: float = THUMBNAIL_BUFFER_M,
