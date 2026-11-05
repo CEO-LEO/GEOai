@@ -66,6 +66,7 @@ import privacy
 import photo_service
 import validation
 import validation_sampling
+import ee_meter
 import province
 import seasons
 import trees
@@ -92,6 +93,7 @@ from database import (save_analysis, get_all_reports, save_plot,
                       get_photo_by_client_id, insert_photo, list_photos, get_photo, delete_photo_row,
                       photo_paths_for_user, insert_validation, list_validations,
                       insert_validation_sample, get_validation_sample, latest_validation_sample, list_validation_samples,
+                      list_ee_usage,
                       get_events_since, get_users_created, set_rain_alert_freq,
                       get_tree, get_tree_by_client_id, list_trees, insert_tree, update_tree,
                       get_tree_log, get_tree_log_by_client_id, list_tree_logs, insert_tree_log, delete_tree_log)
@@ -1821,6 +1823,14 @@ async def admin_validations(days: int = 365):
     out = validation.summarize(rows)
     out["sampling"] = validation.sampling_summary(await list_validation_samples(since_iso=since), rows)
     return out
+
+
+@app.get("/admin/ee-usage", dependencies=[Depends(verify_admin)])
+async def admin_ee_usage(days: int = 7):
+    """สถิติการใช้ Earth Engine จริง (EECU-วินาที) จากตัววัด EE_USAGE_METER — ใช้แทนค่าประมาณใน earth-engine-cost.md"""
+    since = (datetime.now(timezone.utc) - timedelta(days=min(max(days, 1), 60))).isoformat()
+    rows = await list_ee_usage(since)
+    return {"meter_enabled": ee_meter.enabled(), "days": days, "rows": len(rows), **ee_meter.summarize(rows)}
 
 
 @app.get("/admin/validations/export.csv", dependencies=[Depends(verify_admin)])

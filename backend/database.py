@@ -1103,6 +1103,14 @@ async def list_validations(plot_id: int | None = None, since_iso: str | None = N
     return await _fetch_all("field_validations", params) or []
 
 
+async def list_ee_usage(since_iso: str) -> list[dict]:
+    """สถิติ EECU ที่ตัววัด (ee_meter) เก็บไว้ — migrate_v25"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    return await _fetch_all("ee_usage_log", {"created_at": f"gte.{since_iso}",
+                                             "select": "op,eecu_seconds,wall_seconds,ok,created_at"}) or []
+
+
 # ── สุ่มจุดให้อาสาตรวจ (migrate_v24) ─────────────────────────
 _SAMPLE_COLS = "id,plot_id,user_id,seed,method,params,candidates_n,candidates_hash,points,created_at"
 
