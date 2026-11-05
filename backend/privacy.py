@@ -5,7 +5,7 @@ privacy.py — PDPA (Phase 2b): ฉบับนโยบาย + รายกา
 นโยบายฉบับเต็ม: liff/privacy.html (ต้องตรงกับฉบับนี้)
 """
 
-PRIVACY_VERSION = "2026-10-25"
+PRIVACY_VERSION = "2026-11-05"
 POLICY_URL = "/liff/privacy.html"
 DELETION_GRACE_DAYS = 30     # ยกเลิกคำขอลบได้ภายในช่วงนี้ หลังจากนั้นผู้ดูแลลบถาวร
 
@@ -23,6 +23,11 @@ OPTIONAL = [
     {"key": "photos_research",
      "title_th": "ใช้รูปถ่ายและการยืนยันในแปลงเพื่อปรับปรุงระบบ",
      "body_th": "เช่น ใช้ตรวจความแม่นยำ และสอนระบบให้จำแนกชนิดพืชได้ — ไม่เผยแพร่รูปหรือพิกัดของคุณต่อสาธารณะ"},
+    {"key": "volunteer_test",
+     "title_th": "เข้าร่วมทดสอบระบบเป็นเกษตรกรอาสา",
+     "body_th": "ช่วยตอบว่าจุดที่ระบบชี้ น้ำขังจริงไหม และต้นไม้ตรงจุดนั้นมีอาการหรือไม่ พร้อมแนบรูปได้ "
+                "ทีมพัฒนาใช้คำตอบเทียบกับผลของระบบเพื่อวัดความแม่นยำ และอาจรายงานเป็นตัวเลขรวมต่อผู้ให้ทุน/หน่วยงาน "
+                "โดยไม่ระบุตัวคุณ — ไม่บังคับ ถอนได้ทุกเมื่อ"},
 ]
 
 
@@ -35,7 +40,8 @@ def consent_payload(user: dict | None) -> dict:
         "accepted_version": u.get("consent_version"),
         "needs_consent": u.get("consent_version") != PRIVACY_VERSION,
         "choices": {"share_with_officers": bool(u.get("share_with_officers")),
-                    "photos_research": bool(u.get("consent_photos_research"))},
+                    "photos_research": bool(u.get("consent_photos_research")),
+                    "volunteer_test": bool(u.get("consent_volunteer_test"))},
         "deletion_requested_at": u.get("deletion_requested_at"),
         "required_th": REQUIRED_TH,
         "optional": OPTIONAL,

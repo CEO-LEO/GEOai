@@ -5,6 +5,7 @@ validation.py — การยืนยันภาคสนาม (Phase 2d): �
 ถ้าตัวอย่างยังน้อย — ใช้คำว่า "ตรงกับในแปลง x ใน n ครั้ง"
 """
 
+import math
 from collections import defaultdict
 
 import recommendations
@@ -12,6 +13,65 @@ import recommendations
 ANSWERS = ("true", "false", "unsure")
 ANSWER_TH = {"true": "จริง", "false": "ไม่จริง", "unsure": "ไม่แน่ใจ"}
 MIN_N_FOR_RATE = 10     # น้อยกว่านี้ไม่แสดงเป็นเปอร์เซ็นต์ (ตัวเลขแกว่งเกินไป)
+FLAGGED_WATER = ("wet_spot", "water_collect")     # ระบบชี้ว่าจุดนี้ชื้น/น้ำรวม → จริง = ตรง
+UNFLAGGED_WATER = "water_check_unflagged"         # ระบบไม่ได้ชี้ → จริง = ระบบพลาด
+SYMPTOM = "tree_symptom"
+
+
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
+    """ช่วงความเชื่อมั่น 95% ของสัดส่วน k/n (Wilson) — กรรมการทุนอ่านออกว่าตัวอย่างน้อยแค่ไหน"""
+    if n <= 0:
+        return None
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return round(max(0.0, c - h), 2), round(min(1.0, c + h), 2)
+
+
+def _rate(k: int, n: int) -> dict:
+    ci = wilson(k, n)
+    ok = n >= MIN_N_FOR_RATE
+    return {"k": k, "n": n, "rate": round(k / n, 2) if ok else None, "ci95": list(ci) if ok and ci else None}
+
+
+def accuracy(rows: list[dict]) -> dict:
+    """
+    ความแม่นยำจากคำตอบเกษตรกรอาสา/เจ้าหน้าที่ (ไม่นับ "ไม่แน่ใจ") — รายงานพร้อม n และช่วงความเชื่อมั่นเสมอ
+      precision = ระบบชี้จุดชื้น/น้ำรวม แล้วในแปลงจริงใช่ · recall = จุดที่ระบบไม่ชี้ แต่จริงมีน้ำขัง (พลาด)
+    recall ใช้ได้เมื่อสุ่มจุดที่ระบบไม่ชี้มาตรวจจริง (อาสาต้องตอบจุดที่ไม่ถูกชี้ด้วย) — ไม่งั้นเอนเอียง
+    อาการต้นไม้: เทียบสัดส่วนที่มีอาการ ระหว่างจุดที่ระบบชี้ชื้น กับจุดที่ไม่ชี้
+    """
+    tp = fp = fn = tn = 0
+    sym = {"flagged_wet": [0, 0], "not_flagged": [0, 0]}     # [มีอาการ, ตอบชัดทั้งหมด]
+    users, photos = set(), 0
+    for r in rows:
+        if r.get("scope") != "point" or r["answer"] == "unsure":
+            continue
+        a, p = r["answer"] == "true", r["problem"]
+        if p in FLAGGED_WATER:
+            tp, fp = tp + a, fp + (not a)
+        elif p == UNFLAGGED_WATER:
+            fn, tn = fn + a, tn + (not a)
+        elif p == SYMPTOM:
+            flag = (r.get("context") or {}).get("flag")
+            g = sym["flagged_wet" if flag in FLAGGED_WATER else "not_flagged"]
+            g[0] += a
+            g[1] += 1
+    for r in rows:
+        if r["problem"] in FLAGGED_WATER + (UNFLAGGED_WATER, SYMPTOM):
+            users.add(r.get("user_id"))
+            photos += 1 if r.get("photo_client_id") else 0
+    return {
+        "water_precision": _rate(tp, tp + fp),
+        "water_recall": _rate(tp, tp + fn),
+        "counts": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+        "symptom_in_flagged_wet": _rate(*sym["flagged_wet"]),
+        "symptom_in_not_flagged": _rate(*sym["not_flagged"]),
+        "respondents": len(users - {None}), "answers_with_photo": photos,
+        "note_th": ("ตัวเลขเบื้องต้นจากกลุ่มอาสา — ไม่ใช่ความแม่นยำของระบบทั้งประเทศ · แสดงเป็นเปอร์เซ็นต์เมื่อ n ≥ "
+                    f"{MIN_N_FOR_RATE} · recall ใช้ได้เมื่อสุ่มจุดที่ระบบไม่ชี้มาตรวจด้วย"),
+    }
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -38,4 +98,4 @@ def summarize(rows: list[dict]) -> dict:
             "text_th": f"ตรงกับในแปลง {b['true']} ใน {decided} ครั้งที่ตอบชัด" + (
                 "" if decided >= MIN_N_FOR_RATE else f" (ตัวอย่างยังน้อย — ต้องการอย่างน้อย {MIN_N_FOR_RATE})"),
         })
-    return {"total": len(rows), "plots": len(plots - {None}), "by_problem": out}
+    return {"total": len(rows), "plots": len(plots - {None}), "by_problem": out, "accuracy": accuracy(rows)}

@@ -30,18 +30,20 @@ class TestPayload:
         assert privacy.consent_payload(None)["needs_consent"]
         assert privacy.consent_payload({"consent_version": "2020-01-01"})["needs_consent"]
         p = privacy.consent_payload(CONSENTED)
-        assert not p["needs_consent"] and p["choices"] == {"share_with_officers": True, "photos_research": False}
+        assert not p["needs_consent"] and p["choices"] == {"share_with_officers": True, "photos_research": False,
+                                                               "volunteer_test": False}
 
     def test_policy_page_matches_version(self):
         html = (Path(__file__).parent.parent / "liff" / "privacy.html").read_text(encoding="utf-8")
         y, m, d = privacy.PRIVACY_VERSION.split("-")
-        assert f"{int(d)} ตุลาคม {int(y) + 543}" in html            # ฉบับในหน้าเว็บตรงกับ PRIVACY_VERSION
+        assert f"{int(d)} พฤศจิกายน {int(y) + 543}" in html            # ฉบับในหน้าเว็บตรงกับ PRIVACY_VERSION
         for must in ("ติดต่อเจ้าหน้าที่", "สคส.", "ขอลบ", "Supabase", "Render", "Google Earth Engine"):
             assert must in html
 
     def test_optional_items_default_off(self):
-        assert {o["key"] for o in privacy.OPTIONAL} == {"share_with_officers", "photos_research"}
-        assert privacy.consent_payload({})["choices"] == {"share_with_officers": False, "photos_research": False}
+        assert {o["key"] for o in privacy.OPTIONAL} == {"share_with_officers", "photos_research", "volunteer_test"}
+        assert privacy.consent_payload({})["choices"] == {"share_with_officers": False, "photos_research": False,
+                                                              "volunteer_test": False}
 
 
 @pytest_asyncio.fixture

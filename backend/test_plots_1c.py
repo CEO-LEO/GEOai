@@ -190,7 +190,7 @@ class TestPlotApi:
         assert fields["polygon"][0] == fields["polygon"][-1]          # ปิด ring ให้
         assert fields["plot_type"] == "raised_bed"
         assert fields["lat"] == pytest.approx(13.5005)
-        sc.assert_awaited_once_with(5, ["pomelo", "vegetables"])
+        sc.assert_awaited_once_with(5, ["pomelo", "vegetables"], source="user")
         store.assert_awaited_once()
         assert img.await_args.kwargs["plot_type"] == "raised_bed"
 
@@ -256,8 +256,30 @@ class TestPlotApi:
                                            "crop_ids": ["vegetables"]})
         assert resp.status_code == 200
         assert sp.await_args.kwargs["plot_type"] == "vegetable_bed"
-        sc.assert_awaited_once_with(11, ["vegetables"])
+        sc.assert_awaited_once_with(11, ["vegetables"], source="user")
         store.assert_awaited_once()
+
+    async def test_analyze_new_plot_without_crop_defaults_to_durian(self, client):
+        """แผนทุน TED Fund โฟกัสทุเรียน: ไม่เลือกพืช = ทุเรียน แต่ติด source "default" (ไม่ใช่คำตอบเจ้าของ)"""
+        data = {"ndvi_now": .7, "ndvi_prev": .6, "elevation": 5.0}
+        with patch("main._run_gee_analysis", new_callable=AsyncMock, return_value=data),              patch("main.format_message", return_value="m"),              patch("main.upsert_user", new_callable=AsyncMock),              patch("main.save_plot", new_callable=AsyncMock, return_value=12),              patch("main.set_plot_crops", new_callable=AsyncMock, return_value=True) as sc,              patch("main._store_boundary_check", new_callable=AsyncMock) as store,              patch("main.save_analysis", new_callable=AsyncMock):
+            resp = await client.post("/analyze", headers=auth_as("U1"), json={"lat": 13.5, "lng": 99.8})
+        assert resp.status_code == 200
+        sc.assert_awaited_once_with(12, ["durian"], source="default")
+        assert store.await_args.args[4] == ["durian"]
+
+    async def test_patch_clearing_crops_falls_back_to_durian_default(self, client):
+        old = {"id": 5, "user_id": "U1", "lat": 13.0, "lng": 99.0, "name": "A", "plot_type": None}
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=old),              patch("main.set_plot_crops", new_callable=AsyncMock, return_value=True) as sc,              patch("main._store_boundary_check", new_callable=AsyncMock):
+            resp = await client.patch("/plots/U1/5", headers=auth_as("U1"), json={"crop_ids": []})
+        assert resp.status_code == 200
+        sc.assert_awaited_once_with(5, ["durian"], source="default")
+
+    def test_with_default_helper(self):
+        from crops import with_default
+        assert with_default(None) == (["durian"], "default")
+        assert with_default([]) == (["durian"], "default")
+        assert with_default(["mango"]) == (["mango"], "user")
 
     async def test_config_js_hides_agronomy_numbers_by_default(self, client):
         js = (await client.get("/liff/config.js")).text

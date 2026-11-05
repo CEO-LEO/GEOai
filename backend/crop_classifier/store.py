@@ -131,10 +131,11 @@ async def training_inputs() -> dict:
     users = await db._fetch_all("users", {"consent_photos_research": "is.true", "deletion_requested_at": "is.null",
                                           "select": "user_id"}) or []
     consented = {u["user_id"] for u in users}
-    plots = await db._fetch_all("plots", {"is_active": "is.true", "select": "id,user_id,lat,lng,polygon,area_code,plot_crops(crop_id)"}) or []
+    plots = await db._fetch_all("plots", {"is_active": "is.true", "select": "id,user_id,lat,lng,polygon,area_code,plot_crops(crop_id,source)"}) or []
     plots = [p for p in plots if p["user_id"] in consented]
     for p in plots:
-        p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or []]
+        # source 'default' = ระบบตั้งทุเรียนให้ ไม่ใช่คำตอบของเจ้าของ → ไม่ใช้เป็น label
+        p["crop_ids"] = [c["crop_id"] for c in p.pop("plot_crops", None) or [] if c.get("source") != "default"]
     photos = await db._fetch_all("photos", {"lat": "not.is.null", "select": "plot_id"}) or []
     refs = await db._fetch_all("reference_labels", {"select": "id,source,crop_ids,lat,lng,polygon,area_code"}) or []
     return {"plots": plots, "feedback": await list_feedback(), "geo_photo_plots": {r["plot_id"] for r in photos},

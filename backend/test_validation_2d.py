@@ -118,3 +118,48 @@ class TestValidationApi:
 
     async def test_admin_needs_key(self, client):
         assert (await client.get("/admin/validations")).status_code == 403
+
+
+class TestAccuracy:
+    """ความแม่นยำจากเกษตรกรอาสา (แผนทุน TED Fund) — precision/recall + ช่วงความเชื่อมั่น"""
+
+    def _row(self, problem, answer, **kw):
+        return {"scope": "point", "problem": problem, "answer": answer, "user_id": kw.pop("user_id", "U1"),
+                "role": "farmer", "plot_id": 1, **kw}
+
+    def test_wilson_interval_widens_with_small_n(self):
+        import validation
+        lo, hi = validation.wilson(8, 10)
+        assert 0.4 < lo < 0.5 and 0.9 < hi < 1.0
+        lo2, hi2 = validation.wilson(80, 100)
+        assert (hi2 - lo2) < (hi - lo)
+        assert validation.wilson(0, 0) is None
+
+    def test_precision_recall_and_hidden_rate_when_n_small(self):
+        import validation
+        rows = ([self._row("wet_spot", "true")] * 7 + [self._row("water_collect", "false")] * 3
+                + [self._row("water_check_unflagged", "true")] * 2 + [self._row("water_check_unflagged", "false")] * 8)
+        a = validation.accuracy(rows)
+        assert a["counts"] == {"tp": 7, "fp": 3, "fn": 2, "tn": 8}
+        assert a["water_precision"]["rate"] == 0.7 and a["water_precision"]["n"] == 10
+        assert a["water_recall"]["k"] == 7 and a["water_recall"]["n"] == 9
+        assert a["water_recall"]["rate"] is None and a["water_recall"]["ci95"] is None     # n < 10 → ไม่โชว์เปอร์เซ็นต์
+
+    def test_unsure_excluded_and_symptom_split_by_flag(self):
+        import validation
+        rows = [self._row("tree_symptom", "true", context={"flag": "wet_spot"}),
+                self._row("tree_symptom", "false", context={"flag": "none"}),
+                self._row("tree_symptom", "unsure", context={"flag": "none"}),
+                self._row("wet_spot", "unsure", photo_client_id="p1")]
+        a = validation.accuracy(rows)
+        assert (a["symptom_in_flagged_wet"]["k"], a["symptom_in_flagged_wet"]["n"]) == (1, 1)
+        assert (a["symptom_in_not_flagged"]["k"], a["symptom_in_not_flagged"]["n"]) == (0, 1)
+        assert a["respondents"] == 1 and a["answers_with_photo"] == 1
+
+    @pytest.mark.asyncio
+    async def test_volunteer_questions_need_volunteer_consent(self, client):
+        body = {"scope": "point", "problem": "tree_symptom", "answer": "true", "lat": 13.5, "lng": 99.9}
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=PLOT),              patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": False}),              patch("main.insert_validation", new_callable=AsyncMock, return_value={"id": 1}) as ins:
+            r = await client.post("/plots/U1/5/validations", headers=auth_as("U1"), json=body)
+        assert r.status_code == 403
+        ins.assert_not_called()

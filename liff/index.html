@@ -662,7 +662,7 @@
         <input id="pf-owner-label" type="text" maxlength="60" placeholder="เช่น ลุงสมชาย — ไม่บังคับ" />
       </div>
     </div>
-    <div class="form-label">ปลูกอะไรบ้าง (เลือกได้หลายอย่าง)</div>
+    <div class="form-label">ปลูกอะไรบ้าง (เลือกได้หลายอย่าง — ถ้าไม่เลือก ระบบถือว่าเป็นทุเรียน)</div>
     <div class="chip-row" id="pf-crops"></div>
     <div class="form-label">ลักษณะสวน</div>
     <div class="type-row" id="pf-types"></div>
@@ -1890,6 +1890,7 @@
       const head = { wet_spot: "🔵", dry_spot: "🔴", water_collect: "🟣" }[prob[0]] || "📍";
       showPointSheet(`<h3>${head} ${escHtml(rec.problem_th)}</h3>${recCardHtml(rec)}
         ${gridPlotId && window.validationBlockHtml ? window.validationBlockHtml({ scope: "point" }) : ""}
+        ${gridPlotId && window.volunteerBlocksHtml ? window.volunteerBlocksHtml(true) : ""}
         <div class="form-hint">📍 ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${gridRaised ? `<br>${escHtml(RAISED_BED_NOTE)}` : ""}</div>`);
       if (gridPlotId) {
         const rel = gridNormalizer ? gridNormalizer(p.swab_index) - gridRelMedian : null;
@@ -1897,7 +1898,20 @@
           plotId: gridPlotId, scope: "point", problem: prob[0], severity: prob[1], lat: p.lat, lng: p.lng,
           context: { rel: rel == null ? null : Math.round(rel * 100) / 100, status: p.status || null,
                      interim: RISK_INTERIM, raised_bed: gridRaised, sink: gridSinkPoints.has(p) } });
+        window.bindVolunteerBlocks?.(document.getElementById("point-sheet-body"),
+          { plotId: gridPlotId, scope: "point", lat: p.lat, lng: p.lng, context: { rel: rel == null ? null : Math.round(rel * 100) / 100 } },
+          prob[0]);
       }
+      return true;
+    }
+    // เกษตรกรอาสา: จุดที่ระบบไม่ได้ชี้ก็ตอบได้ (ใช้วัดว่าระบบพลาดแค่ไหน) — คนอื่นเห็นข้อความสั้นเหมือนเดิม
+    if (gridPlotId && window.isVolunteerTester?.()) {
+      const rel = gridNormalizer ? gridNormalizer(p.swab_index) - gridRelMedian : null;
+      showPointSheet(`<h3>📍 จุดนี้ระบบไม่ได้เตือนอะไร</h3>${window.volunteerBlocksHtml(false)}
+        <div class="form-hint">📍 ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}</div>`);
+      window.bindVolunteerBlocks?.(document.getElementById("point-sheet-body"),
+        { plotId: gridPlotId, scope: "point", lat: p.lat, lng: p.lng, context: { rel: rel == null ? null : Math.round(rel * 100) / 100 } },
+        "none");
       return true;
     }
     const sinkNote = gridSinkPoints.has(p) ? "  🎯 จุดรวมน้ำจากรอบข้าง — เหมาะขุดร่องระบายน้ำเริ่มจากตรงนี้" : "";
