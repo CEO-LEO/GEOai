@@ -14,6 +14,11 @@
   - **ห้ามแสดงค่า secret ใด ๆ ในแชทหรือ log**
   - **หยุดถามเฉพาะ:** ต้องจ่ายเงินเพิ่ม · ต้องลบข้อมูลผู้ใช้จริงถาวร · ต้อง rewrite git history · rollback ไม่สำเร็จ
   - เครื่องมือ (ไม่อยู่ใน repo): `backend/.env` มี `RENDER_API_KEY`, `SUPABASE_DB_URL` (ห้าม commit) · ไม่มี psql → ใช้ psycopg
+- **โฟกัสทุเรียน (เจ้าของสั่ง 2026-11-05 — แผนทุน TED Fund):** ทำเฉพาะทุเรียน ไม่ทำพืชอื่น · Phase 4 (ทายพืช) เลื่อนออกไป ปิดต่อ
+  · แปลงที่ไม่เลือกพืช = ทุเรียน (`crops.with_default`, `plot_crops.source='default'` ไม่ใช้เป็น label) · เกษตรกรอาสา: ข้อยินยอม `volunteer_test`
+  (`users.consent_volunteer_test`) + คำถาม `tree_symptom` / `water_check_unflagged` + `validation.accuracy()` (Wilson 95%) + หน้า `/dashboard/validation.html`
+  · migrate_v23 · ห้ามอ้างตัวเลขความแม่นยำนอกเหนือจากที่หน้านั้นคำนวณจริงพร้อม n · เอกสารทุน: [grant-claims-review](docs/v2/grant-claims-review.md)
+  [earth-engine-cost](docs/v2/earth-engine-cost.md) [weather-tmd-openmeteo](docs/v2/weather-tmd-openmeteo.md)
 - **สถานะล่าสุด (2026-10-25):** Phase 1, 2, 3 (รวมปักหมุดต้นไม้ 6.3) และ **Phase 4a (โครง)** อยู่บน production — migrate_v12–v22 รันแล้ว
   - รายงาน: [docs/v2/final-report.md](docs/v2/final-report.md) (Phase 1 + งานที่ต้องให้คนทำ) · [docs/v2/phase2-report.md](docs/v2/phase2-report.md)
     · [docs/v2/phase3-report.md](docs/v2/phase3-report.md) · [docs/data-governance.md](docs/data-governance.md)
@@ -30,8 +35,8 @@
     ([backend/privacy.py](backend/privacy.py)) + [liff/privacy.html](liff/privacy.html) · **ห้ามลบข้อมูลผู้ใช้ถาวรเอง** (ผู้ดูแลกดที่ users.html)
   - คำแนะนำมาจากตาราง `recommendation_rules` ([backend/recommendations.py](backend/recommendations.py)) ห้ามเขียนข้อความแนะนำในโค้ดเอง
   - สวนยกร่อง (`plot_type=raised_bed`) ต้องไม่ได้ลูกศร/วงม่วง/เตือนน้ำขังจากร่อง ทุกที่ที่เพิ่มใหม่
-  - LIFF แยกไฟล์ (ไม่มี build step): `account.js` (ยินยอม/ข้อมูลของฉัน/การแจ้งเตือน) `photos.js` `validation.js` `seasons.js` `cropguess.js` `cropsurvey.js` (เจ้าหน้าที่สำรวจพืช) `trees.js` (ต้นไม้รายต้น) `officer.js` — ใช้ตัวแปรระดับบนของ index.html ได้
-  - หน้า admin: `/dashboard/recommendations.html` `/dashboard/users.html` `/dashboard/province.html` `/dashboard/crop-model.html` (X-Admin-Key)
+  - LIFF แยกไฟล์ (ไม่มี build step): `account.js` (ยินยอม/ข้อมูลของฉัน/การแจ้งเตือน) `photos.js` `validation.js` (+ คำถามอาสา) `seasons.js` `cropguess.js` `cropsurvey.js` (เจ้าหน้าที่สำรวจพืช) `trees.js` (ต้นไม้รายต้น) `officer.js` — ใช้ตัวแปรระดับบนของ index.html ได้
+  - หน้า admin: `/dashboard/recommendations.html` `/dashboard/users.html` `/dashboard/province.html` `/dashboard/crop-model.html` `/dashboard/validation.html` (X-Admin-Key)
   - โหมด "ระดับความเสี่ยงกำลังปรับปรุง" ([backend/risk_display.py](backend/risk_display.py)) เป็นค่าเริ่มต้น: ซ่อนป้ายเสี่ยง/สถานะ SWAB
     เดิม และ**หยุดคำเตือนความเสี่ยง** (`RISK_ALERTS_ENABLED`) เตือนฝนยังส่ง — `RISK_DISPLAY_MODE=legacy` = แบบเดิม
   - ตรวจภาคสนาม: [field-validation-plan](docs/v2/field-validation-plan.md) — รายการแปลงมีพิกัด เก็บใน `fieldwork/` (gitignored)
@@ -76,7 +81,7 @@ IAMROOT_DEV_AUTH_USER=dev-user uvicorn main:app --reload --port 8000
 ```
 
 - **Deploy:** push `master` → Render auto-deploy. Build command จริงตั้งใน Render Dashboard (ไม่ sync กับ `render.yaml`)
-- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v22 รัน 2026-10-28) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
+- **Migration DB:** ไฟล์ `supabase/migrate_vN.sql` + `rollback_vN.sql` (ล่าสุด v22 รัน 2026-10-28 · v23 พืชเริ่มต้นทุเรียน + ยินยอมอาสา — ดู decisions.md) — ไม่มีตารางบันทึกว่ารันอะไรไปแล้ว ดู decisions.md
 - ไม่มี GEE key ในเครื่อง → `analyze_durian_plot()` ใช้ mock data (`_mock_analyze`)
 
 ## Env (ค่าอยู่ใน Render Dashboard และ `backend/.env` ห้าม commit)
