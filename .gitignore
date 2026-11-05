@@ -46,3 +46,6 @@ backend/seed_nayaiam.py
 
 # ─── รายการแปลงสำหรับตรวจภาคสนาม (มีพิกัด/ชื่อแปลง — ข้อมูลส่วนบุคคล ห้ามขึ้น git) ──
 fieldwork/
+
+# ไฟล์เปล่าที่เผลอสร้างใน backend/ (ตัวจริงคือ liff/officer.js)
+backend/officer.js
