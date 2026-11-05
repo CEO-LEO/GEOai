@@ -192,7 +192,16 @@ async def lifespan(app: FastAPI):
             tmp_path = tmp.name
 
         credentials = ee.ServiceAccountCredentials(service_account, tmp_path)
-        ee.Initialize(credentials)
+        # GEE_PROJECT (ไม่บังคับ): เรียกผ่านโปรเจกต์ Cloud ที่ลงทะเบียนไว้ แทนโปรเจกต์กลาง earthengine-legacy
+        # ต้องให้สิทธิ์ Service Usage Consumer แก่บัญชีบริการบนโปรเจกต์นั้นก่อน — ไม่ผ่านจะตกกลับพฤติกรรมเดิมเอง
+        gee_project = os.environ.get("GEE_PROJECT", "").strip()
+        try:
+            ee.Initialize(credentials, project=gee_project) if gee_project else ee.Initialize(credentials)
+        except Exception as e:
+            if not gee_project:
+                raise
+            logger.warning(f"GEE_PROJECT={gee_project} ใช้ไม่ได้ ({type(e).__name__}) — ใช้โปรเจกต์เริ่มต้นแทน")
+            ee.Initialize(credentials)
         os.unlink(tmp_path)   # ลบ temp file ทันทีหลัง init
         gee_analysis._gee_ready = True
         logger.info("Google Earth Engine initialized successfully")
