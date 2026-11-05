@@ -41,7 +41,8 @@ async function postConsent(choices) {
   const res = await apiFetch(`${API_URL}/me/consent`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ version: privacyState.version, share_with_officers: !!choices.share_with_officers,
-                           photos_research: !!choices.photos_research }),
+                           photos_research: !!choices.photos_research,
+                           volunteer_test: !!choices.volunteer_test }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(friendlyErrorMessage(json.detail, "บันทึกไม่สำเร็จ"));

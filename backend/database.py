@@ -1253,7 +1253,7 @@ async def delete_tree_log(log_id: int) -> bool:
 
 
 # ── PDPA (Phase 2b — migrate_v17) ─────────────────────────
-_PRIVACY_COLS = "user_id,display_name,consent_version,consent_at,share_with_officers,consent_photos_research,deletion_requested_at"
+_PRIVACY_COLS = "user_id,display_name,consent_version,consent_at,share_with_officers,consent_photos_research,consent_volunteer_test,deletion_requested_at"
 
 
 async def get_user_privacy(user_id: str) -> dict | None:
@@ -1273,19 +1273,21 @@ async def _log_consent(client: httpx.AsyncClient, user_id: str, version: str, ac
         logger.error(f"consent log failed: {resp.status_code} — {resp.text[:200]}")
 
 
-async def save_consent(user_id: str, version: str, share: bool, photos: bool, action: str) -> bool:
+async def save_consent(user_id: str, version: str, share: bool, photos: bool, action: str,
+                       volunteer: bool = False) -> bool:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return False
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.patch(f"{SUPABASE_URL}/rest/v1/users", headers={**_HEADERS(), "Prefer": "return=minimal"},
                                   params={"user_id": f"eq.{user_id}"},
                                   json={"consent_version": version, "consent_at": datetime.now(timezone.utc).isoformat(),
-                                        "share_with_officers": share, "consent_photos_research": photos})
+                                        "share_with_officers": share, "consent_photos_research": photos,
+                                        "consent_volunteer_test": volunteer})
         if resp.status_code not in (200, 204):
             logger.error(f"save_consent failed: {resp.status_code} — {resp.text[:200]}")
             return False
         await _log_consent(client, user_id, version, action,
-                           {"share_with_officers": share, "photos_research": photos})
+                           {"share_with_officers": share, "photos_research": photos, "volunteer_test": volunteer})
     return True
 
 
@@ -1327,7 +1329,7 @@ async def export_user_data(user_id: str) -> dict:
     eq = f"eq.{user_id}"
     profile = await _fetch_all("users", {"user_id": eq, "select": "user_id,display_name,created_at,last_seen_at,role,"
                                          "notify_weekly,notify_daily_digest,consent_version,consent_at,"
-                                         "share_with_officers,consent_photos_research,deletion_requested_at"}) or []
+                                         "share_with_officers,consent_photos_research,consent_volunteer_test,deletion_requested_at"}) or []
     plots = await _fetch_all("plots", {"user_id": eq, "select": "id,name,lat,lng,area_rai,polygon,plot_type,area_name,"
                                        "owner_label,is_active,created_at,updated_at,plot_crops(crop_id)",
                                        "order": "id.asc"}) or []

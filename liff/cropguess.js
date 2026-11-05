@@ -75,7 +75,7 @@ async function showCropGuess(plot, opts = {}) {
       const res = await apiFetch(`${API_URL}/me/consent`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ version: cur.version, share_with_officers: !!cur.choices?.share_with_officers,
-                               photos_research: true }),
+                               photos_research: true, volunteer_test: !!cur.choices?.volunteer_test }),
       });
       if (!res.ok) throw new Error(friendlyErrorMessage((await res.json().catch(() => ({}))).detail, "บันทึกไม่สำเร็จ"));
       body.querySelector("#cg-optin").innerHTML = "✅ ขอบคุณครับ — คำตอบของคุณจะช่วยสอนระบบ (ถอนได้ใน ⚙️ ข้อมูลของฉัน)";

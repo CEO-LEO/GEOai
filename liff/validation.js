@@ -1,5 +1,6 @@
 // validation.js — Phase 2d: ยืนยันในแปลงจริง "จริง / ไม่จริง / ไม่แน่ใจ" (รายจุดบนแผนที่ และทั้งแปลง)
 // คำตอบใช้วัดว่าระบบบอกถูกแค่ไหน และเป็นข้อมูลสอนระบบในอนาคต — server ตรวจสิทธิ์ (เจ้าของ/เจ้าหน้าที่ในพื้นที่)
+// เกษตรกรอาสา (ยินยอมข้อ "เข้าร่วมทดสอบ") ตอบเพิ่มได้: "ต้นไม้ตรงจุดนี้มีอาการไหม" และ "จุดที่ระบบไม่เตือนมีน้ำขังไหม"
 // ใช้ฟังก์ชันของสคริปต์หลัก: apiFetch, API_URL, userId, escHtml, showToast, friendlyErrorMessage, userPlots
 
 function findPlotById(id) {
@@ -8,20 +9,35 @@ function findPlotById(id) {
   return all.find(p => p.id === id) || { id, name: "แปลง" };
 }
 
+const VALIDATION_QUESTIONS = {
+  main:    { point: "ไปดูที่จุดนี้แล้ว เป็นแบบนี้จริงไหม?", plot: "ในแปลงจริงเป็นแบบนี้ไหม?" },
+  symptom: { point: "🌳 ต้นไม้ตรงจุดนี้มีอาการผิดปกติไหม? (ใบเหลือง ใบร่วง โคนเน่า)" },
+  water:   { point: "💧 ตรงจุดนี้มีน้ำขังหรือดินแฉะไหม? (ระบบไม่ได้เตือนจุดนี้)" },
+};
+
+function isVolunteerTester() { return typeof privacyState !== "undefined" && !!privacyState?.choices?.volunteer_test; }
+
+// opts = {scope, key: "main"|"symptom"|"water"}
 function validationBlockHtml(opts) {
+  const key = opts.key || "main";
+  const q = VALIDATION_QUESTIONS[key][opts.scope];
   return `
-    <div class="form-label">${opts.scope === "point" ? "ไปดูที่จุดนี้แล้ว เป็นแบบนี้จริงไหม?" : "ในแปลงจริงเป็นแบบนี้ไหม?"}</div>
+    <div data-vblock="${key}">
+    <div class="form-label">${escHtml(q)}</div>
     <div class="type-row" data-validate>
-      <button type="button" class="chip" data-answer="true">✅ จริง</button>
-      <button type="button" class="chip" data-answer="false">❌ ไม่จริง</button>
+      <button type="button" class="chip" data-answer="true">${key === "main" ? "✅ จริง" : "✅ มี"}</button>
+      <button type="button" class="chip" data-answer="false">${key === "main" ? "❌ ไม่จริง" : "❌ ไม่มี"}</button>
       <button type="button" class="chip" data-answer="unsure">🤔 ไม่แน่ใจ</button>
     </div>
-    ${opts.scope === "point" ? `<button type="button" class="btn-secondary sheet-btn" data-photo-point>📷 แนบรูปจุดนี้</button>` : ""}`;
+    ${opts.scope === "point" && key !== "water" ? `<button type="button" class="btn-secondary sheet-btn" data-photo-point>📷 แนบรูปจุดนี้</button>` : ""}
+    </div>`;
 }
 
-// opts = {plotId, scope: "point"|"plot", problem, severity, lat, lng, context}
+// opts = {plotId, scope: "point"|"plot", problem, severity, lat, lng, context, key}
 function bindValidation(container, opts) {
-  const row = container.querySelector("[data-validate]");
+  const wrap = container.querySelector(`[data-vblock="${opts.key || "main"}"]`);
+  if (!wrap) return;
+  const row = wrap.querySelector("[data-validate]");
   if (!row) return;
   row.querySelectorAll("[data-answer]").forEach(btn => btn.onclick = async () => {
     row.querySelectorAll("button").forEach(b => { b.disabled = true; });
@@ -41,10 +57,26 @@ function bindValidation(container, opts) {
       showToast("❌ " + e.message);
     }
   });
-  container.querySelector("[data-photo-point]")?.addEventListener("click", () => {
+  wrap.querySelector("[data-photo-point]")?.addEventListener("click", () => {
     window.openPhotoSheet?.(findPlotById(opts.plotId), { lat: opts.lat, lng: opts.lng });
   });
 }
 
+// คำถามเพิ่มของเกษตรกรอาสา ต่อท้ายแผ่นข้อมูลจุด — flag = ปัญหาที่ระบบชี้ที่จุดนี้ (หรือ "none")
+function volunteerBlocksHtml(flagged) {
+  if (!isVolunteerTester()) return "";
+  return validationBlockHtml({ scope: "point", key: "symptom" }) +
+         (flagged ? "" : validationBlockHtml({ scope: "point", key: "water" }));
+}
+function bindVolunteerBlocks(container, base, flag) {
+  if (!isVolunteerTester()) return;
+  const ctx = { ...(base.context || {}), flag: flag || "none" };
+  bindValidation(container, { ...base, key: "symptom", problem: "tree_symptom", severity: null, context: ctx });
+  bindValidation(container, { ...base, key: "water", problem: "water_check_unflagged", severity: null, context: ctx });
+}
+
 window.validationBlockHtml = validationBlockHtml;
 window.bindValidation = bindValidation;
+window.volunteerBlocksHtml = volunteerBlocksHtml;
+window.bindVolunteerBlocks = bindVolunteerBlocks;
+window.isVolunteerTester = isVolunteerTester;

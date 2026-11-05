@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ผลยืนยันภาคสนาม — IAM ROOT</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ผลยืนยันภาคสนามเทียบกับระบบ (เกษตรกรอาสา/เจ้าหน้าที่) — ตัวเลขรวม ไม่มีชื่อ/พิกัด */
+    :root { --bg:#f4f7f4; --card:#fff; --ink:#1f2a24; --muted:#5f7066; --line:#dfe7e1; --green:#15803d; --amber:#92400e; --amber-bg:#fef3c7; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#101613; --card:#18211c; --ink:#e6efe9; --muted:#a2b3a8; --line:#2b3a31; --green:#4ade80; --amber:#fcd34d; --amber-bg:#3a2f12; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Sarabun', sans-serif; background: var(--bg); color: var(--ink); font-size: 15px; }
+    header { background: #14532d; color: #fff; padding: 14px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 18px; margin: 0; flex: 1; min-width: 200px; }
+    header a { color: #bbf7d0; }
+    main { max-width: 1000px; margin: 0 auto; padding: 16px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+    h2 { font-size: 16px; margin: 0 0 10px; color: var(--green); }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+    .tile .n { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .tile .l, .l { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .table-wrap { overflow-x: auto; }
+    .note { background: var(--amber-bg); color: var(--amber); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; line-height: 1.6; }
+    .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    button { font-family: inherit; font-size: 14.5px; padding: 8px 13px; border-radius: 9px; border: 1px solid var(--line);
+             background: var(--card); color: var(--ink); cursor: pointer; min-height: 40px; }
+    button.primary { background: var(--green); color: #fff; border-color: var(--green); font-weight: 700; }
+    #login { max-width: 420px; margin: 40px auto; background: var(--card); padding: 18px; border-radius: 12px; border: 1px solid var(--line); }
+    input, select { font-family: inherit; font-size: 14.5px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>✅ ผลยืนยันภาคสนามเทียบกับระบบ</h1>
+  <a href="/dashboard/">← กลับหน้าหลัก</a>
+</header>
+<main>
+  <div id="login" hidden>
+    <div class="bar"><input id="key-input" type="password" placeholder="รหัสผู้ดูแล (Admin key)" style="flex:1" autocomplete="off"></div>
+    <button class="primary" id="key-btn">เข้าสู่ระบบ</button>
+  </div>
+
+  <div id="app" hidden>
+    <div class="note" id="note"></div>
+    <div class="bar">
+      <label>ช่วงเวลา <select id="days"><option value="30">30 วัน</option><option value="90">90 วัน</option><option value="365" selected>1 ปี</option><option value="3650">ทั้งหมด</option></select></label>
+      <button id="reload-btn">↻ รีเฟรช</button>
+      <button id="export-btn">⬇ ส่งออก CSV (มีพิกัด — ผู้ดูแลเท่านั้น)</button>
+    </div>
+    <div class="tiles" id="tiles"></div>
+    <section><h2>น้ำขังจริงไหม — เทียบกับที่ระบบชี้</h2><div class="table-wrap" id="water"></div></section>
+    <section><h2>ต้นไม้มีอาการไหม — เทียบจุดที่ระบบชี้ว่าชื้น กับจุดที่ไม่ชี้</h2><div class="table-wrap" id="symptom"></div></section>
+    <section><h2>ทุกคำตอบ แยกตามประเภทปัญหา</h2><div class="table-wrap" id="problems"></div></section>
+  </div>
+</main>
+
+<script>
+  const KEY_STORE = "geoai_admin_key";
+  let ADMIN_KEY = "";
+  try { ADMIN_KEY = localStorage.getItem(KEY_STORE) || ""; } catch {}
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  async function api(path) {
+    const res = await fetch(path, { headers: { "X-Admin-Key": ADMIN_KEY } });
+    if (res.status === 403) { $("login").hidden = false; $("app").hidden = true; throw new Error("รหัสผู้ดูแลไม่ถูกต้อง"); }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res;
+  }
+  $("key-btn").onclick = () => { ADMIN_KEY = $("key-input").value.trim(); try { localStorage.setItem(KEY_STORE, ADMIN_KEY); } catch {} load(); };
+
+  // r = {k, n, rate, ci95} — n น้อยกว่าเกณฑ์ → บอกจำนวนอย่างเดียว ไม่แสดงเปอร์เซ็นต์
+  function rateText(r) {
+    if (!r || !r.n) return "—";
+    if (r.rate == null) return `${r.k} ใน ${r.n} <span class="l">(ตัวอย่างยังน้อย)</span>`;
+    return `${Math.round(r.rate * 100)}% <span class="l">(${Math.round(r.ci95[0] * 100)}–${Math.round(r.ci95[1] * 100)}% · ${r.k}/${r.n})</span>`;
+  }
+
+  async function load() {
+    try {
+      const s = await (await api(`/admin/validations?days=${$("days").value}`)).json();
+      $("login").hidden = true; $("app").hidden = false;
+      const a = s.accuracy, c = a.counts;
+      $("note").textContent = a.note_th;
+      $("tiles").innerHTML = [
+        [s.total, "คำตอบทั้งหมด"], [s.plots, "จำนวนแปลงที่มีคำตอบ"],
+        [a.respondents, "ผู้ตอบ (ชุดน้ำขัง/อาการต้นไม้)"], [a.answers_with_photo, "คำตอบที่แนบรูป"],
+        [rateText(a.water_precision), "ระบบชี้จุดชื้น/น้ำรวม แล้วในแปลงจริงใช่ (precision)"],
+        [rateText(a.water_recall), "จุดที่มีน้ำขังจริง ระบบชี้ได้ (recall — ใช้ได้เมื่อสุ่มจุดที่ไม่ชี้มาตรวจ)"],
+      ].map(([n, l]) => `<div class="tile"><div class="n">${typeof n === "number" ? n.toLocaleString("th-TH") : n}</div><div class="l">${l}</div></div>`).join("");
+      $("water").innerHTML = `<table><tr><th></th><th class="num">จริงมีน้ำขัง</th><th class="num">จริงไม่มี</th></tr>
+        <tr><td>ระบบชี้จุดชื้น/น้ำรวม</td><td class="num">${c.tp}</td><td class="num">${c.fp}</td></tr>
+        <tr><td>ระบบไม่ได้ชี้</td><td class="num">${c.fn}</td><td class="num">${c.tn}</td></tr></table>`;
+      $("symptom").innerHTML = `<table><tr><th>กลุ่มจุด</th><th class="num">มีอาการ (ช่วงความเชื่อมั่น 95%)</th></tr>
+        <tr><td>ระบบชี้ว่าชื้น/น้ำรวม</td><td class="num">${rateText(a.symptom_in_flagged_wet)}</td></tr>
+        <tr><td>ระบบไม่ได้ชี้</td><td class="num">${rateText(a.symptom_in_not_flagged)}</td></tr></table>`;
+      $("problems").innerHTML = `<table><tr><th>ประเภท</th><th class="num">จริง</th><th class="num">ไม่จริง</th><th class="num">ไม่แน่ใจ</th><th>สรุป</th><th class="num">เจ้าหน้าที่ตอบ (จริง/ไม่จริง)</th></tr>` +
+        s.by_problem.map(p => `<tr><td>${esc(p.problem_th)}</td><td class="num">${p.true}</td><td class="num">${p.false}</td><td class="num">${p.unsure}</td>
+          <td>${esc(p.text_th)}</td><td class="num">${p.officer_true}/${p.officer_false}</td></tr>`).join("") + `</table>`;
+    } catch (e) { if (!$("app").hidden) alert("โหลดไม่สำเร็จ: " + e.message); }
+  }
+  async function exportCsv() {
+    try {
+      const blob = await (await api("/admin/validations/export.csv")).blob();
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "field-validations.csv"; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e) { alert("ดาวน์โหลดไม่สำเร็จ: " + e.message); }
+  }
+  $("reload-btn").onclick = load; $("days").onchange = load; $("export-btn").onclick = exportCsv;
+  load();
+</script>
+</body>
+</html>

@@ -540,7 +540,7 @@ async def list_crops():
 @app.post("/plots/boundary-check")
 async def plots_boundary_check(req: BoundaryCheckRequest, me: str = Depends(_api_user)):
     """เรียกตอนกดบันทึกแปลง — คืนคำเตือน (ถ้ามี) ผู้ใช้เลือก "บันทึกตามนี้" ได้เสมอ"""
-    crop_ids = _validated_crop_ids(req.crop_ids)
+    crop_ids, _src = crops_mod.with_default(_validated_crop_ids(req.crop_ids))
     result = await _check_boundary(req.lat, req.lng, req.polygon, crop_ids, req.plot_type)
     return {"checked": result["checked"], "warnings": result["warnings"], "area_rai": result["area_rai"]}
 
@@ -558,6 +558,7 @@ async def analyze(req: AnalysisRequest, background: BackgroundTasks,
     req.user_id = user_id
     await _require_consent(user_id)
     crop_ids = _validated_crop_ids(req.crop_ids)
+    crop_ids, crop_source = crops_mod.with_default(crop_ids)   # ไม่เลือกพืช = ทุเรียน (decisions 2026-11-05)
     logger.info(f"Analyzing plot: lat={req.lat}, lng={req.lng}, user={req.user_id}")
     existing_plot = await _require_plot_access(req.plot_id, user_id, access.EDIT, "analyze_plot") if req.plot_id else None
     try:
@@ -580,8 +581,8 @@ async def analyze(req: AnalysisRequest, background: BackgroundTasks,
                                       extra={"created_by": user_id,
                                              **({"owner_label": label} if label and acc["role"] != "farmer" else {})})
             plot_type = req.plot_type
-            if plot_id and crop_ids:
-                await set_plot_crops(plot_id, crop_ids)
+            if plot_id:
+                await set_plot_crops(plot_id, crop_ids, source=crop_source)
             if plot_id:
                 background.add_task(_store_boundary_check, plot_id, req.lat, req.lng,
                                     req.polygon, crop_ids, plot_type)
@@ -1077,7 +1078,8 @@ async def edit_plot(user_id: str, plot_id: int, req: PlotUpdateRequest,
         fields["name"] = req.name.strip()
     if "plot_type" in req.model_fields_set:
         fields["plot_type"] = req.plot_type          # ส่ง null มา = ล้างค่า (ยังไม่ระบุ)
-    crop_ids = _validated_crop_ids(req.crop_ids) if req.crop_ids is not None else None
+    crop_ids, crop_source = (crops_mod.with_default(_validated_crop_ids(req.crop_ids))
+                             if req.crop_ids is not None else (None, "user"))
     if req.polygon is not None:
         ring = _closed_ring(req.polygon)
         area = boundary.polygon_area_rai(ring)
@@ -1097,7 +1099,7 @@ async def edit_plot(user_id: str, plot_id: int, req: PlotUpdateRequest,
         fields["updated_at"] = datetime.now(timezone.utc).isoformat()
         if not await update_plot(plot_id, fields):
             raise HTTPException(status_code=502, detail="บันทึกการแก้ไขไม่สำเร็จ กรุณาลองใหม่")
-    if crop_ids is not None and not await set_plot_crops(plot_id, crop_ids):
+    if crop_ids is not None and not await set_plot_crops(plot_id, crop_ids, source=crop_source):
         raise HTTPException(status_code=502, detail="บันทึกชนิดพืชไม่สำเร็จ กรุณาลองใหม่")
 
     new_polygon = fields.get("polygon", plot.get("polygon"))
@@ -1324,6 +1326,7 @@ class ConsentBody(BaseModel):
     version:             str = Field(..., max_length=20)
     share_with_officers: bool = False
     photos_research:     bool = False
+    volunteer_test:      bool = False
 
 
 @app.get("/me/privacy")
@@ -1340,11 +1343,13 @@ async def me_consent(body: ConsentBody, me: str = Depends(_api_user)):
     if not before:
         await upsert_user(me, "")
     action = "update" if before and before.get("consent_version") == body.version else "accept"
-    if not await save_consent(me, body.version, body.share_with_officers, body.photos_research, action):
+    if not await save_consent(me, body.version, body.share_with_officers, body.photos_research, action,
+                              volunteer=body.volunteer_test):
         raise HTTPException(status_code=502, detail="บันทึกไม่สำเร็จ กรุณาลองใหม่")
     access.invalidate(me)
     await log_audit(me, "farmer", f"consent_{action}", "user", me, me,
-                    {"share_with_officers": body.share_with_officers, "photos_research": body.photos_research})
+                    {"share_with_officers": body.share_with_officers, "photos_research": body.photos_research,
+                     "volunteer_test": body.volunteer_test})
     return privacy.consent_payload(await get_user_privacy(me))
 
 
@@ -1706,6 +1711,8 @@ async def add_validation(user_id: str, plot_id: int, body: ValidationBody, backg
     await _require_consent(me)
     plot = await _require_plot_access(plot_id, me, access.EDIT, "field_validation")
     acc = await _access_for(me)
+    if body.problem in (validation.SYMPTOM, validation.UNFLAGGED_WATER) and acc["role"] == "farmer"             and not (await get_user_privacy(me) or {}).get("consent_volunteer_test"):
+        raise HTTPException(status_code=403, detail="คำถามชุดนี้สำหรับเกษตรกรอาสา — เปิดที่ ⚙️ ข้อมูลของฉัน → เข้าร่วมทดสอบ")
     row = await insert_validation({
         "plot_id": plot_id, "user_id": me, "role": acc["role"], "scope": body.scope, "problem": body.problem,
         "severity": body.severity, "answer": body.answer, "lat": body.lat, "lng": body.lng,

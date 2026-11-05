@@ -11,6 +11,7 @@ CONFIG_PATH = Path(__file__).resolve().parent / "config" / "crops.json"
 PLOT_TYPES = ("flat", "raised_bed", "vegetable_bed")
 PLOT_TYPE_LABELS_TH = {"flat": "แปลงเรียบ", "raised_bed": "สวนยกร่อง", "vegetable_bed": "ยกแปลงผัก"}
 MAX_CROPS_PER_PLOT = 10
+DEFAULT_CROP_ID = "durian"   # แผนทุน TED Fund โฟกัสทุเรียน (decisions 2026-11-05) — ไม่เลือก = ทุเรียน
 
 
 @lru_cache(maxsize=1)
@@ -62,3 +63,10 @@ def is_fruit_tree_context(crop_ids: list[str] | None) -> bool:
 def names_th(crop_ids: list[str] | None) -> list[str]:
     known = by_id()
     return [known[c]["name_th"] for c in crop_ids or [] if c in known]
+
+
+def with_default(crop_ids: list[str] | None) -> tuple[list[str], str]:
+    """ไม่มีพืชเลย → ทุเรียน (source "default" ไม่นับเป็นคำตอบของเจ้าของ/ไม่ใช้เป็น label) · มีพืช → ตามที่ส่งมา (source "user")"""
+    if crop_ids:
+        return list(crop_ids), "user"
+    return [DEFAULT_CROP_ID], "default"
