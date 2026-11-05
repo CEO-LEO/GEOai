@@ -44,18 +44,27 @@ def accuracy(rows: list[dict]) -> dict:
     """
     tp = fp = fn = tn = 0
     sym = {"flagged_wet": [0, 0], "not_flagged": [0, 0]}     # [มีอาการ, ตอบชัดทั้งหมด]
-    users, photos = set(), 0
+    users, photos, user_chosen_unflagged = set(), 0, 0
     for r in rows:
         if r.get("scope") != "point" or r["answer"] == "unsure":
             continue
         a, p = r["answer"] == "true", r["problem"]
+        random_pt = r.get("selection") == "random"
         if p in FLAGGED_WATER:
             tp, fp = tp + a, fp + (not a)
         elif p == UNFLAGGED_WATER:
-            fn, tn = fn + a, tn + (not a)
+            if random_pt:                       # recall ใช้เฉพาะจุดที่ระบบสุ่มให้ (ผู้ใช้เลือกเองเอนเอียง)
+                fn, tn = fn + a, tn + (not a)
+            else:
+                user_chosen_unflagged += 1
         elif p == SYMPTOM:
             flag = (r.get("context") or {}).get("flag")
-            g = sym["flagged_wet" if flag in FLAGGED_WATER else "not_flagged"]
+            if flag in FLAGGED_WATER:
+                g = sym["flagged_wet"]
+            elif random_pt:                     # กลุ่มเทียบ "ไม่ได้ชี้" ใช้เฉพาะจุดสุ่มเช่นกัน
+                g = sym["not_flagged"]
+            else:
+                continue
             g[0] += a
             g[1] += 1
     for r in rows:
@@ -69,6 +78,7 @@ def accuracy(rows: list[dict]) -> dict:
         "symptom_in_flagged_wet": _rate(*sym["flagged_wet"]),
         "symptom_in_not_flagged": _rate(*sym["not_flagged"]),
         "respondents": len(users - {None}), "answers_with_photo": photos,
+        "user_chosen_unflagged_excluded": user_chosen_unflagged,
         "note_th": ("ตัวเลขเบื้องต้นจากกลุ่มอาสา — ไม่ใช่ความแม่นยำของระบบทั้งประเทศ · แสดงเป็นเปอร์เซ็นต์เมื่อ n ≥ "
                     f"{MIN_N_FOR_RATE} · recall ใช้ได้เมื่อสุ่มจุดที่ระบบไม่ชี้มาตรวจด้วย"),
     }
@@ -99,3 +109,21 @@ def summarize(rows: list[dict]) -> dict:
                 "" if decided >= MIN_N_FOR_RATE else f" (ตัวอย่างยังน้อย — ต้องการอย่างน้อย {MIN_N_FOR_RATE})"),
         })
     return {"total": len(rows), "plots": len(plots - {None}), "by_problem": out, "accuracy": accuracy(rows)}
+
+
+def sampling_summary(samples: list[dict], rows: list[dict]) -> dict:
+    """สรุปการสุ่มสำหรับหน้า admin — วิธีสุ่ม, จำนวนครั้ง/จุดที่สุ่ม, จุดที่ตอบแล้ว (ตอบได้หลายคำถามต่อจุด นับจุดไม่ซ้ำ)"""
+    import validation_sampling as vs
+    drawn = sum(len(s.get("points") or []) for s in samples)
+    answered = {(r.get("sample_id"), round(r["lat"], 6), round(r["lng"], 6)) for r in rows
+                if r.get("selection") == "random" and r.get("lat") is not None and r["problem"] == UNFLAGGED_WATER}
+    n_per = max([len(s.get("points") or []) for s in samples], default=vs.DEFAULT_N)
+    return {
+        "method": vs.METHOD, "samples": len(samples), "points_drawn": drawn, "points_answered": len(answered),
+        "plots": len({s["plot_id"] for s in samples}), "n_per_draw": n_per,
+        "seeds_recorded": all(s.get("seed") is not None for s in samples),
+        "method_th": (f"จุดตั้งต้น = จุดในแปลงที่ระบบไม่ได้ชี้ว่าชื้น/น้ำรวม (รวมจุดที่ชี้ว่าแห้ง) → เรียงตามตำแหน่งในแปลงแบบงูไล่ → "
+                      f"แบ่งเป็น {vs.DEFAULT_N} กลุ่มเท่า ๆ กัน (ครอบคลุมทั้งแปลง) → สุ่ม 1 จุดต่อกลุ่มด้วยเลขสุ่ม (seed) ที่ระบบบันทึกไว้ทุกครั้ง "
+                      f"พร้อมรายการจุดตั้งต้นทั้งหมด จึงตรวจย้อนและทำซ้ำได้ · สุ่มชุดเดิมคืนให้ภายใน 14 วันเพื่อกันเลือกจุดที่ชอบ · "
+                      f"สวนยกร่องไม่ถูกนำมาวัด recall (ระบบไม่ชี้น้ำขังในสวนยกร่อง)"),
+    }

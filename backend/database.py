@@ -1093,13 +1093,62 @@ async def insert_validation(row: dict) -> dict | None:
 async def list_validations(plot_id: int | None = None, since_iso: str | None = None) -> list[dict]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
-    params = {"select": "id,plot_id,user_id,role,scope,problem,severity,answer,lat,lng,note,photo_client_id,context,created_at",
+    params = {"select": "id,plot_id,user_id,role,scope,problem,severity,answer,lat,lng,note,photo_client_id,context,"
+                        "selection,sample_id,created_at",
               "order": "created_at.desc"}
     if plot_id is not None:
         params["plot_id"] = f"eq.{plot_id}"
     if since_iso:
         params["created_at"] = f"gte.{since_iso}"
     return await _fetch_all("field_validations", params) or []
+
+
+# ── สุ่มจุดให้อาสาตรวจ (migrate_v24) ─────────────────────────
+_SAMPLE_COLS = "id,plot_id,user_id,seed,method,params,candidates_n,candidates_hash,points,created_at"
+
+
+async def insert_validation_sample(row: dict) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(f"{SUPABASE_URL}/rest/v1/validation_samples",
+                                 headers={**_HEADERS(), "Prefer": "return=representation"},
+                                 params={"select": _SAMPLE_COLS}, json=row)
+    if resp.status_code not in (200, 201) or not resp.json():
+        logger.error(f"insert_validation_sample failed: {resp.status_code} — {resp.text[:200]}")
+        return None
+    return resp.json()[0]
+
+
+async def get_validation_sample(sample_id: int) -> dict | None:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/validation_samples", headers={**_HEADERS(), "Prefer": ""},
+                                params={"id": f"eq.{sample_id}", "select": _SAMPLE_COLS, "limit": "1"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def latest_validation_sample(plot_id: int, user_id: str, since_iso: str) -> dict | None:
+    """การสุ่มล่าสุดของ (แปลง, ผู้ใช้) ที่ยังไม่เก่าเกิน since_iso — ใช้คืนชุดเดิมแทนสุ่มใหม่ (กันสุ่มซ้ำจนได้จุดที่ชอบ)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{SUPABASE_URL}/rest/v1/validation_samples", headers={**_HEADERS(), "Prefer": ""},
+                                params={"plot_id": f"eq.{plot_id}", "user_id": f"eq.{user_id}",
+                                        "created_at": f"gte.{since_iso}", "select": _SAMPLE_COLS,
+                                        "order": "created_at.desc", "limit": "1"})
+    return resp.json()[0] if resp.status_code == 200 and resp.json() else None
+
+
+async def list_validation_samples(since_iso: str | None = None) -> list[dict]:
+    """ภาพรวมการสุ่ม (ไม่ดึงรายการจุดตั้งต้น — ใหญ่) สำหรับหน้า admin"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    params = {"select": "id,plot_id,seed,method,params,candidates_n,candidates_hash,points,created_at", "order": "created_at.desc"}
+    if since_iso:
+        params["created_at"] = f"gte.{since_iso}"
+    return await _fetch_all("validation_samples", params) or []
 
 
 # ── รูปถ่ายภาคสนาม (Phase 2c — migrate_v18) ─────────────────

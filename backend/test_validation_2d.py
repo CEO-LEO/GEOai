@@ -138,7 +138,8 @@ class TestAccuracy:
     def test_precision_recall_and_hidden_rate_when_n_small(self):
         import validation
         rows = ([self._row("wet_spot", "true")] * 7 + [self._row("water_collect", "false")] * 3
-                + [self._row("water_check_unflagged", "true")] * 2 + [self._row("water_check_unflagged", "false")] * 8)
+                + [self._row("water_check_unflagged", "true", selection="random")] * 2
+                + [self._row("water_check_unflagged", "false", selection="random")] * 8)
         a = validation.accuracy(rows)
         assert a["counts"] == {"tp": 7, "fp": 3, "fn": 2, "tn": 8}
         assert a["water_precision"]["rate"] == 0.7 and a["water_precision"]["n"] == 10
@@ -148,8 +149,8 @@ class TestAccuracy:
     def test_unsure_excluded_and_symptom_split_by_flag(self):
         import validation
         rows = [self._row("tree_symptom", "true", context={"flag": "wet_spot"}),
-                self._row("tree_symptom", "false", context={"flag": "none"}),
-                self._row("tree_symptom", "unsure", context={"flag": "none"}),
+                self._row("tree_symptom", "false", context={"flag": "none"}, selection="random"),
+                self._row("tree_symptom", "unsure", context={"flag": "none"}, selection="random"),
                 self._row("wet_spot", "unsure", photo_client_id="p1")]
         a = validation.accuracy(rows)
         assert (a["symptom_in_flagged_wet"]["k"], a["symptom_in_flagged_wet"]["n"]) == (1, 1)
@@ -163,3 +164,134 @@ class TestAccuracy:
             r = await client.post("/plots/U1/5/validations", headers=auth_as("U1"), json=body)
         assert r.status_code == 403
         ins.assert_not_called()
+
+
+    def test_recall_ignores_user_chosen_points(self):
+        import validation
+        rows = [self._row("wet_spot", "true")] * 5 + [
+            self._row("water_check_unflagged", "true"),                       # อาสาเลือกเอง → ไม่นับ
+            self._row("water_check_unflagged", "true", selection="user"),
+            self._row("water_check_unflagged", "false", selection="random")]
+        a = validation.accuracy(rows)
+        assert a["counts"] == {"tp": 5, "fp": 0, "fn": 0, "tn": 1}
+        assert a["user_chosen_unflagged_excluded"] == 2
+
+    def test_symptom_not_flagged_group_random_only(self):
+        import validation
+        rows = [self._row("tree_symptom", "true", context={"flag": "none"}),             # เลือกเอง → ไม่เข้ากลุ่มเทียบ
+                self._row("tree_symptom", "true", context={"flag": "dry_spot"}, selection="random")]
+        a = validation.accuracy(rows)
+        assert (a["symptom_in_not_flagged"]["k"], a["symptom_in_not_flagged"]["n"]) == (1, 1)
+
+
+import validation_sampling as vs
+
+
+def _grid_cands(rows=20, cols=20):
+    return vs.normalize_candidates([{"lat": 13.5 + r * 0.0001, "lng": 99.8 + c * 0.0001, "flag": "none"}
+                                    for r in range(rows) for c in range(cols)])
+
+
+class TestSampling:
+    def test_same_seed_same_points_and_order_independent(self):
+        pts = [{"lat": 13.5 + r * 0.0001, "lng": 99.8 + c * 0.0001} for r in range(10) for c in range(10)]
+        a = vs.draw(vs.normalize_candidates(pts), seed=42)
+        b = vs.draw(vs.normalize_candidates(list(reversed(pts))), seed=42)
+        assert a == b and len(a) == 5
+        assert a != vs.draw(vs.normalize_candidates(pts), seed=43)
+
+    def test_stratified_covers_whole_plot(self):
+        cands = _grid_cands()
+        for seed in range(30):
+            pts = vs.draw(cands, seed, 5)
+            assert [p["stratum"] for p in pts] == [1, 2, 3, 4, 5]
+            assert len({(p["lat"], p["lng"]) for p in pts}) == 5
+            assert max(p["lat"] for p in pts) - min(p["lat"] for p in pts) > 0.0005   # ครอบคลุมทิศเหนือ-ใต้ของแปลง
+
+    def test_hash_stable_and_small_n_clamped(self):
+        c = _grid_cands(3, 3)
+        assert vs.candidates_hash(c) == vs.candidates_hash(list(c))
+        assert len(vs.draw(c, 1, 50)) == len(c)
+
+
+POLY = [[99.8, 13.5], [99.802, 13.5], [99.802, 13.502], [99.8, 13.502], [99.8, 13.5]]
+SAMPLE_PLOT = {**PLOT, "polygon": POLY, "plot_type": "flat"}
+
+
+def _cand_body(n=6):
+    return {"points": [{"lat": 13.5 + 0.0003 * i, "lng": 99.8 + 0.0003 * i} for i in range(n)]}
+
+
+@pytest.mark.asyncio
+class TestSampleApi:
+    async def test_draw_records_seed_and_reuses(self, client):
+        saved = {}
+
+        async def _insert(row):
+            saved.update(row)
+            return {**row, "id": 9, "created_at": "2026-11-05T00:00:00Z"}
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=SAMPLE_PLOT), \
+             patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": True}), \
+             patch("main.latest_validation_sample", new_callable=AsyncMock, return_value=None), \
+             patch("main.insert_validation_sample", side_effect=_insert), \
+             patch("main.list_validations", new_callable=AsyncMock, return_value=[]):
+            r = await client.post("/plots/U1/5/validation-sample", headers=auth_as("U1"), json=_cand_body())
+        assert r.status_code == 200
+        j = r.json()
+        assert j["sample_id"] == 9 and j["reused"] is False and len(j["points"]) == 5
+        assert saved["seed"] == j["seed"] and saved["method"] == vs.METHOD and saved["candidates_n"] == 6
+        assert len(saved["candidates"]) == 6                       # เก็บจุดตั้งต้นทั้งหมดไว้ตรวจย้อน
+        again = {**saved, "id": 9, "created_at": "x"}
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=SAMPLE_PLOT), \
+             patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": True}), \
+             patch("main.latest_validation_sample", new_callable=AsyncMock, return_value=again), \
+             patch("main.insert_validation_sample", new_callable=AsyncMock) as ins, \
+             patch("main.list_validations", new_callable=AsyncMock, return_value=[]):
+            r2 = await client.post("/plots/U1/5/validation-sample", headers=auth_as("U1"), json=_cand_body())
+        assert r2.json()["reused"] is True and r2.json()["points"] == j["points"]
+        ins.assert_not_called()
+
+    async def test_requires_volunteer_consent_and_rejects_raised_bed_and_outside(self, client):
+        base = dict(headers=auth_as("U1"), json=_cand_body())
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=SAMPLE_PLOT), \
+             patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": False}):
+            assert (await client.post("/plots/U1/5/validation-sample", **base)).status_code == 403
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value={**SAMPLE_PLOT, "plot_type": "raised_bed"}), \
+             patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": True}):
+            assert (await client.post("/plots/U1/5/validation-sample", **base)).status_code == 422
+        far = {"points": [{"lat": 14.5, "lng": 99.8 + 0.0003 * i} for i in range(6)]}
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=SAMPLE_PLOT), \
+             patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": True}):
+            assert (await client.post("/plots/U1/5/validation-sample", headers=auth_as("U1"), json=far)).status_code == 422
+
+    async def test_answer_marked_random_only_for_drawn_point(self, client):
+        sample = {"id": 9, "plot_id": 5, "user_id": "U1", "points": [{"lat": 13.5003, "lng": 99.8003, "stratum": 1}]}
+        body = {"scope": "point", "problem": "water_check_unflagged", "answer": "true", "lat": 13.5003, "lng": 99.8003,
+                "sample_id": 9}
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=PLOT), \
+             patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": True}), \
+             patch("main.get_validation_sample", new_callable=AsyncMock, return_value=sample), \
+             patch("main.insert_validation", new_callable=AsyncMock, return_value={"id": 1}) as ins, \
+             patch("main.log_event", new_callable=AsyncMock):
+            ok = await client.post("/plots/U1/5/validations", headers=auth_as("U1"), json=body)
+            bad = await client.post("/plots/U1/5/validations", headers=auth_as("U1"),
+                                    json={**body, "lat": 13.6, "lng": 99.9})
+        assert ok.status_code == 200 and ins.await_args.args[0]["selection"] == "random" and ins.await_args.args[0]["sample_id"] == 9
+        assert bad.status_code == 422
+        # ไม่ส่ง sample_id = จุดที่ผู้ใช้เลือกเอง
+        with patch("main.get_plot_by_id", new_callable=AsyncMock, return_value=PLOT), \
+             patch("main.get_user_privacy", new_callable=AsyncMock, return_value={"consent_volunteer_test": True}), \
+             patch("main.insert_validation", new_callable=AsyncMock, return_value={"id": 2}) as ins2, \
+             patch("main.log_event", new_callable=AsyncMock):
+            await client.post("/plots/U1/5/validations", headers=auth_as("U1"), json={**body, "sample_id": None})
+        assert ins2.await_args.args[0]["selection"] == "user"
+
+    async def test_admin_summary_includes_sampling(self, client):
+        samples = [{"id": 1, "plot_id": 5, "seed": 123, "method": vs.METHOD, "points": [{"lat": 1, "lng": 2}] * 5}]
+        rows = [{"id": 1, "plot_id": 5, "user_id": "U1", "role": "farmer", "scope": "point", "problem": "water_check_unflagged",
+                 "answer": "false", "lat": 13.5, "lng": 99.9, "selection": "random", "sample_id": 1, "created_at": "x"}]
+        with patch("main.list_validations", new_callable=AsyncMock, return_value=rows), \
+             patch("main.list_validation_samples", new_callable=AsyncMock, return_value=samples):
+            s = (await client.get("/admin/validations", headers=ADMIN_HEADERS)).json()
+        assert s["sampling"]["samples"] == 1 and s["sampling"]["points_drawn"] == 5 and s["sampling"]["seeds_recorded"]
+        assert s["sampling"]["points_answered"] == 1 and "งูไล่" in s["sampling"]["method_th"]

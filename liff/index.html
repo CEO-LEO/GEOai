@@ -606,6 +606,7 @@
 
     <div id="grid-legend">
       <div id="grid-summary" class="grid-summary" style="display:none"></div>
+      <div id="grid-sample" style="display:none"></div>
       <div class="legend-gradient-bar"></div>
       <div class="legend-gradient-labels">
         <span>🔴 แห้งกว่าส่วนอื่น</span>
@@ -2034,6 +2035,27 @@
         document.getElementById("raised-legend-note").style.display = raised ? "" : "none";
         document.getElementById("flow-legend-note").style.display = raised ? "none" : "";
         document.getElementById("grid-legend").classList.add("show");
+
+        // เกษตรกรอาสา: ปุ่ม "สุ่มจุดให้ตรวจ" — จุดตั้งต้นคือจุดที่ระบบไม่ได้ชี้ว่าชื้น/น้ำรวม (รวมจุดแห้ง)
+        window.renderSampleBox?.(document.getElementById("grid-sample"), {
+          plotId: gridPlotId, raised,
+          candidates: () => json.points.map(p => ({ p, pr: pointProblem(p) }))
+            .filter(x => !x.pr || x.pr[0] === "dry_spot")
+            .map(x => ({ lat: x.p.lat, lng: x.p.lng, flag: x.pr ? "dry_spot" : "none" })),
+          highlight: pts => {
+            pts.forEach(q => {
+              const ring = new sphere.Dot({ lon: q.lng, lat: q.lat }, { lineWidth: tileSizeM * 1.6, lineColor: "#00897b" });
+              map.Overlays.add(ring);
+              gridMarkers.push(ring);
+            });
+          },
+          openPoint: (pt, sampleId) => {
+            showPointSheet(`<h3>🎲 จุดที่ ${pt.stratum} (สุ่มให้ตรวจ)</h3>${window.volunteerBlocksHtml(false)}
+              <div class="form-hint">📍 ${pt.lat.toFixed(6)}, ${pt.lng.toFixed(6)}</div>`);
+            window.bindVolunteerBlocks?.(document.getElementById("point-sheet-body"),
+              { plotId: gridPlotId, scope: "point", lat: pt.lat, lng: pt.lng, sampleId, context: { sample: true } }, pt.flag);
+          },
+        });
       });
 
       // บั๊กที่เจอตอนแก้เรื่องกระเบื้องทับกัน: spacingM ถูกประกาศด้วย const ใน
